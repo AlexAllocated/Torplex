@@ -138,21 +138,23 @@
       "fileCount": 89
     },
     {
-      "id": "star-trek-lower-decks-s05e10",
-      "torrentFile": "Star.Trek.Lower.Decks.S05E10.1080p.WEB.H264-NHTFS[TGx].torrent",
-      "title": "Star Trek: Lower Decks (2020) S05E10",
+      "id": "star-trek-lower-decks",
+      "torrentFile": "Star Trek Lower Decks 2020 Seasons 1 to 5 1080p Complete WEB x264 [i_c].torrent",
+      "title": "Star Trek: Lower Decks (2020) S01-S05",
       "destination": {
         "type": "show",
-        "path": "/media/plex/TV Shows/Star Trek Lower Decks (2020)/Season 5"
+        "path": "/media/plex/TV Shows/Star Trek Lower Decks (2020)"
       },
       "organize": {
-        "strategy": "singleEpisode",
-        "source": "star.trek.lower.decks.s05e10.1080p.web.h264-nhtfs.mkv",
-        "finalName": "Star Trek Lower Decks (2020) - S05E10.mkv"
+        "strategy": "moveRoot",
+        "fileRenames": {
+          "Star Trek Lower Decks - S00E01 - Cast and Creator Talk Characters and Favorite Moments from Season 1.mkv": "Specials/Star Trek Lower Decks (2020) - S00E01 - Cast and Creator Talk Characters and Favorite Moments from Season 1.mkv",
+          "Star Trek Lower Decks - S00E04 - Star Trek Day 2020 Lower Decks Panel.mkv": "Specials/Star Trek Lower Decks (2020) - S00E04 - Star Trek Day 2020 Lower Decks Panel.mkv"
+        }
       },
-      "payloadName": "Star.Trek.Lower.Decks.S05E10.1080p.WEB.H264-NHTFS[TGx]",
-      "totalBytes": 2469508932,
-      "fileCount": 3
+      "payloadName": "Star Trek Lower Decks 2020 Seasons 1 to 5 1080p Complete WEB x264 [i_c]",
+      "totalBytes": 24489194225,
+      "fileCount": 52
     },
     {
       "id": "star-trek-first-contact",

@@ -120,7 +120,10 @@ async function organize(item: ManifestItem) {
     for (const [from, to] of Object.entries(item.organize.fileRenames ?? {})) {
       const source = join(dest, from);
       const target = join(dest, to);
-      if ((await pathExists(source)) && !(await pathExists(target))) await rename(source, target);
+      if ((await pathExists(source)) && !(await pathExists(target))) {
+        await ensureDir(dirname(target));
+        await rename(source, target);
+      }
     }
   } else if (item.organize.strategy === "singleFile") {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);
