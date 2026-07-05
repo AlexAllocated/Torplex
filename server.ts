@@ -5,6 +5,7 @@ import { join } from "path";
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const host = process.env.HOST ?? "0.0.0.0";
 const port = Number(process.env.PORT ?? "8787");
+const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "20.172.155.193").split(",").map((ip) => ip.trim()).filter(Boolean));
 
 type Item = {
   id: string;
@@ -37,6 +38,7 @@ type Peer = {
   ip: string;
   port: string;
   state: string;
+  bytesReceived?: number;
 };
 
 type PeerGeo = Peer & {
@@ -50,6 +52,7 @@ type PeerGeo = Peer & {
   as?: string;
   active?: boolean;
   probing?: boolean;
+  receiveRateBps?: number;
   lastSeenAt?: string;
   lastActiveAt?: string;
   ageSeconds?: number;
@@ -180,28 +183,50 @@ function isPublicIp(ip: string) {
 }
 
 function connectedPeers(): Peer[] {
-  const proc = Bun.spawnSync(["ss", "-Htnp"]);
-  const lines = proc.stdout.toString().split(/\r?\n/).filter((line) => line.includes("aria2c"));
+  const proc = Bun.spawnSync(["ss", "-Htinp"]);
+  const lines = proc.stdout.toString().split(/\r?\n/);
   const peers = new Map<string, Peer>();
+  let current: Peer | null = null;
   for (const line of lines) {
+    if (!line.trim()) continue;
+    if (/^\s/.test(line)) {
+      if (current) {
+        const bytesReceived = Number(line.match(/\bbytes_received:(\d+)/)?.[1]);
+        if (Number.isFinite(bytesReceived)) current.bytesReceived = bytesReceived;
+      }
+      continue;
+    }
+    current = null;
+    if (!line.includes("aria2c")) continue;
     const parts = line.trim().split(/\s+/);
     const state = parts[0] ?? "";
     const remote = parseRemoteAddress(parts[4] ?? "");
     if (!remote || !isPublicIp(remote.ip)) continue;
-    peers.set(remote.ip, { ip: remote.ip, port: remote.port, state });
+    if (ignoredPeerIps.has(remote.ip)) continue;
+    current = { ip: remote.ip, port: remote.port, state };
+    peers.set(`${remote.ip}:${remote.port}`, current);
   }
   return [...peers.values()].slice(0, 48);
 }
 
 function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
-  const previous = peerHistory.get(peer.ip);
+  const previous = peerHistory.get(`${peer.ip}:${peer.port}`);
   const active = peer.state === "ESTAB";
   const probing = !active && peer.state !== "";
+  const previousBytes = previous?.bytesReceived;
+  const previousSeen = previous?.lastSeenAt ? Date.parse(previous.lastSeenAt) : 0;
+  const elapsedSeconds = previousSeen ? Math.max(0.001, (nowMs - previousSeen) / 1000) : 0;
+  const receivedDelta =
+    Number.isFinite(peer.bytesReceived) && Number.isFinite(previousBytes)
+      ? Math.max(0, Number(peer.bytesReceived) - Number(previousBytes))
+      : 0;
+  const receiveRateBps = elapsedSeconds ? receivedDelta / elapsedSeconds : previous?.receiveRateBps ?? 0;
   return {
     ...previous,
     ...peer,
     active,
     probing,
+    receiveRateBps,
     lastSeenAt: new Date(nowMs).toISOString(),
     lastActiveAt: active ? new Date(nowMs).toISOString() : previous?.lastActiveAt,
     ageSeconds: 0,
@@ -210,7 +235,7 @@ function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
 
 async function lookupPeer(peer: Peer): Promise<PeerGeo> {
   const cached = peerGeoCache.get(peer.ip);
-  if (cached && cached.expiresAt > Date.now()) return { ...cached.value, port: peer.port, state: peer.state };
+  if (cached && cached.expiresAt > Date.now()) return { ...cached.value, ...peer };
   try {
     const fields = "status,country,countryCode,regionName,city,lat,lon,isp,as,query";
     const response = await fetch(`http://ip-api.com/json/${peer.ip}?fields=${fields}`);
@@ -244,22 +269,23 @@ async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
   lastPeerRefresh = Date.now();
   const nowMs = Date.now();
   const peers = connectedPeers();
-  const activeIps = new Set(peers.map((peer) => peer.ip));
+  const activeKeys = new Set(peers.map((peer) => `${peer.ip}:${peer.port}`));
   for (const peer of await Promise.all(peers.map((peer) => lookupPeer(peer)))) {
-    peerHistory.set(peer.ip, markPeerActivity(peer, nowMs));
+    peerHistory.set(`${peer.ip}:${peer.port}`, markPeerActivity(peer, nowMs));
   }
 
-  for (const [ip, peer] of peerHistory) {
+  for (const [key, peer] of peerHistory) {
     const seenMs = peer.lastSeenAt ? Date.parse(peer.lastSeenAt) : 0;
     if (nowMs - seenMs > peerHistoryTtlMs) {
-      peerHistory.delete(ip);
+      peerHistory.delete(key);
       continue;
     }
-    if (!activeIps.has(ip)) {
-      peerHistory.set(ip, {
+    if (!activeKeys.has(key)) {
+      peerHistory.set(key, {
         ...peer,
         active: false,
         probing: false,
+        receiveRateBps: 0,
         ageSeconds: Math.max(0, Math.round((nowMs - seenMs) / 1000)),
       });
     }
@@ -1224,10 +1250,12 @@ function renderSwarmMap(swarm) {
       const network = peer.as || peer.isp || 'Network unknown';
       const state = peer.active ? 'active' : peer.probing ? 'probing' : 'inactive';
       const age = peer.active || peer.probing ? peer.state : 'last seen ' + Math.round((peer.ageSeconds || 0) / 60) + 'm ago';
+      const speed = peer.active ? formatPeerRate(peer.receiveRateBps) : '-';
       return '<div class="peer-card ' + esc(state) + '">' +
         '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
         '<span>' + esc(place) + '</span>' +
         '<span>' + esc(network) + '</span>' +
+        '<span>' + esc('Speed ' + speed) + '</span>' +
         '<span class="peer-state">' + esc(state + ' - ' + age) + '</span>' +
       '</div>';
     }).join('')
@@ -1321,12 +1349,21 @@ function projectWorld(lat, lon, width, height) {
   };
 }
 
+function quadPoint(start, control, end, t) {
+  const inverse = 1 - t;
+  return {
+    x: inverse * inverse * start.x + 2 * inverse * t * control.x + t * t * end.x,
+    y: inverse * inverse * start.y + 2 * inverse * t * control.y + t * t * end.y,
+  };
+}
+
 function syncDisplayPeers(peers) {
   const now = performance.now();
-  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer?.ip, peer]));
+  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer ? peer.peer.ip + ':' + peer.peer.port : '', peer]));
   const next = [];
   peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).forEach((peer, index) => {
-    const current = existing.get(peer.ip) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
+    const key = peer.ip + ':' + peer.port;
+    const current = existing.get(key) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
     current.peer = peer;
     current.targetLat = Number(peer.lat);
     current.targetLon = Number(peer.lon);
@@ -1336,7 +1373,7 @@ function syncDisplayPeers(peers) {
     next.push(current);
   });
   existing.forEach((peer, ip) => {
-    if (ip && !next.some((item) => item.peer?.ip === ip)) {
+    if (ip && !next.some((item) => item.peer && item.peer.ip + ':' + item.peer.port === ip)) {
       peer.fading = true;
       next.push(peer);
     }
@@ -1392,12 +1429,12 @@ function drawWorldFrame(now) {
   }
 
   const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
-  ctx.fillStyle = '#f7c65f';
+  ctx.fillStyle = '#bfff00';
   ctx.beginPath();
   ctx.arc(origin.x, origin.y, 4.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(247, 198, 95, .92)';
+  ctx.fillStyle = 'rgba(191, 255, 0, .95)';
   ctx.fillText('VM', origin.x + 8, origin.y - 7);
 
   const pulse = .55 + Math.sin(now / 360) * .45;
@@ -1415,18 +1452,47 @@ function drawWorldFrame(now) {
     const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
     const hue = 166 + (item.rank % 9) * 12;
 
-    ctx.beginPath();
-    ctx.moveTo(origin.x, origin.y);
+    const start = { x: origin.x, y: origin.y };
+    const end = { x: item.x, y: item.y };
     const midX = (origin.x + item.x) / 2;
     const midY = (origin.y + item.y) / 2 - Math.min(80, Math.abs(origin.x - item.x) * .12);
-    ctx.quadraticCurveTo(midX, midY, item.x, item.y);
-    ctx.strokeStyle = item.peer.active
-      ? 'hsla(' + hue + ', 86%, 66%, ' + (.16 * alpha) + ')'
-      : item.peer.probing
-        ? 'rgba(247, 198, 95, ' + (.12 * alpha) + ')'
-        : 'rgba(150, 167, 190, ' + (.08 * alpha) + ')';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    const control = { x: midX, y: midY };
+    if (item.peer.active || item.peer.probing) {
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
+      ctx.strokeStyle = item.peer.active
+        ? 'rgba(191, 255, 0, ' + (.42 * alpha) + ')'
+        : 'rgba(247, 198, 95, ' + (.12 * alpha) + ')';
+      ctx.lineWidth = item.peer.active ? 1.8 : 1;
+      ctx.stroke();
+    }
+
+    if (item.peer.active) {
+      const rateBps = Number(item.peer.receiveRateBps) || 0;
+      const speedFactor = Math.max(.55, Math.min(4.5, Math.log2(rateBps / 32768 + 1)));
+      const packetCount = Math.max(2, Math.min(8, Math.round(2 + speedFactor * 1.35)));
+      for (let i = 0; i < packetCount; i += 1) {
+        const travel = ((now / (1550 / speedFactor)) + i / packetCount + item.phase) % 1;
+        const t = 1 - travel;
+        const head = quadPoint(start, control, end, t);
+        const tail = quadPoint(start, control, end, Math.min(1, t + .03 + speedFactor * .006));
+        const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
+        ctx.beginPath();
+        ctx.moveTo(tail.x, tail.y);
+        ctx.lineTo(head.x, head.y);
+        ctx.strokeStyle = 'rgba(191, 255, 0, ' + packetAlpha + ')';
+        ctx.lineWidth = 3.2;
+        ctx.shadowColor = 'rgba(191, 255, 0, .88)';
+        ctx.shadowBlur = 12;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(230, 255, 128, ' + packetAlpha + ')';
+        ctx.fill();
+      }
+    }
 
     ctx.beginPath();
     ctx.arc(item.x, item.y, item.peer.active ? 6 + pulse * 8 : item.peer.probing ? 5 + pulse * 4 : 4, 0, Math.PI * 2);
@@ -1448,8 +1514,8 @@ function drawWorldFrame(now) {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    if (item.rank < 12) {
-      const label = item.peer.ip;
+    if (item.peer.active && item.rank < 12) {
+      const label = item.peer.ip + ' ' + formatPeerRate(item.peer.receiveRateBps);
       ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
       const metrics = ctx.measureText(label);
       const labelX = Math.min(width - metrics.width - 12, Math.max(6, item.x + 8));
@@ -1523,6 +1589,14 @@ function formatSpeed(value) {
   if (!Number.isFinite(value)) return '0 MiB/s';
   if (value >= 1024) return (value / 1024).toFixed(2) + ' GiB/s';
   return value.toFixed(value >= 10 ? 0 : 1) + ' MiB/s';
+}
+
+function formatPeerRate(bytesPerSecond) {
+  const value = Number(bytesPerSecond) || 0;
+  if (value >= 1024 * 1024 * 1024) return (value / 1024 / 1024 / 1024).toFixed(2) + ' GiB/s';
+  if (value >= 1024 * 1024) return (value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1) + ' MiB/s';
+  if (value >= 1024) return (value / 1024).toFixed(value >= 10 * 1024 ? 0 : 1) + ' KiB/s';
+  return Math.round(value) + ' B/s';
 }
 
 function resetWarpStar(star, fresh) {
