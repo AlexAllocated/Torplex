@@ -114,6 +114,22 @@ function parseAmount(value: string, unit: string): number {
   return Number(value) * (byteUnits[unit] ?? 1);
 }
 
+function parseRateBytesPerSecond(rate: string): number {
+  const match = String(rate || "").match(/^([0-9.]+)(B|KiB|MiB|GiB|TiB)$/);
+  return match ? parseAmount(match[1], match[2]) : 0;
+}
+
+function formatEtaSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const rounded = Math.max(1, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const secs = rounded % 60;
+  if (hours > 0) return `${hours}h${minutes}m`;
+  if (minutes > 0) return `${minutes}m${secs}s`;
+  return `${secs}s`;
+}
+
 function parseProgress(log: string) {
   const clean = log.replace(/\x1b\[[0-9;]*[mK]/g, "");
   const lines = clean.split(/\r?\n/).filter(Boolean);
@@ -323,6 +339,10 @@ async function buildStatus() {
   const stateItems = state.items ?? {};
   let completedBytes = 0;
   let activeBytes = 0;
+  let activeTotalBytes = 0;
+  let activeRateBytesPerSecond = 0;
+  let activeConnections = 0;
+  let activeSeeders = 0;
 
   const items = manifest.items.map((item) => {
     const itemState = stateItems[item.id] ?? {};
@@ -333,6 +353,10 @@ async function buildStatus() {
       completedBytes += item.totalBytes;
     } else if (status === "active" || status === "organizing") {
       activeBytes += Math.min(progress.downloadedBytes, item.totalBytes);
+      activeTotalBytes += item.totalBytes;
+      activeRateBytesPerSecond += parseRateBytesPerSecond(progress.rate);
+      activeConnections += progress.connections;
+      activeSeeders += progress.seeders;
     }
     return {
       ...item,
@@ -347,7 +371,8 @@ async function buildStatus() {
   });
 
   const totalBytes = manifest.items.reduce((sum, item) => sum + item.totalBytes, 0);
-  const activeItem = items.find((item) => item.status === "active" || item.status === "organizing");
+  const activeItems = items.filter((item) => item.status === "active" || item.status === "organizing");
+  const activeRemainingBytes = Math.max(0, activeTotalBytes - activeBytes);
   const doneBytes = completedBytes + activeBytes;
   const rawLog = readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "");
   return {
@@ -360,9 +385,17 @@ async function buildStatus() {
       percent: totalBytes ? Math.floor((doneBytes / totalBytes) * 1000) / 10 : 0,
       completedItems: items.filter((item) => item.status === "completed").length,
       totalItems: items.length,
+      activeItems: activeItems.length,
+      activeBytes,
+      activeTotalBytes,
+      activePercent: activeTotalBytes ? Math.floor((activeBytes / activeTotalBytes) * 1000) / 10 : 0,
+      activeRateBytesPerSecond,
+      activeEta: activeRateBytesPerSecond > 0 ? formatEtaSeconds(activeRemainingBytes / activeRateBytesPerSecond) : "",
+      activeConnections,
+      activeSeeders,
     },
     disk: await diskUsage(),
-    swarm: await swarmPeers(activeItem?.progress),
+    swarm: await swarmPeers({ connections: activeConnections, seeders: activeSeeders }),
     items,
     logs: await listLogs(),
     batchLogTail: rawLog.split(/\r?\n/).slice(-80).join("\n"),
@@ -2068,21 +2101,25 @@ function celebrate() {
 
 function render(data) {
   const active = activeItem(data);
-  const activePercent = active ? active.progress.percent || 0 : data.totals.completedItems === data.totals.totalItems ? 100 : 0;
+  const activeCount = data.totals.activeItems || 0;
+  const activePercent = activeCount ? data.totals.activePercent || 0 : data.totals.completedItems === data.totals.totalItems ? 100 : 0;
+  const activeRateBytes = data.totals.activeRateBytesPerSecond || 0;
+  const activeRateLabel = formatPeerRate(activeRateBytes);
+  const activeTitle = activeCount > 1 ? activeCount + ' active downloads' : active ? active.title : 'Queue idle';
   const activeStreams = Array.isArray(data.swarm?.peers)
     ? data.swarm.peers.filter((peer) => peer.active && Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).length
     : 0;
   const diskUse = Number(String(data.disk.usePercent || '0').replace('%', '')) || 0;
   const diskFree = clamp(100 - diskUse);
-  const speed = parseSpeed(active?.progress?.rate);
+  const speed = activeRateBytes / 1024 / 1024;
   warp.batchProgress = data.totals.percent;
 
   document.getElementById('connection').textContent = 'Live';
-  document.getElementById('subtitle').textContent = active ? active.title : 'Queue idle';
+  document.getElementById('subtitle').textContent = activeTitle;
   tweenNumber('batchPercent', data.totals.percent, (value) => value.toFixed(1) + '%', 800);
   document.getElementById('batchText').textContent = data.totals.completedItems + ' of ' + data.totals.totalItems + ' complete';
   tweenNumber('activePercent', activePercent, (value) => Math.round(value) + '%', 800);
-  document.getElementById('activeText').textContent = active ? (active.progress.eta ? 'ETA ' + active.progress.eta : active.status) : 'No active item';
+  document.getElementById('activeText').textContent = activeCount ? (data.totals.activeEta ? 'ETA ' + data.totals.activeEta : activeCount + ' running') : 'No active item';
   tweenNumber('diskPercent', diskFree, (value) => Math.round(value) + '%', 800);
   document.getElementById('diskText').textContent = data.disk.available + ' free of ' + data.disk.size;
   setRing('batchRing', data.totals.percent);
@@ -2092,13 +2129,13 @@ function render(data) {
   tweenNumber('downloaded', data.totals.doneBytes, (value) => fmt(value) + ' / ' + fmt(data.totals.totalBytes), 700);
   document.getElementById('updated').textContent = new Date(data.generatedAt).toLocaleTimeString();
   tweenNumber('speedNow', speed, formatSpeed, 450);
-  if (active) tweenNumber('currentMini', activePercent, (value) => Math.round(value) + '% @ ' + (active.progress.rate || '-'), 700);
+  if (activeCount) tweenNumber('currentMini', activePercent, (value) => Math.round(value) + '% @ ' + activeRateLabel, 700);
   else document.getElementById('currentMini').textContent = '-';
-  document.getElementById('etaMini').textContent = active?.progress?.eta || '-';
-  document.getElementById('mapTorrentTitle').textContent = active ? active.title : 'Queue idle';
-  document.getElementById('mapTorrentProgress').textContent = active ? Math.round(activePercent) + '%' : '-';
-  document.getElementById('mapTorrentRate').textContent = active?.progress?.rate || '-';
-  document.getElementById('mapTorrentEta').textContent = active?.progress?.eta || '-';
+  document.getElementById('etaMini').textContent = data.totals.activeEta || '-';
+  document.getElementById('mapTorrentTitle').textContent = activeTitle;
+  document.getElementById('mapTorrentProgress').textContent = activeCount ? Math.round(activePercent) + '%' : '-';
+  document.getElementById('mapTorrentRate').textContent = activeCount ? activeRateLabel : '-';
+  document.getElementById('mapTorrentEta').textContent = data.totals.activeEta || '-';
   document.getElementById('mapTorrentSeeds').textContent = 'Streams ' + activeStreams;
   document.getElementById('mapTorrentFill').style.width = clamp(activePercent) + '%';
   tweenNumber('remainingMini', Math.max(0, data.totals.totalBytes - data.totals.doneBytes), fmt, 700);
