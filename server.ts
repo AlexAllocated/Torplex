@@ -851,24 +851,24 @@ function page() {
       position: absolute;
       display: flex;
       align-items: center;
-      gap: 5px;
-      max-width: min(220px, 44vw);
-      padding: 2px 5px;
+      gap: 4px;
+      max-width: min(180px, 40vw);
+      padding: 1px 4px;
       border: 1px solid rgba(150, 167, 190, .18);
       border-radius: 5px;
       background: rgba(5, 10, 16, .72);
       color: rgba(231, 237, 245, .94);
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 10px;
+      font-size: 9px;
       font-weight: 700;
       line-height: 1.2;
       white-space: nowrap;
-      transform: translate(8px, -14px);
+      transform: translate(3px, calc(-100% - 3px));
       pointer-events: auto;
       transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
     .map-peer-label:hover {
-      max-width: min(360px, 72vw);
+      max-width: min(320px, 68vw);
       border-color: rgba(87, 224, 194, .42);
       background: rgba(5, 10, 16, .90);
       box-shadow: 0 0 24px rgba(87, 224, 194, .18);
@@ -876,8 +876,8 @@ function page() {
     .map-peer-label img {
       position: static;
       inset: auto;
-      width: 18px;
-      height: 13px;
+      width: 16px;
+      height: 11px;
       flex: 0 0 auto;
       opacity: 1;
       filter: none;
@@ -1607,9 +1607,9 @@ function renderMapPeerLabels(width, height) {
     }
     if (span) span.textContent = text;
     if (detail) detail.textContent = detailText;
-    const estimatedWidth = Math.min(170, 16 + (flagUrl ? 25 : 0) + text.length * 6);
-    const x = Math.min(width - estimatedWidth - 8, Math.max(6, item.x + 8));
-    const y = Math.min(height - 18, Math.max(10, item.y - 14));
+    const estimatedWidth = Math.min(145, 12 + (flagUrl ? 21 : 0) + text.length * 5.5);
+    const x = Math.min(width - estimatedWidth - 6, Math.max(4, item.x + 3));
+    const y = Math.min(height - 4, Math.max(16, item.y - 3));
     node.style.left = x.toFixed(1) + 'px';
     node.style.top = y.toFixed(1) + 'px';
     node.style.opacity = String(Math.min(.96, item.alpha));
