@@ -356,21 +356,10 @@ function hashString(value) {
 }
 
 function itemVisual(itemId) {
-  const palette = [
-    '87, 224, 194',
-    '247, 198, 95',
-    '244, 112, 134',
-    '120, 166, 255',
-    '191, 255, 0',
-    '255, 140, 0',
-    '176, 132, 255',
-    '64, 221, 255',
-  ];
   const shapes = ['circle', 'diamond', 'square', 'triangle'];
   const hash = hashString(itemId || 'unknown');
   return {
-    rgb: palette[hash % palette.length],
-    shape: shapes[Math.floor(hash / palette.length) % shapes.length],
+    shape: shapes[hash % shapes.length],
   };
 }
 
@@ -385,13 +374,33 @@ function drawPacketShape(ctx, shape, x, y, radius) {
     ctx.lineTo(x - radius * 1.35, y);
     ctx.closePath();
   } else if (shape === 'triangle') {
-    ctx.moveTo(x, y - radius * 1.35);
-    ctx.lineTo(x + radius * 1.25, y + radius);
-    ctx.lineTo(x - radius * 1.25, y + radius);
+    ctx.moveTo(x, y - radius * 1.55);
+    ctx.lineTo(x + radius * 1.34, y + radius * .775);
+    ctx.lineTo(x - radius * 1.34, y + radius * .775);
     ctx.closePath();
   } else {
     ctx.arc(x, y, radius, 0, Math.PI * 2);
   }
+}
+
+function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
+  const vmLabelColor = '191, 255, 0';
+  ctx.beginPath();
+  ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(' + vmColor + ', ' + (.10 + vmPulse.value * .14) + ')';
+  ctx.fill();
+  ctx.fillStyle = 'rgb(' + vmColor + ')';
+  ctx.beginPath();
+  ctx.arc(origin.x, origin.y, vmRadius, 0, Math.PI * 2);
+  ctx.shadowColor = 'rgba(' + vmColor + ', .82)';
+  ctx.shadowBlur = 18 + vmPulse.value * 16;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  ctx.fillStyle = 'rgba(' + vmLabelColor + ', .95)';
+  ctx.textAlign = 'center';
+  ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
+  ctx.textAlign = 'start';
 }
 
 function streamSpeedFactor(bytesPerSecond) {
@@ -585,24 +594,7 @@ function drawWorldFrame(now) {
   const origin = cameraPoint(originWorld);
   const vmPulse = pulseForSpeed(now, totalIngestBps);
   const vmColor = heatColor(totalIngestBps);
-  const vmLabelColor = '191, 255, 0';
   const vmRadius = 4.5 * (1 + vmPulse.value);
-  ctx.beginPath();
-  ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(' + vmColor + ', ' + (.06 + vmPulse.value * .10) + ')';
-  ctx.fill();
-  ctx.fillStyle = 'rgb(' + vmColor + ')';
-  ctx.beginPath();
-  ctx.arc(origin.x, origin.y, vmRadius, 0, Math.PI * 2);
-  ctx.shadowColor = 'rgba(' + vmColor + ', .75)';
-  ctx.shadowBlur = 16 + vmPulse.value * 14;
-  ctx.fill();
-  ctx.shadowBlur = 0;
-  ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(' + vmLabelColor + ', .95)';
-  ctx.textAlign = 'center';
-  ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
-  ctx.textAlign = 'start';
 
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
   swarmMap.displayPeers.forEach((item) => {
@@ -620,7 +612,6 @@ function drawWorldFrame(now) {
     const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
     const activeColor = heatColor(item.peer.receiveRateBps);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
-    const packetColor = item.peer.itemId ? visual.rgb : activeColor;
 
     const start = { x: origin.x, y: origin.y };
     const screen = cameraPoint({ x: item.x, y: item.y });
@@ -649,10 +640,10 @@ function drawWorldFrame(now) {
         const t = 1 - travel;
         const head = quadPoint(start, control, end, t);
         const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
-        ctx.shadowColor = 'rgba(' + packetColor + ', .88)';
+        ctx.shadowColor = 'rgba(' + activeColor + ', .88)';
         ctx.shadowBlur = 15;
         drawPacketShape(ctx, visual.shape, head.x, head.y, 5.2);
-        ctx.fillStyle = 'rgba(' + packetColor + ', ' + packetAlpha + ')';
+        ctx.fillStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
         ctx.fill();
         ctx.shadowBlur = 0;
       }
@@ -681,6 +672,7 @@ function drawWorldFrame(now) {
     ctx.fill();
     ctx.shadowBlur = 0;
   });
+  drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor);
   renderMapPeerLabels(width, height);
 }
 
@@ -723,7 +715,9 @@ function renderItems(items) {
     if (marker) {
       marker.hidden = item.status === 'completed';
       marker.className = item.status === 'completed' ? 'torrent-marker' : 'torrent-marker shape-' + visual.shape;
-      if (item.status !== 'completed') marker.style.setProperty('--torrent-color', 'rgb(' + visual.rgb + ')');
+      if (item.status === 'active' || item.status === 'organizing') marker.style.setProperty('--torrent-color', 'var(--teal)');
+      else if (item.status === 'failed') marker.style.setProperty('--torrent-color', 'var(--rose)');
+      else if (item.status !== 'completed') marker.style.setProperty('--torrent-color', 'var(--amber)');
       else marker.style.removeProperty('--torrent-color');
     }
 
