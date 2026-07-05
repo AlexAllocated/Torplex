@@ -1535,9 +1535,12 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.46 * alpha) + ')';
-      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.62 * alpha) + ')';
+      ctx.lineWidth = 2.2;
+      ctx.shadowColor = 'rgba(' + activeColor + ', .36)';
+      ctx.shadowBlur = 7;
       ctx.stroke();
+      ctx.shadowBlur = 0;
     }
 
     if (item.peer.active) {
@@ -1561,7 +1564,7 @@ function drawWorldFrame(now) {
         ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.arc(head.x, head.y, 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(160, 255, 160, ' + packetAlpha + ')';
+        ctx.fillStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
         ctx.fill();
       }
     }
