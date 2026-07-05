@@ -21,7 +21,7 @@
     </div>
     <div class="header-actions">
       <div class="auth-block">
-        <button id="openIntake" class="primary-button" type="button">Sign in with Google</button>
+        <button id="openIntake" class="primary-button" type="button">Unlock</button>
         <a id="logoutButton" class="secondary-button" href="/auth/logout" hidden>Sign out</a>
         <div id="authStatus" class="small">Checking auth...</div>
       </div>

@@ -894,15 +894,15 @@ function renderSessionControls() {
 
   open.disabled = false;
   if (!sessionState.configured) {
-    open.textContent = 'Google auth not configured';
+    open.textContent = 'Password not configured';
     open.disabled = true;
     setAuthStatus('Upload locked');
   } else if (!sessionState.authenticated) {
-    open.textContent = 'Sign in with Google';
+    open.textContent = 'Unlock';
     setAuthStatus('Upload locked');
   } else {
     open.textContent = 'Add Torrent';
-    setAuthStatus(sessionState.user?.email || 'Signed in');
+    setAuthStatus('Unlocked');
   }
 
   if (logout) logout.hidden = !sessionState.authenticated;
@@ -962,7 +962,7 @@ function initIntakeControls() {
   const submit = document.getElementById('addTorrent');
   if (!form || !input || !submit) return;
   if (!sessionState.authenticated) {
-    setIntakeStatus('Sign in with Google first');
+    setIntakeStatus('Unlock first');
     submit.disabled = true;
   }
   input.addEventListener('change', async () => {
@@ -973,7 +973,7 @@ function initIntakeControls() {
       return;
     }
     if (!sessionState.authenticated) {
-      setIntakeStatus('Sign in with Google first');
+      setIntakeStatus('Unlock first');
       return;
     }
     setIntakeStatus('Inspecting');

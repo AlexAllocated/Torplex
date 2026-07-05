@@ -23,7 +23,7 @@ Torplex is intentionally simple:
 - One SvelteKit web app for UI and API routes.
 - One separate Bun worker: `run-batch.ts`.
 - Runtime state lives under `BATCH_DIR`.
-- Upload authentication uses Google OAuth and an allow-list of email addresses.
+- Upload authentication uses a password from environment configuration.
 - It is designed for Linux hosts where Plex, `aria2c`, and the media filesystem are available.
 
 ## Requirements
@@ -34,7 +34,7 @@ Torplex is intentionally simple:
 - `curl`, `find`, `df`, and `ss`.
 - Plex Media Server running locally or reachable over HTTP.
 - A media directory writable by the user running the worker, or passwordless `sudo` for the configured ownership/mode commands.
-- Optional but recommended: an HTTPS domain or tunnel URL for Google OAuth.
+- Optional but recommended: an HTTPS domain, reverse proxy, or tunnel URL.
 
 Install the OS dependencies on Ubuntu/Debian:
 
@@ -62,7 +62,7 @@ MEDIA_ROOT=/media/plex
 MOVIES_DIR=/media/plex/Movies
 TV_DIR="/media/plex/TV Shows"
 PLEX_URL=http://127.0.0.1:32400
-AUTH_ALLOWED_EMAILS=you@example.com
+AUTH_PASSWORD=replace-with-a-login-password
 AUTH_COOKIE_SECRET=replace-with-a-long-random-secret
 ```
 
@@ -91,7 +91,7 @@ Open the app at:
 http://SERVER_IP:8787
 ```
 
-By default, Torplex requires Google login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
+By default, Torplex requires password login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
 
 ## Configuration
 
@@ -139,26 +139,16 @@ Quote `.env` values that contain spaces when using `source .env`, for example `T
 
 If these commands need `sudo`, configure the service user accordingly or set the variables empty and manage permissions another way.
 
-### Google OAuth
+### Authentication
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `APP_ORIGIN` | request origin | Public origin used to build OAuth redirect URLs. |
-| `AUTH_REQUIRED` | `true` | Require a valid Google session for the dashboard, status API, live event stream, and uploads. Set `false` only for trusted local/private installs. |
-| `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID. |
-| `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret. |
+| `APP_ORIGIN` | request origin | Public origin used for secure session cookies behind a reverse proxy. |
+| `AUTH_REQUIRED` | `true` | Require a valid password session for the dashboard, status API, live event stream, and uploads. Set `false` only for trusted local/private installs. |
+| `AUTH_PASSWORD` | empty | Password used to unlock Torplex. Required when `AUTH_REQUIRED=true`. |
 | `AUTH_COOKIE_SECRET` | development fallback | Secret used to sign session cookies. Use a long random value. |
-| `AUTH_ALLOWED_EMAILS` | empty | Comma-separated allow-list for upload access. |
 
-When `AUTH_REQUIRED=true`, dashboard data is locked until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS` are set.
-
-Google OAuth redirect URI:
-
-```text
-${APP_ORIGIN}/auth/callback
-```
-
-Google does not allow public raw-IP HTTP redirect URIs. Use an HTTPS domain, a reverse proxy, or an HTTPS tunnel URL for `APP_ORIGIN`.
+When `AUTH_REQUIRED=true`, dashboard data is locked until `AUTH_PASSWORD` is set.
 
 ## Runtime Directory
 
@@ -232,15 +222,15 @@ bun run build
 ## Security Notes
 
 - Keep `AUTH_REQUIRED=true` for internet-reachable installs.
-- Torrent upload APIs always require a valid Google session and allow-listed email.
+- Torrent upload APIs always require a valid password session.
 - Run Torplex behind HTTPS, a firewall, VPN, reverse proxy, or private network if the dashboard is reachable outside your LAN.
 - Do not commit `.env`, `manifest.json`, torrent files, logs, or Plex tokens.
-- Set `AUTH_COOKIE_SECRET` to a strong random value before enabling Google login.
+- Set `AUTH_COOKIE_SECRET` to a strong random value before enabling login.
 
 ## Troubleshooting
 
-- **Dashboard says Google auth is not configured:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS`, then restart the web app.
-- **Google rejects redirect URI:** use an HTTPS `APP_ORIGIN` and add `${APP_ORIGIN}/auth/callback` to the OAuth client.
+- **Dashboard says `AUTH_PASSWORD` is not configured:** set `AUTH_PASSWORD`, then restart the web app.
+- **Login works over HTTP but not HTTPS:** set `APP_ORIGIN` to the public HTTPS origin and restart the web app.
 - **Plex refresh fails:** set `PLEX_TOKEN` explicitly or make sure the worker can read `PLEX_PREFERENCES_PATH`.
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.
 - **No peer map data:** make sure `ss` is installed and `aria2c` is running on the same host as the web app.
