@@ -270,6 +270,57 @@
       "payloadName": "Ahsoka.S01.COMPLETE.2160p.Dolby.Vision.Profile.Five.Multi.Sub.DDP5.1.Atmos.DV.x265.MP4-BEN.THE.MEN",
       "totalBytes": 47247129826,
       "fileCount": 8
+    },
+    {
+      "id": "andor-2022-s01",
+      "torrentFile": "Star Wars Andor Season 1 Mp4 1080p.torrent",
+      "title": "Andor (2022) S01",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Andor (2022)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 1"
+      },
+      "payloadName": "Star Wars Andor Season 1 Mp4 1080p",
+      "totalBytes": 13290548637,
+      "fileCount": 13
+    },
+    {
+      "id": "andor-2022-s02",
+      "torrentFile": "Star.Wars.Andor.Season.2.COMPLETE.1080p.DSNP.WEB-DL.x264.ESubs.S02.Full-MIKE.torrent",
+      "title": "Andor (2022) S02",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Andor (2022)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 2"
+      },
+      "payloadName": "Star.Wars.Andor.Season.2.COMPLETE.1080p.DSNP.WEB-DL.x264.ESubs.S02.Full-MIKE",
+      "totalBytes": 8903701711,
+      "fileCount": 12
+    },
+    {
+      "id": "rogue-one-2016",
+      "torrentFile": "Rogue One A Star Wars Story 2016 1080p BluRay H264 AAC 5.1-[88].torrent",
+      "title": "Rogue One: A Star Wars Story (2016)",
+      "destination": {
+        "type": "movie",
+        "path": "/media/plex/Movies/Rogue One A Star Wars Story (2016)"
+      },
+      "organize": {
+        "strategy": "moveRoot",
+        "fileRenames": {
+          "Rogue One A Star Wars Story 2016 1080p BluRay H264 AAC 5.1.mp4": "Rogue One A Star Wars Story (2016).mp4",
+          "English.srt": "Rogue One A Star Wars Story (2016).en.srt"
+        }
+      },
+      "payloadName": "Rogue One A Star Wars Story 2016 1080p BluRay H264 AAC 5.1-[88]",
+      "totalBytes": 2652680609,
+      "fileCount": 5
     }
   ]
 }
