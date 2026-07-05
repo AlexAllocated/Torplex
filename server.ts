@@ -922,9 +922,30 @@ function page() {
       border-color: rgba(150, 167, 190, .14);
     }
     .peer-card strong {
+      display: flex;
+      align-items: center;
+      gap: 7px;
       color: #d9fff6;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .peer-flag {
+      display: inline-grid;
+      flex: 0 0 auto;
+      place-items: center;
+      min-width: 24px;
+      height: 18px;
+      border: 1px solid rgba(150, 167, 190, .24);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, .08);
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+      font-size: 14px;
+      line-height: 1;
+      box-shadow: inset 0 0 12px rgba(255, 255, 255, .04);
+    }
+    .peer-ip {
+      min-width: 0;
       overflow-wrap: anywhere;
     }
     .peer-card span {
@@ -1322,6 +1343,12 @@ function shortTitle(title) {
     .slice(0, 3) || '...';
 }
 
+function flagForCountry(countryCode) {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return '?';
+  return String.fromCodePoint(...[...code].map((char) => 127397 + char.charCodeAt(0)));
+}
+
 function renderSwarmMap(swarm) {
   const routeStatus = document.getElementById('routeStatus');
   const peerPills = document.getElementById('peerPills');
@@ -1342,8 +1369,9 @@ function renderSwarmMap(swarm) {
       const state = peer.active ? 'active' : peer.probing ? 'probing' : 'inactive';
       const age = peer.active || peer.probing ? peer.state : 'last seen ' + Math.round((peer.ageSeconds || 0) / 60) + 'm ago';
       const speed = peer.active ? formatPeerRate(peer.receiveRateBps) : '-';
+      const flag = flagForCountry(peer.countryCode);
       return '<div class="peer-card ' + esc(state) + '">' +
-        '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
+        '<strong><span class="peer-flag" title="' + esc(peer.countryCode || 'Unknown country') + '">' + esc(flag) + '</span><span class="peer-ip">' + esc(peer.ip + ':' + peer.port) + '</span></strong>' +
         '<span>' + esc(place) + '</span>' +
         '<span>' + esc(network) + '</span>' +
         '<span>' + esc('Speed ' + speed) + '</span>' +
