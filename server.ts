@@ -922,30 +922,9 @@ function page() {
       border-color: rgba(150, 167, 190, .14);
     }
     .peer-card strong {
-      display: flex;
-      align-items: center;
-      gap: 7px;
       color: #d9fff6;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
-      overflow-wrap: anywhere;
-    }
-    .peer-flag {
-      display: inline-grid;
-      flex: 0 0 auto;
-      place-items: center;
-      min-width: 24px;
-      height: 18px;
-      border: 1px solid rgba(150, 167, 190, .24);
-      border-radius: 5px;
-      background: rgba(255, 255, 255, .08);
-      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-      font-size: 14px;
-      line-height: 1;
-      box-shadow: inset 0 0 12px rgba(255, 255, 255, .04);
-    }
-    .peer-ip {
-      min-width: 0;
       overflow-wrap: anywhere;
     }
     .peer-card span {
@@ -1345,7 +1324,7 @@ function shortTitle(title) {
 
 function flagForCountry(countryCode) {
   const code = String(countryCode || '').trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return '?';
+  if (!/^[A-Z]{2}$/.test(code)) return '';
   return String.fromCodePoint(...[...code].map((char) => 127397 + char.charCodeAt(0)));
 }
 
@@ -1369,9 +1348,8 @@ function renderSwarmMap(swarm) {
       const state = peer.active ? 'active' : peer.probing ? 'probing' : 'inactive';
       const age = peer.active || peer.probing ? peer.state : 'last seen ' + Math.round((peer.ageSeconds || 0) / 60) + 'm ago';
       const speed = peer.active ? formatPeerRate(peer.receiveRateBps) : '-';
-      const flag = flagForCountry(peer.countryCode);
       return '<div class="peer-card ' + esc(state) + '">' +
-        '<strong><span class="peer-flag" title="' + esc(peer.countryCode || 'Unknown country') + '">' + esc(flag) + '</span><span class="peer-ip">' + esc(peer.ip + ':' + peer.port) + '</span></strong>' +
+        '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
         '<span>' + esc(place) + '</span>' +
         '<span>' + esc(network) + '</span>' +
         '<span>' + esc('Speed ' + speed) + '</span>' +
@@ -1688,15 +1666,25 @@ function drawWorldFrame(now) {
     ctx.shadowBlur = 0;
 
     if (item.peer.active && item.rank < 12) {
+      const flag = flagForCountry(item.peer.countryCode);
       const label = item.peer.ip + ' ' + formatPeerRate(item.peer.receiveRateBps);
       ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      const metrics = ctx.measureText(label);
-      const labelX = Math.min(width - metrics.width - 12, Math.max(6, item.x + 8));
+      const labelMetrics = ctx.measureText(label);
+      ctx.font = '13px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+      const flagWidth = flag ? ctx.measureText(flag).width + 4 : 0;
+      const labelWidth = flagWidth + labelMetrics.width;
+      const labelX = Math.min(width - labelWidth - 12, Math.max(6, item.x + 8));
       const labelY = Math.min(height - 8, Math.max(12, item.y - 8));
       ctx.fillStyle = 'rgba(5, 10, 16, ' + (.72 * alpha) + ')';
-      ctx.fillRect(labelX - 4, labelY - 10, metrics.width + 8, 14);
+      ctx.fillRect(labelX - 4, labelY - 11, labelWidth + 8, 15);
+      if (flag) {
+        ctx.font = '13px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, ' + (.95 * alpha) + ')';
+        ctx.fillText(flag, labelX, labelY + 1);
+      }
+      ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
       ctx.fillStyle = 'rgba(231, 237, 245, ' + (.92 * alpha) + ')';
-      ctx.fillText(label, labelX, labelY);
+      ctx.fillText(label, labelX + flagWidth, labelY);
     }
   });
 }
