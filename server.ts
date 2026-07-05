@@ -864,6 +864,7 @@ function page() {
       color: #e7edf5;
       font-size: 10px;
       font-weight: 850;
+      text-align: center;
     }
     .map-progress-meta {
       display: flex;
@@ -1152,7 +1153,7 @@ function page() {
           </button>
           <div class="map-progress-widget">
             <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
-            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span></div>
+            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span><span id="mapTorrentSeeds">SD 0</span></div>
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
           </div>
           <div id="worldMapLayer" class="world-map-layer">
@@ -1985,6 +1986,7 @@ function render(data) {
   document.getElementById('mapTorrentProgress').textContent = active ? Math.round(activePercent) + '%' : '-';
   document.getElementById('mapTorrentRate').textContent = active?.progress?.rate || '-';
   document.getElementById('mapTorrentEta').textContent = active?.progress?.eta || '-';
+  document.getElementById('mapTorrentSeeds').textContent = active ? 'SD ' + (active.progress.seeders || 0) : 'SD 0';
   document.getElementById('mapTorrentFill').style.width = clamp(activePercent) + '%';
   tweenNumber('remainingMini', Math.max(0, data.totals.totalBytes - data.totals.doneBytes), fmt, 700);
   updateSpeedChart(speed);
