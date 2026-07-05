@@ -254,6 +254,22 @@
       "payloadName": "Ghosts (US) (2021) S04 (1080p AMZN WEB-DL x265 10bit EAC3 5.1 Silence)",
       "totalBytes": 15391454650,
       "fileCount": 22
+    },
+    {
+      "id": "ahsoka-2023-s01",
+      "torrentFile": "Ahsoka.S01.COMPLETE.2160p.Dolby.Vision.Profile.Five.Multi.Sub.DDP5.1.Atmos.DV.x265.MP4-BEN.THE.MEN.torrent",
+      "title": "Ahsoka (2023) S01",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Ahsoka (2023)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 1"
+      },
+      "payloadName": "Ahsoka.S01.COMPLETE.2160p.Dolby.Vision.Profile.Five.Multi.Sub.DDP5.1.Atmos.DV.x265.MP4-BEN.THE.MEN",
+      "totalBytes": 47247129826,
+      "fileCount": 8
     }
   ]
 }
