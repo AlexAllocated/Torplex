@@ -863,7 +863,7 @@ function page() {
       font-weight: 700;
       line-height: 1.2;
       white-space: nowrap;
-      transform: translate(1px, calc(-100% - 1px));
+      transform: translate(1px, 1px);
       pointer-events: auto;
       transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
