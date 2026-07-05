@@ -60,7 +60,6 @@ const sessionState = {
   loginUrl: '/auth/login',
   logoutUrl: '/auth/logout',
 };
-const shapePalette = ['circle', 'square', 'diamond', 'triangle', 'hexagon', 'pentagon', 'star', 'plus', 'cross', 'chevron'];
 const colorPalette = [
   '#57e0c2',
   '#8ab4ff',
@@ -368,7 +367,6 @@ function itemVisual(itemId) {
   if (activeIndex >= 0) {
     const color = colorPalette[activeIndex % colorPalette.length];
     return {
-      shape: shapePalette[activeIndex % shapePalette.length],
       color,
       rgb: hexToRgb(color),
     };
@@ -376,74 +374,34 @@ function itemVisual(itemId) {
   const hash = hashString(id);
   const color = colorPalette[hash % colorPalette.length];
   return {
-    shape: shapePalette[hash % shapePalette.length],
     color,
     rgb: hexToRgb(color),
   };
 }
 
-function drawPacketShape(ctx, shape, x, y, radius) {
+function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
+  ctx.save();
+  const head = quadPoint(start, control, end, t);
+  const tail = quadPoint(start, control, end, Math.min(1, t + .045));
+  const gradient = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
+  gradient.addColorStop(0, 'rgba(' + rgb + ', 0)');
+  gradient.addColorStop(1, 'rgba(' + rgb + ', ' + (.62 * alpha) + ')');
   ctx.beginPath();
-  if (shape === 'square') {
-    ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
-  } else if (shape === 'diamond') {
-    ctx.moveTo(x, y - radius * 1.35);
-    ctx.lineTo(x + radius * 1.35, y);
-    ctx.lineTo(x, y + radius * 1.35);
-    ctx.lineTo(x - radius * 1.35, y);
-    ctx.closePath();
-  } else if (shape === 'triangle') {
-    ctx.moveTo(x, y - radius * 1.55);
-    ctx.lineTo(x + radius * 1.34, y + radius * .775);
-    ctx.lineTo(x - radius * 1.34, y + radius * .775);
-    ctx.closePath();
-  } else if (shape === 'hexagon' || shape === 'pentagon') {
-    const sides = shape === 'hexagon' ? 6 : 5;
-    const rotation = shape === 'hexagon' ? Math.PI / 6 : -Math.PI / 2;
-    for (let i = 0; i < sides; i += 1) {
-      const angle = rotation + i * Math.PI * 2 / sides;
-      const px = x + Math.cos(angle) * radius * 1.22;
-      const py = y + Math.sin(angle) * radius * 1.22;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-  } else if (shape === 'star') {
-    for (let i = 0; i < 10; i += 1) {
-      const angle = -Math.PI / 2 + i * Math.PI / 5;
-      const r = i % 2 === 0 ? radius * 1.42 : radius * .62;
-      const px = x + Math.cos(angle) * r;
-      const py = y + Math.sin(angle) * r;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-  } else if (shape === 'plus' || shape === 'cross') {
-    const arm = radius * .42;
-    const extent = radius * 1.42;
-    const points = [
-      [-arm, -extent], [arm, -extent], [arm, -arm], [extent, -arm],
-      [extent, arm], [arm, arm], [arm, extent], [-arm, extent],
-      [-arm, arm], [-extent, arm], [-extent, -arm], [-arm, -arm],
-    ];
-    ctx.save();
-    ctx.translate(x, y);
-    if (shape === 'cross') ctx.rotate(Math.PI / 4);
-    points.forEach(([px, py], index) => {
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.closePath();
-    ctx.restore();
-  } else if (shape === 'chevron') {
-    ctx.moveTo(x - radius * 1.35, y - radius * 1.15);
-    ctx.lineTo(x + radius * 1.35, y);
-    ctx.lineTo(x - radius * 1.35, y + radius * 1.15);
-    ctx.lineTo(x - radius * .55, y);
-    ctx.closePath();
-  } else {
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-  }
+  ctx.moveTo(tail.x, tail.y);
+  ctx.lineTo(head.x, head.y);
+  ctx.strokeStyle = gradient;
+  ctx.lineWidth = 5.5;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(' + rgb + ', .56)';
+  ctx.shadowBlur = 12;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(head.x, head.y, 4.8, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(' + rgb + ', ' + alpha + ')';
+  ctx.shadowColor = 'rgba(' + rgb + ', .88)';
+  ctx.shadowBlur = 14;
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
@@ -703,14 +661,8 @@ function drawWorldFrame(now) {
       for (let i = 0; i < packetCount; i += 1) {
         const travel = ((now / (2600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
-        const head = quadPoint(start, control, end, t);
         const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
-        ctx.shadowColor = 'rgba(' + activeColor + ', .88)';
-        ctx.shadowBlur = 15;
-        drawPacketShape(ctx, visual.shape, head.x, head.y, 5.2);
-        ctx.fillStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        drawPacketDot(ctx, start, control, end, t, activeColor, packetAlpha);
       }
     }
 
@@ -780,7 +732,7 @@ function renderItems(items) {
       if (item.status === 'completed') {
         marker.remove();
       } else {
-        marker.className = 'torrent-marker shape-' + visual.shape;
+        marker.className = 'torrent-marker';
         marker.style.setProperty('--torrent-color', visual.color);
       }
     }

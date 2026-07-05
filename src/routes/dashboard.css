@@ -837,39 +837,9 @@
       width: 14px;
       height: 14px;
       flex: 0 0 auto;
+      border-radius: 50%;
       background: var(--torrent-color);
       box-shadow: 0 0 14px color-mix(in srgb, var(--torrent-color), transparent 42%);
-    }
-    .torrent-marker.shape-circle {
-      border-radius: 50%;
-    }
-    .torrent-marker.shape-square {
-      border-radius: 3px;
-    }
-    .torrent-marker.shape-diamond {
-      rotate: 45deg;
-      border-radius: 2px;
-    }
-    .torrent-marker.shape-triangle {
-      clip-path: polygon(50% 0, 100% 100%, 0 100%);
-    }
-    .torrent-marker.shape-hexagon {
-      clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%);
-    }
-    .torrent-marker.shape-pentagon {
-      clip-path: polygon(50% 0, 98% 36%, 80% 100%, 20% 100%, 2% 36%);
-    }
-    .torrent-marker.shape-star {
-      clip-path: polygon(50% 0, 61% 34%, 98% 35%, 68% 56%, 79% 92%, 50% 70%, 21% 92%, 32% 56%, 2% 35%, 39% 34%);
-    }
-    .torrent-marker.shape-plus {
-      clip-path: polygon(38% 0, 62% 0, 62% 38%, 100% 38%, 100% 62%, 62% 62%, 62% 100%, 38% 100%, 38% 62%, 0 62%, 0 38%, 38% 38%);
-    }
-    .torrent-marker.shape-cross {
-      clip-path: polygon(20% 0, 50% 30%, 80% 0, 100% 20%, 70% 50%, 100% 80%, 80% 100%, 50% 70%, 20% 100%, 0 80%, 30% 50%, 0 20%);
-    }
-    .torrent-marker.shape-chevron {
-      clip-path: polygon(0 0, 100% 50%, 0 100%, 28% 50%);
     }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: #cbd6e3; }
     .chip {
