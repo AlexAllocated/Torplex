@@ -48,6 +48,11 @@ type PeerGeo = Peer & {
   lon?: number;
   isp?: string;
   as?: string;
+  active?: boolean;
+  probing?: boolean;
+  lastSeenAt?: string;
+  lastActiveAt?: string;
+  ageSeconds?: number;
   lookupStatus: "mapped" | "unmapped";
 };
 
@@ -60,10 +65,28 @@ const byteUnits: Record<string, number> = {
 };
 
 const peerGeoCache = new Map<string, { expiresAt: number; value: PeerGeo }>();
-let peerSnapshot: { updatedAt: string; peers: PeerGeo[] } = { updatedAt: new Date(0).toISOString(), peers: [] };
+const peerHistory = new Map<string, PeerGeo>();
+let peerSnapshot: {
+  updatedAt: string;
+  peers: PeerGeo[];
+  activeCount: number;
+  probingCount: number;
+  inactiveCount: number;
+  aria2Connections: number;
+  aria2Seeders: number;
+} = {
+  updatedAt: new Date(0).toISOString(),
+  peers: [],
+  activeCount: 0,
+  probingCount: 0,
+  inactiveCount: 0,
+  aria2Connections: 0,
+  aria2Seeders: 0,
+};
 let lastPeerRefresh = 0;
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
+const peerHistoryTtlMs = 15 * 60 * 1000;
 
 function readJson<T>(path: string, fallback: T): T {
   try {
@@ -96,8 +119,10 @@ function parseProgress(log: string) {
   const match = line.match(
     /\[#\w+\s+([0-9.]+)(B|KiB|MiB|GiB|TiB)\/([0-9.]+)(B|KiB|MiB|GiB|TiB)\((\d+)%\)/,
   );
+  const connections = Number(line.match(/\bCN:(\d+)/)?.[1] ?? 0);
+  const seeders = Number(line.match(/\bSD:(\d+)/)?.[1] ?? 0);
   if (!match) {
-    return { line, downloadedBytes: 0, totalBytes: 0, percent: 0, rate: "", eta: "" };
+    return { line, downloadedBytes: 0, totalBytes: 0, percent: 0, rate: "", eta: "", connections, seeders };
   }
   const rate = line.match(/\bDL:([^\s\]]+)/)?.[1] ?? "";
   const eta = line.match(/\bETA:([^\]\s]+)/)?.[1] ?? "";
@@ -108,6 +133,8 @@ function parseProgress(log: string) {
     percent: Number(match[5]),
     rate,
     eta,
+    connections,
+    seeders,
   };
 }
 
@@ -166,6 +193,21 @@ function connectedPeers(): Peer[] {
   return [...peers.values()].slice(0, 48);
 }
 
+function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
+  const previous = peerHistory.get(peer.ip);
+  const active = peer.state === "ESTAB";
+  const probing = !active && peer.state !== "";
+  return {
+    ...previous,
+    ...peer,
+    active,
+    probing,
+    lastSeenAt: new Date(nowMs).toISOString(),
+    lastActiveAt: active ? new Date(nowMs).toISOString() : previous?.lastActiveAt,
+    ageSeconds: 0,
+  };
+}
+
 async function lookupPeer(peer: Peer): Promise<PeerGeo> {
   const cached = peerGeoCache.get(peer.ip);
   if (cached && cached.expiresAt > Date.now()) return { ...cached.value, port: peer.port, state: peer.state };
@@ -197,13 +239,46 @@ async function lookupPeer(peer: Peer): Promise<PeerGeo> {
   return value;
 }
 
-async function swarmPeers() {
+async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
   if (Date.now() - lastPeerRefresh < peerRefreshMs) return peerSnapshot;
   lastPeerRefresh = Date.now();
+  const nowMs = Date.now();
   const peers = connectedPeers();
+  const activeIps = new Set(peers.map((peer) => peer.ip));
+  for (const peer of await Promise.all(peers.map((peer) => lookupPeer(peer)))) {
+    peerHistory.set(peer.ip, markPeerActivity(peer, nowMs));
+  }
+
+  for (const [ip, peer] of peerHistory) {
+    const seenMs = peer.lastSeenAt ? Date.parse(peer.lastSeenAt) : 0;
+    if (nowMs - seenMs > peerHistoryTtlMs) {
+      peerHistory.delete(ip);
+      continue;
+    }
+    if (!activeIps.has(ip)) {
+      peerHistory.set(ip, {
+        ...peer,
+        active: false,
+        probing: false,
+        ageSeconds: Math.max(0, Math.round((nowMs - seenMs) / 1000)),
+      });
+    }
+  }
+
+  const history = [...peerHistory.values()].sort((a, b) => {
+    const aRank = a.active ? 0 : a.probing ? 1 : 2;
+    const bRank = b.active ? 0 : b.probing ? 1 : 2;
+    if (aRank !== bRank) return aRank - bRank;
+    return Date.parse(b.lastSeenAt ?? "") - Date.parse(a.lastSeenAt ?? "");
+  });
   peerSnapshot = {
     updatedAt: new Date().toISOString(),
-    peers: await Promise.all(peers.map((peer) => lookupPeer(peer))),
+    peers: history.slice(0, 80),
+    activeCount: history.filter((peer) => peer.active).length,
+    probingCount: history.filter((peer) => peer.probing).length,
+    inactiveCount: history.filter((peer) => !peer.active && !peer.probing).length,
+    aria2Connections: stats?.connections ?? 0,
+    aria2Seeders: stats?.seeders ?? 0,
   };
   return peerSnapshot;
 }
@@ -246,6 +321,7 @@ async function buildStatus() {
   });
 
   const totalBytes = manifest.items.reduce((sum, item) => sum + item.totalBytes, 0);
+  const activeItem = items.find((item) => item.status === "active" || item.status === "organizing");
   const doneBytes = completedBytes + activeBytes;
   const rawLog = readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "");
   return {
@@ -260,7 +336,7 @@ async function buildStatus() {
       totalItems: items.length,
     },
     disk: await diskUsage(),
-    swarm: await swarmPeers(),
+    swarm: await swarmPeers(activeItem?.progress),
     items,
     logs: await listLogs(),
     batchLogTail: rawLog.split(/\r?\n/).slice(-80).join("\n"),
@@ -557,6 +633,30 @@ function page() {
       gap: 12px;
       margin-bottom: 14px;
     }
+    .map-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 1px solid rgba(87, 224, 194, .32);
+      border-radius: 8px;
+      color: #d9fff6;
+      background: rgba(87, 224, 194, .08);
+      cursor: pointer;
+      transition: background .2s ease, border-color .2s ease, transform .2s ease;
+    }
+    .icon-button:hover {
+      border-color: rgba(87, 224, 194, .62);
+      background: rgba(87, 224, 194, .15);
+      transform: translateY(-1px);
+    }
+    .icon-button svg { width: 18px; height: 18px; }
     .map-track {
       position: relative;
       display: grid;
@@ -644,8 +744,26 @@ function page() {
       background:
         radial-gradient(circle at 50% 50%, rgba(87, 224, 194, .12), transparent 50%),
         linear-gradient(180deg, rgba(10, 18, 28, .96), rgba(7, 11, 17, .96));
+      cursor: grab;
+      touch-action: none;
     }
-    .world-map-frame img {
+    .world-map-frame:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      min-height: 100vh;
+      aspect-ratio: auto;
+      border: 0;
+      border-radius: 0;
+      background: #07101a;
+    }
+    .world-map-frame:active { cursor: grabbing; }
+    .world-map-layer {
+      position: absolute;
+      inset: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+    .world-map-layer img {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -682,6 +800,18 @@ function page() {
       background: rgba(255, 255, 255, .035);
       box-shadow: inset 0 0 18px rgba(255, 255, 255, .025);
     }
+    .peer-card.active {
+      border-color: rgba(87, 224, 194, .46);
+      background: rgba(87, 224, 194, .08);
+    }
+    .peer-card.probing {
+      border-color: rgba(247, 198, 95, .38);
+      background: rgba(247, 198, 95, .07);
+    }
+    .peer-card.inactive {
+      opacity: .68;
+      border-color: rgba(150, 167, 190, .14);
+    }
     .peer-card strong {
       color: #d9fff6;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -693,6 +823,19 @@ function page() {
       font-size: 12px;
       overflow-wrap: anywhere;
     }
+    .peer-state {
+      width: fit-content;
+      margin-top: 2px;
+      padding: 2px 6px;
+      border: 1px solid rgba(150, 167, 190, .22);
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 850;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .peer-card.active .peer-state { color: #d9fff6; border-color: rgba(87, 224, 194, .50); }
+    .peer-card.probing .peer-state { color: #fff1c7; border-color: rgba(247, 198, 95, .46); }
     .peer-empty {
       display: grid;
       place-items: center;
@@ -886,12 +1029,21 @@ function page() {
   <section class="transfer-map world-panel">
     <div class="map-title">
       <div class="label">Swarm Atlas</div>
-      <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+      <div class="map-actions">
+        <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+        <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+          </svg>
+        </button>
+      </div>
     </div>
     <div class="world-shell">
       <div class="world-map-frame">
-        <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
-        <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+        <div id="worldMapLayer" class="world-map-layer">
+          <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
+          <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+        </div>
       </div>
       <div id="peerPills" class="peer-pills"></div>
     </div>
@@ -935,6 +1087,16 @@ const swarmMap = {
   raf: 0,
   lastFrame: 0,
   origin: { lat: 39, lon: -98 },
+};
+const mapView = {
+  scale: 1,
+  x: 0,
+  y: 0,
+  dragging: false,
+  startX: 0,
+  startY: 0,
+  baseX: 0,
+  baseY: 0,
 };
 const completedSeen = new Set();
 const tweens = new Map();
@@ -1050,20 +1212,106 @@ function renderSwarmMap(swarm) {
   const mapped = peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon));
   swarmMap.peers = peers;
   routeStatus.textContent = peers.length
-    ? mapped.length + '/' + peers.length + ' mapped - raw IPs visible - refreshed ' + new Date(swarm.updatedAt).toLocaleTimeString()
+    ? 'aria2 SD:' + (swarm.aria2Seeders ?? 0) + ' CN:' + (swarm.aria2Connections ?? 0) +
+      ' - active ' + (swarm.activeCount ?? 0) +
+      ', probing ' + (swarm.probingCount ?? 0) +
+      ', inactive ' + (swarm.inactiveCount ?? 0) +
+      ' - ' + mapped.length + '/' + peers.length + ' mapped'
     : 'No connected aria2c peers visible yet';
   peerPills.innerHTML = peers.length
     ? peers.map((peer) => {
       const place = [peer.city, peer.region, peer.countryCode || peer.country].filter(Boolean).join(', ') || 'Unmapped';
       const network = peer.as || peer.isp || 'Network unknown';
-      return '<div class="peer-card">' +
+      const state = peer.active ? 'active' : peer.probing ? 'probing' : 'inactive';
+      const age = peer.active || peer.probing ? peer.state : 'last seen ' + Math.round((peer.ageSeconds || 0) / 60) + 'm ago';
+      return '<div class="peer-card ' + esc(state) + '">' +
         '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
         '<span>' + esc(place) + '</span>' +
         '<span>' + esc(network) + '</span>' +
+        '<span class="peer-state">' + esc(state + ' - ' + age) + '</span>' +
       '</div>';
     }).join('')
     : '<div class="peer-empty">No active peer sockets yet. The map will light up once aria2c has established connections.</div>';
   if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+}
+
+function clampMapView() {
+  const frame = document.querySelector('.world-map-frame');
+  if (!frame) return;
+  const width = frame.clientWidth;
+  const height = frame.clientHeight;
+  mapView.scale = Math.max(1, Math.min(6, mapView.scale));
+  if (mapView.scale === 1) {
+    mapView.x = 0;
+    mapView.y = 0;
+    return;
+  }
+  mapView.x = Math.min(0, Math.max(width - width * mapView.scale, mapView.x));
+  mapView.y = Math.min(0, Math.max(height - height * mapView.scale, mapView.y));
+}
+
+function applyMapTransform() {
+  clampMapView();
+  const layer = document.getElementById('worldMapLayer');
+  if (layer) layer.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+}
+
+function initMapControls() {
+  const frame = document.querySelector('.world-map-frame');
+  if (!frame) return;
+  frame.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const rect = frame.getBoundingClientRect();
+    const oldScale = mapView.scale;
+    const direction = event.deltaY < 0 ? 1 : -1;
+    const nextScale = Math.max(1, Math.min(6, oldScale * (direction > 0 ? 1.18 : 1 / 1.18)));
+    const px = event.clientX - rect.left;
+    const py = event.clientY - rect.top;
+    const mapX = (px - mapView.x) / oldScale;
+    const mapY = (py - mapView.y) / oldScale;
+    mapView.scale = nextScale;
+    mapView.x = px - mapX * nextScale;
+    mapView.y = py - mapY * nextScale;
+    applyMapTransform();
+  }, { passive: false });
+  frame.addEventListener('pointerdown', (event) => {
+    if (mapView.scale <= 1) return;
+    mapView.dragging = true;
+    mapView.startX = event.clientX;
+    mapView.startY = event.clientY;
+    mapView.baseX = mapView.x;
+    mapView.baseY = mapView.y;
+    frame.setPointerCapture(event.pointerId);
+  });
+  frame.addEventListener('pointermove', (event) => {
+    if (!mapView.dragging) return;
+    mapView.x = mapView.baseX + event.clientX - mapView.startX;
+    mapView.y = mapView.baseY + event.clientY - mapView.startY;
+    applyMapTransform();
+  });
+  frame.addEventListener('pointerup', (event) => {
+    mapView.dragging = false;
+    try { frame.releasePointerCapture(event.pointerId); } catch {}
+  });
+  frame.addEventListener('pointercancel', () => {
+    mapView.dragging = false;
+  });
+  frame.addEventListener('dblclick', () => {
+    mapView.scale = 1;
+    mapView.x = 0;
+    mapView.y = 0;
+    applyMapTransform();
+  });
+  document.getElementById('fullscreenMap')?.addEventListener('click', async () => {
+    if (document.fullscreenElement === frame) {
+      await document.exitFullscreen();
+    } else {
+      await frame.requestFullscreen();
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    applyMapTransform();
+  });
 }
 
 function projectWorld(lat, lon, width, height) {
@@ -1101,7 +1349,8 @@ function drawWorldFrame(now) {
   const canvas = document.getElementById('worldCanvas');
   if (!canvas) return;
   syncDisplayPeers(swarmMap.peers);
-  const rect = canvas.getBoundingClientRect();
+  const frame = canvas.closest('.world-map-frame');
+  const rect = { width: frame?.clientWidth || canvas.clientWidth, height: frame?.clientHeight || canvas.clientHeight };
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
   const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
@@ -1162,7 +1411,8 @@ function drawWorldFrame(now) {
     item.x += (target.x - item.x) * (1 - Math.exp(-dt / 450));
     item.y += (target.y - item.y) * (1 - Math.exp(-dt / 450));
     item.alpha += ((item.fading ? 0 : 1) - item.alpha) * (1 - Math.exp(-dt / 360));
-    const alpha = Math.max(0, Math.min(1, item.alpha));
+    const targetAlpha = item.peer.active ? 1 : item.peer.probing ? .72 : .38;
+    const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
     const hue = 166 + (item.rank % 9) * 12;
 
     ctx.beginPath();
@@ -1170,19 +1420,31 @@ function drawWorldFrame(now) {
     const midX = (origin.x + item.x) / 2;
     const midY = (origin.y + item.y) / 2 - Math.min(80, Math.abs(origin.x - item.x) * .12);
     ctx.quadraticCurveTo(midX, midY, item.x, item.y);
-    ctx.strokeStyle = 'hsla(' + hue + ', 86%, 66%, ' + (.14 * alpha) + ')';
+    ctx.strokeStyle = item.peer.active
+      ? 'hsla(' + hue + ', 86%, 66%, ' + (.16 * alpha) + ')'
+      : item.peer.probing
+        ? 'rgba(247, 198, 95, ' + (.12 * alpha) + ')'
+        : 'rgba(150, 167, 190, ' + (.08 * alpha) + ')';
     ctx.lineWidth = 1;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(item.x, item.y, 6 + pulse * 8, 0, Math.PI * 2);
-    ctx.fillStyle = 'hsla(' + hue + ', 92%, 68%, ' + (.075 * alpha) + ')';
+    ctx.arc(item.x, item.y, item.peer.active ? 6 + pulse * 8 : item.peer.probing ? 5 + pulse * 4 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = item.peer.active
+      ? 'hsla(' + hue + ', 92%, 68%, ' + (.075 * alpha) + ')'
+      : item.peer.probing
+        ? 'rgba(247, 198, 95, ' + (.06 * alpha) + ')'
+        : 'rgba(150, 167, 190, ' + (.05 * alpha) + ')';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(item.x, item.y, 3.6 + pulse * 1.2, 0, Math.PI * 2);
-    ctx.fillStyle = 'hsla(' + hue + ', 92%, 70%, ' + (.95 * alpha) + ')';
-    ctx.shadowColor = 'hsla(' + hue + ', 92%, 68%, ' + (.75 * alpha) + ')';
-    ctx.shadowBlur = 14;
+    ctx.arc(item.x, item.y, item.peer.active ? 3.6 + pulse * 1.2 : item.peer.probing ? 3.1 : 2.6, 0, Math.PI * 2);
+    ctx.fillStyle = item.peer.active
+      ? 'hsla(' + hue + ', 92%, 70%, ' + (.95 * alpha) + ')'
+      : item.peer.probing
+        ? 'rgba(247, 198, 95, ' + (.88 * alpha) + ')'
+        : 'rgba(165, 176, 193, ' + (.80 * alpha) + ')';
+    ctx.shadowColor = item.peer.active ? 'hsla(' + hue + ', 92%, 68%, ' + (.75 * alpha) + ')' : 'transparent';
+    ctx.shadowBlur = item.peer.active ? 14 : 0;
     ctx.fill();
     ctx.shadowBlur = 0;
 
@@ -1528,9 +1790,11 @@ if ('EventSource' in window) {
   setInterval(refreshFallback, 1000);
 }
 initWarp();
+initMapControls();
 window.addEventListener('resize', () => {
   resizeWarp();
   updateSpeedChart(speedChart.target);
+  applyMapTransform();
 });
 </script>
 </body>
