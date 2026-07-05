@@ -844,39 +844,40 @@ function page() {
     }
     .map-progress-widget {
       position: absolute;
-      left: 12px;
-      top: 12px;
+      left: 50%;
+      bottom: 12px;
       z-index: 3;
-      width: min(330px, calc(100% - 66px));
-      padding: 11px 12px;
+      width: min(300px, calc(100% - 24px));
+      padding: 6px 8px;
       border: 1px solid rgba(191, 255, 0, .28);
       border-radius: 8px;
-      background: rgba(7, 16, 26, .72);
-      box-shadow: 0 14px 34px rgba(0, 0, 0, .30);
+      background: rgba(7, 16, 26, .58);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, .24);
       backdrop-filter: blur(10px);
       pointer-events: none;
+      transform: translateX(-50%);
     }
     .map-progress-title {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       color: #e7edf5;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 850;
     }
     .map-progress-meta {
       display: flex;
       justify-content: space-between;
       gap: 10px;
-      margin-top: 6px;
+      margin-top: 3px;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 10px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     .map-progress-bar {
       position: relative;
-      height: 7px;
-      margin-top: 8px;
+      height: 4px;
+      margin-top: 5px;
       overflow: hidden;
       border-radius: 999px;
       background: rgba(150, 167, 190, .20);
@@ -1150,7 +1151,6 @@ function page() {
             </svg>
           </button>
           <div class="map-progress-widget">
-            <div class="label">Active Torrent</div>
             <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
             <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span></div>
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
