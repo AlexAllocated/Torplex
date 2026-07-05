@@ -619,7 +619,7 @@ function drawWorldFrame(now) {
     const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
     const activeColor = heatColor(item.peer.receiveRateBps);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
-    const streamColor = item.peer.itemId ? visual.rgb : activeColor;
+    const packetColor = item.peer.itemId ? visual.rgb : activeColor;
 
     const start = { x: origin.x, y: origin.y };
     const screen = cameraPoint({ x: item.x, y: item.y });
@@ -631,9 +631,9 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + streamColor + ', ' + (.88 * alpha) + ')';
+      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.88 * alpha) + ')';
       ctx.lineWidth = 3.1;
-      ctx.shadowColor = 'rgba(' + streamColor + ', .58)';
+      ctx.shadowColor = 'rgba(' + activeColor + ', .58)';
       ctx.shadowBlur = 12;
       ctx.stroke();
       ctx.shadowBlur = 0;
@@ -652,14 +652,14 @@ function drawWorldFrame(now) {
         ctx.beginPath();
         ctx.moveTo(tail.x, tail.y);
         ctx.lineTo(head.x, head.y);
-        ctx.strokeStyle = 'rgba(' + streamColor + ', ' + packetAlpha + ')';
+        ctx.strokeStyle = 'rgba(' + packetColor + ', ' + packetAlpha + ')';
         ctx.lineWidth = 5;
-        ctx.shadowColor = 'rgba(' + streamColor + ', .88)';
+        ctx.shadowColor = 'rgba(' + packetColor + ', .88)';
         ctx.shadowBlur = 15;
         ctx.stroke();
         ctx.shadowBlur = 0;
         drawPacketShape(ctx, visual.shape, head.x, head.y, 3.7);
-        ctx.fillStyle = 'rgba(' + streamColor + ', ' + packetAlpha + ')';
+        ctx.fillStyle = 'rgba(' + packetColor + ', ' + packetAlpha + ')';
         ctx.fill();
       }
     }
