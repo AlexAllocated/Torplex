@@ -2,12 +2,12 @@
 
 Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a torrent upload dialog, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
 
-Torplex does not search for torrents or provide media. It only manages `.torrent` files you upload or magnet links you provide. Use it only with media you have the legal right to download and store.
+Torplex does not search for torrents or provide media. It only manages `.torrent` files you upload, magnet links, direct `.torrent` URLs, or pages that contain an extractable magnet or `.torrent` link. Use it only with media you have the legal right to download and store.
 
 ## What It Does
 
 - Serves a real-time dashboard over server-sent events.
-- Lets an authenticated user upload `.torrent` files or paste magnet links through a dialog.
+- Lets an authenticated user upload `.torrent` files, paste magnet links, paste direct `.torrent` URLs, or paste pages that contain an extractable torrent source.
 - Inspects torrent metadata and suggests Plex destination paths.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
@@ -169,7 +169,9 @@ These files are runtime state and are intentionally ignored by git.
 
 ## Queue Model
 
-The web app writes uploaded torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`.
+The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`.
+
+For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 
 The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`.
 
@@ -223,6 +225,7 @@ bun run build
 
 - Keep `AUTH_REQUIRED=true` for internet-reachable installs.
 - Torrent upload APIs always require a valid password session.
+- Pasted HTTP(S) URLs are fetched by the Torplex server, so keep the app behind authentication and use only sources you trust.
 - Run Torplex behind HTTPS, a firewall, VPN, reverse proxy, or private network if the dashboard is reachable outside your LAN.
 - Do not commit `.env`, `manifest.json`, torrent files, logs, or Plex tokens.
 - Set `AUTH_COOKIE_SECRET` to a strong random value before enabling login.

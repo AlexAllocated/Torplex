@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { mkdir, readdir, rename, writeFile } from "fs/promises";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { basename, join } from "path";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -9,12 +11,14 @@ const moviesDir = process.env.MOVIES_DIR ?? `${mediaRoot}/Movies`;
 const tvDir = process.env.TV_DIR ?? `${mediaRoot}/TV Shows`;
 const diskUsagePath = process.env.DISK_USAGE_PATH ?? mediaRoot;
 const maxTorrentBytes = 20 * 1024 * 1024;
+const maxHtmlBytes = 2 * 1024 * 1024;
 
 type Item = {
   id: string;
   title: string;
   torrentFile?: string;
   magnetUri?: string;
+  sourceUrl?: string;
   payloadName: string;
   totalBytes: number;
   fileCount?: number;
@@ -235,6 +239,182 @@ function suggestManifestFields(payloadName: string, filename: string, files: Arr
 function safeTorrentFilename(name: string) {
   const cleaned = basename(name).replace(/[^\w .()[\]{}+,&:;'!@#%=-]/g, "_").trim();
   return cleaned.toLowerCase().endsWith(".torrent") ? cleaned : `${cleaned || "upload"}.torrent`;
+}
+
+function isPrivateHostname(hostname: string) {
+  const lower = hostname.toLowerCase();
+  return lower === "localhost" || lower.endsWith(".localhost");
+}
+
+function isPrivateIp(address: string) {
+  const version = isIP(address);
+  if (version === 0) return false;
+  if (version === 6) {
+    const lower = address.toLowerCase();
+    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+  }
+  const parts = address.split(".").map(Number);
+  const [a, b] = parts;
+  return (
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+async function assertFetchableSourceUrl(url: URL) {
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("URL must use http or https");
+  if (url.username || url.password) throw new Error("URL cannot include credentials");
+  if (isPrivateHostname(url.hostname)) throw new Error("URL cannot target localhost");
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some((entry) => isPrivateIp(entry.address))) {
+    throw new Error("URL cannot target private network addresses");
+  }
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)));
+}
+
+function filenameFromResponse(url: URL, response: Response) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return safeTorrentFilename(decodeURIComponent(encoded.replace(/^"|"$/g, "")));
+    } catch {
+      return safeTorrentFilename(encoded);
+    }
+  }
+  const quoted = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  if (quoted) return safeTorrentFilename(quoted);
+  const pathName = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "download.torrent");
+  return safeTorrentFilename(pathName);
+}
+
+async function limitedResponseBytes(response: Response, maxBytes: number, tooLargeMessage: string) {
+  const length = Number(response.headers.get("content-length") || 0);
+  if (length > maxBytes) throw new Error(tooLargeMessage);
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > maxBytes) throw new Error(tooLargeMessage);
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(tooLargeMessage);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+
+async function fetchExternalSource(inputUrl: URL) {
+  let url = inputUrl;
+  for (let redirect = 0; redirect < 6; redirect += 1) {
+    await assertFetchableSourceUrl(url);
+    const response = await fetch(url, {
+      redirect: "manual",
+      headers: { "user-agent": "Torplex/1.0" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("URL redirect is missing a location");
+      url = new URL(location, url);
+      continue;
+    }
+    return { url, response };
+  }
+  throw new Error("URL redirected too many times");
+}
+
+function looksLikeTorrentResponse(url: URL, response: Response) {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  const disposition = response.headers.get("content-disposition")?.toLowerCase() || "";
+  return (
+    url.pathname.toLowerCase().endsWith(".torrent") ||
+    disposition.includes(".torrent") ||
+    contentType.includes("application/x-bittorrent") ||
+    contentType.includes("application/octet-stream")
+  );
+}
+
+function extractTorrentSourceFromHtml(html: string, baseUrl: URL) {
+  const decoded = decodeHtmlEntities(html);
+  const magnet = decoded.match(/magnet:\?[^"'<>\s]+/i)?.[0];
+  if (magnet) return { magnetUri: magnet };
+
+  const hrefs = [...decoded.matchAll(/\bhref\s*=\s*(["'])(.*?)\1/gis)].map((match) => match[2]);
+  const torrentHref = hrefs.find((href) => /\.torrent(?:[?#].*)?$/i.test(href) || /\.torrent[?#]/i.test(href));
+  if (torrentHref) return { torrentUrl: new URL(torrentHref, baseUrl) };
+  return null;
+}
+
+async function resolveSourceUrl(sourceUrl: string) {
+  let inputUrl: URL;
+  try {
+    inputUrl = new URL(sourceUrl);
+  } catch {
+    throw new Error("URL is invalid");
+  }
+
+  const fetched = await fetchExternalSource(inputUrl);
+  const { url, response } = fetched;
+  if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
+
+  if (looksLikeTorrentResponse(url, response)) {
+    const bytes = await limitedResponseBytes(response, maxTorrentBytes, "Torrent file is too large");
+    if (!bytes.length) throw new Error("Torrent file is empty");
+    return { kind: "torrentUrl" as const, bytes, filename: filenameFromResponse(url, response), sourceUrl, resolvedUrl: url.href };
+  }
+
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  if (contentType && !contentType.includes("text/html") && !contentType.includes("text/plain")) {
+    throw new Error("URL did not return a torrent file or an HTML page");
+  }
+  const htmlBytes = await limitedResponseBytes(response, maxHtmlBytes, "HTML page is too large");
+  const html = new TextDecoder().decode(htmlBytes);
+  const extracted = extractTorrentSourceFromHtml(html, url);
+  if (!extracted) throw new Error("No magnet link or .torrent link found on that page");
+  if (extracted.magnetUri) return { kind: "magnet" as const, magnetUri: extracted.magnetUri, sourceUrl, resolvedUrl: url.href };
+
+  const torrent = await fetchExternalSource(extracted.torrentUrl);
+  if (!torrent.response.ok) throw new Error(`Torrent link returned HTTP ${torrent.response.status}`);
+  const bytes = await limitedResponseBytes(torrent.response, maxTorrentBytes, "Torrent file is too large");
+  if (!bytes.length) throw new Error("Torrent file is empty");
+  return {
+    kind: "torrentUrl" as const,
+    bytes,
+    filename: filenameFromResponse(torrent.url, torrent.response),
+    sourceUrl,
+    resolvedUrl: torrent.url.href,
+  };
 }
 
 function magnetMetadata(uri: string) {
@@ -584,22 +764,43 @@ async function torrentFromForm(form: FormData) {
   return { bytes, filename: safeTorrentFilename(upload.name) };
 }
 
+async function intakeSourceFromForm(form: FormData) {
+  const sourceUrl = formString(form, "sourceUrl") || formString(form, "magnetUri") || formString(form, "torrentUrl");
+  if (sourceUrl) {
+    if (sourceUrl.toLowerCase().startsWith("magnet:")) return { kind: "magnet" as const, magnetUri: sourceUrl };
+    return await resolveSourceUrl(sourceUrl);
+  }
+  return { kind: "upload" as const, ...(await torrentFromForm(form)) };
+}
+
+function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceFromForm>>) {
+  if (source.kind === "magnet") {
+    return { metadata: magnetMetadata(source.magnetUri), filename: "", magnetUri: source.magnetUri };
+  }
+  return { metadata: torrentMetadata(source.bytes, source.filename), filename: source.filename, magnetUri: "" };
+}
+
 export async function inspectTorrentUpload(req: Request) {
   const form = await req.formData();
-  const magnetUri = formString(form, "magnetUri");
-  if (magnetUri) {
-    return Response.json(magnetMetadata(magnetUri), { headers: { "cache-control": "no-store" } });
-  }
-  const { bytes, filename } = await torrentFromForm(form);
-  return Response.json(torrentMetadata(bytes, filename), { headers: { "cache-control": "no-store" } });
+  const source = await intakeSourceFromForm(form);
+  const { metadata } = metadataForSource(source);
+  return Response.json(
+    {
+      ...metadata,
+      source: {
+        kind: source.kind,
+        sourceUrl: "sourceUrl" in source ? source.sourceUrl : "",
+        resolvedUrl: "resolvedUrl" in source ? source.resolvedUrl : "",
+      },
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 export async function addTorrentUpload(req: Request) {
   const form = await req.formData();
-  const magnetUri = formString(form, "magnetUri");
-  const torrentInput = magnetUri ? null : await torrentFromForm(form);
-  const metadata = magnetUri ? magnetMetadata(magnetUri) : torrentMetadata(torrentInput!.bytes, torrentInput!.filename);
-  const filename = torrentInput?.filename ?? "";
+  const source = await intakeSourceFromForm(form);
+  const { metadata, filename, magnetUri } = metadataForSource(source);
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const id = slugify(formString(form, "id", metadata.suggested.id));
   const title = formString(form, "title", metadata.suggested.title);
@@ -625,6 +826,7 @@ export async function addTorrentUpload(req: Request) {
     id,
     ...(filename ? { torrentFile: filename } : {}),
     ...(magnetUri ? { magnetUri } : {}),
+    ...("sourceUrl" in source && source.sourceUrl ? { sourceUrl: source.sourceUrl } : {}),
     title,
     destination: { type: mediaType, path: destinationPath },
     organize,
@@ -633,9 +835,9 @@ export async function addTorrentUpload(req: Request) {
     fileCount: metadata.fileCount,
   };
 
-  if (torrentInput) {
+  if (source.kind !== "magnet") {
     await mkdir(join(root, "torrents"), { recursive: true });
-    await writeFile(join(root, "torrents", filename), torrentInput.bytes);
+    await writeFile(join(root, "torrents", filename), source.bytes);
   }
   manifest.items.push(item);
   await saveManifest(manifest);

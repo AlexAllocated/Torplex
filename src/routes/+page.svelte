@@ -1,5 +1,5 @@
 <svelte:head>
-  <title>Plex Batch Control</title>
+  <title>Torplex</title>
 </svelte:head>
 
 <script>
@@ -16,7 +16,7 @@
 <main>
   <header>
     <div>
-      <h1>Plex Batch Control</h1>
+      <h1>Torplex</h1>
       <div class="subtitle" id="subtitle">Waiting for the first live packet...</div>
     </div>
     <div class="header-actions">
@@ -57,58 +57,78 @@
     </div>
   </section>
 
-<dialog id="intakeDialog" class="intake-dialog"><div class="dialog-card panel intake-panel">
-    <div class="map-title">
-      <div class="label">Torrent Intake</div>
-      <button id="closeIntake" class="secondary-button dialog-close" type="button">Close</button><div class="small" id="intakeStatus">Ready</div>
+  <dialog id="intakeDialog" class="intake-dialog">
+    <div class="dialog-card panel">
+      <div class="dialog-head">
+        <div>
+          <div class="label">Torrent Intake</div>
+          <div class="dialog-title">Add to Torplex</div>
+        </div>
+        <div class="dialog-actions">
+          <div class="status-pill" id="intakeStatus">Ready</div>
+          <button id="closeIntake" class="secondary-button dialog-close" type="button">Close</button>
+        </div>
+      </div>
+      <form id="intakeForm" class="intake-panel">
+        <div class="source-card">
+          <div class="intake-field source-field">
+            <label for="sourceUrl">Magnet / URL</label>
+            <input id="sourceUrl" name="sourceUrl" type="text" autocomplete="off" placeholder="magnet:?xt=... or https://..." />
+          </div>
+          <button id="inspectTorrent" class="secondary-button inspect-button" type="button" disabled>Inspect</button>
+          <div class="intake-field file-field">
+            <label for="torrentFile">Torrent File</label>
+            <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
+          </div>
+        </div>
+
+        <div id="torrentSummary" class="intake-summary">Waiting for a source.</div>
+
+        <div class="intake-section-head">
+          <div>
+            <div class="label">Suggested Details</div>
+            <div class="small" id="inspectHint">Inspect fills these fields automatically.</div>
+          </div>
+        </div>
+        <div class="intake-grid">
+          <div class="intake-field">
+            <label for="torrentTitle">Title</label>
+            <input id="torrentTitle" name="title" autocomplete="off" />
+          </div>
+          <div class="intake-field">
+            <label for="torrentId">Id</label>
+            <input id="torrentId" name="id" autocomplete="off" />
+          </div>
+          <div class="intake-field compact-field">
+            <label for="mediaType">Type</label>
+            <select id="mediaType" name="mediaType">
+              <option value="show">Show</option>
+              <option value="movie">Movie</option>
+            </select>
+          </div>
+          <div class="intake-field destination-field">
+            <label for="destinationPath">Destination</label>
+            <input id="destinationPath" name="destinationPath" autocomplete="off" />
+          </div>
+          <div class="intake-field compact-field">
+            <label for="organizeStrategy">Organize</label>
+            <select id="organizeStrategy" name="organizeStrategy">
+              <option value="mergeRoot">Merge into folder</option>
+              <option value="moveRoot">Move payload folder</option>
+            </select>
+          </div>
+          <div class="intake-field">
+            <label for="targetSubdir">Subfolder</label>
+            <input id="targetSubdir" name="targetSubdir" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="intake-actions">
+          <button id="addTorrent" class="primary-button" type="submit" disabled>Add to Queue</button>
+        </div>
+      </form>
     </div>
-    <form id="intakeForm" class="intake-panel">
-      <div class="intake-grid">
-        <div class="intake-field">
-          <label for="torrentFile">Torrent</label>
-          <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
-        </div>
-        <div class="intake-field">
-          <label for="magnetUri">Magnet Link</label>
-          <input id="magnetUri" name="magnetUri" type="text" autocomplete="off" placeholder="magnet:?xt=urn:btih:..." />
-        </div>
-        <div class="intake-field">
-          <label for="torrentTitle">Title</label>
-          <input id="torrentTitle" name="title" autocomplete="off" />
-        </div>
-        <div class="intake-field">
-          <label for="torrentId">Id</label>
-          <input id="torrentId" name="id" autocomplete="off" />
-        </div>
-        <div class="intake-field">
-          <label for="mediaType">Type</label>
-          <select id="mediaType" name="mediaType">
-            <option value="show">Show</option>
-            <option value="movie">Movie</option>
-          </select>
-        </div>
-        <div class="intake-field">
-          <label for="destinationPath">Destination</label>
-          <input id="destinationPath" name="destinationPath" autocomplete="off" />
-        </div>
-        <div class="intake-field">
-          <label for="organizeStrategy">Organize</label>
-          <select id="organizeStrategy" name="organizeStrategy">
-            <option value="mergeRoot">Merge into folder</option>
-            <option value="moveRoot">Move payload folder</option>
-          </select>
-        </div>
-        <div class="intake-field">
-          <label for="targetSubdir">Subfolder</label>
-          <input id="targetSubdir" name="targetSubdir" autocomplete="off" />
-        </div>
-      </div>
-      <div class="intake-actions">
-        <button id="addTorrent" class="primary-button" type="submit" disabled>Add to Queue</button>
-      </div>
-      <div id="torrentSummary" class="intake-summary">No torrent selected.</div>
-    </form>
-  </div></dialog>
+  </dialog>
 
   <section class="transfer-map world-panel">
     <div class="map-title">

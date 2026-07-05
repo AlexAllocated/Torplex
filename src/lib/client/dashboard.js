@@ -865,6 +865,12 @@ function setIntakeStatus(message) {
   if (el) el.textContent = message;
 }
 
+function setIntakeMode(mode) {
+  const el = document.getElementById('intakeStatus');
+  if (!el) return;
+  el.dataset.mode = mode;
+}
+
 function setAuthStatus(message) {
   const el = document.getElementById('authStatus');
   if (el) el.textContent = message;
@@ -917,7 +923,17 @@ function renderTorrentSummary(meta) {
   const summary = document.getElementById('torrentSummary');
   if (!summary) return;
   const preview = (meta.files || []).slice(0, 4).map((file) => file.path).join(' | ');
-  summary.textContent = meta.payloadName + ' - ' + fmt(meta.totalBytes) + ' - ' + meta.fileCount + ' file' + (meta.fileCount === 1 ? '' : 's') + (preview ? ' - ' + preview : '');
+  const sourceKind = meta.source?.kind === 'magnet' ? 'Magnet' : meta.source?.kind === 'torrentUrl' ? 'Torrent URL' : meta.source?.kind === 'upload' ? 'Upload' : 'Source';
+  const size = meta.totalBytes ? fmt(meta.totalBytes) : 'metadata pending';
+  const fileCount = meta.fileCount ? meta.fileCount + ' file' + (meta.fileCount === 1 ? '' : 's') : 'file list pending';
+  summary.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'summary-title';
+  title.textContent = meta.payloadName || 'Ready to queue';
+  const details = document.createElement('div');
+  details.className = 'summary-details';
+  details.textContent = sourceKind + ' - ' + size + ' - ' + fileCount + (preview ? ' - ' + preview : '');
+  summary.append(title, details);
 }
 
 function initDialogControls() {
@@ -942,74 +958,120 @@ function initDialogControls() {
 function initIntakeControls() {
   const form = document.getElementById('intakeForm');
   const input = document.getElementById('torrentFile');
-  const magnetInput = document.getElementById('magnetUri');
+  const sourceInput = document.getElementById('sourceUrl');
+  const inspect = document.getElementById('inspectTorrent');
   const submit = document.getElementById('addTorrent');
-  if (!form || !input || !magnetInput || !submit) return;
+  if (!form || !input || !sourceInput || !inspect || !submit) return;
+  let inspectTimer = 0;
+  let inspectNonce = 0;
+  const hasSource = () => Boolean(input.files?.[0] || sourceInput.value.trim());
+  const updateInspectAvailability = () => {
+    inspect.disabled = !sessionState.authenticated || !hasSource();
+  };
   if (!sessionState.authenticated) {
     setIntakeStatus('Unlock first');
+    setIntakeMode('locked');
     submit.disabled = true;
+    inspect.disabled = true;
   }
   const inspectCurrentTorrent = async () => {
+    window.clearTimeout(inspectTimer);
+    const nonce = ++inspectNonce;
     const file = input.files?.[0];
-    const magnetUri = magnetInput.value.trim();
+    const sourceUrl = sourceInput.value.trim();
     submit.disabled = true;
-    if (!file && !magnetUri) {
-      document.getElementById('torrentSummary').textContent = 'No torrent selected.';
+    updateInspectAvailability();
+    if (!file && !sourceUrl) {
+      document.getElementById('torrentSummary').textContent = 'Waiting for a source.';
+      setIntakeStatus('Ready');
+      setIntakeMode('idle');
       return;
     }
     if (!sessionState.authenticated) {
       setIntakeStatus('Unlock first');
+      setIntakeMode('locked');
       return;
     }
     setIntakeStatus('Inspecting');
+    setIntakeMode('busy');
+    inspect.disabled = true;
     try {
       const data = new FormData();
-      if (magnetUri) data.set('magnetUri', magnetUri);
+      if (sourceUrl) data.set('sourceUrl', sourceUrl);
       else data.set('torrent', file);
       const res = await fetch('/api/torrent/inspect', { method: 'POST', body: data });
       const payload = await res.json();
+      if (nonce !== inspectNonce) return;
       if (!res.ok) throw new Error(payload.error || 'Inspect failed');
       setIntakeFields(payload.suggested || {});
       renderTorrentSummary(payload);
       submit.disabled = false;
-      setIntakeStatus('Ready');
+      setIntakeStatus('Auto-filled');
+      setIntakeMode('ready');
     } catch (error) {
+      if (nonce !== inspectNonce) return;
       setIntakeStatus(error instanceof Error ? error.message : String(error));
+      setIntakeMode('error');
+      updateInspectAvailability();
     }
   };
-  input.addEventListener('change', async () => {
-    if (input.files?.[0]) magnetInput.value = '';
-    await inspectCurrentTorrent();
-  });
-  magnetInput.addEventListener('input', () => {
+  const scheduleInspect = (delay = 450) => {
+    window.clearTimeout(inspectTimer);
     submit.disabled = true;
-    if (magnetInput.value.trim()) input.value = '';
+    updateInspectAvailability();
+    if (!hasSource()) {
+      document.getElementById('torrentSummary').textContent = 'Waiting for a source.';
+      setIntakeStatus('Ready');
+      setIntakeMode('idle');
+      return;
+    }
+    setIntakeStatus('Ready to inspect');
+    setIntakeMode('idle');
+    inspectTimer = window.setTimeout(() => {
+      inspectCurrentTorrent().catch(() => {});
+    }, delay);
+  };
+  input.addEventListener('change', async () => {
+    if (input.files?.[0]) sourceInput.value = '';
+    scheduleInspect(80);
   });
-  magnetInput.addEventListener('change', inspectCurrentTorrent);
-  magnetInput.addEventListener('blur', inspectCurrentTorrent);
+  sourceInput.addEventListener('input', () => {
+    if (sourceInput.value.trim()) input.value = '';
+    scheduleInspect();
+  });
+  sourceInput.addEventListener('paste', () => window.setTimeout(() => scheduleInspect(120), 0));
+  sourceInput.addEventListener('change', inspectCurrentTorrent);
+  inspect.addEventListener('click', inspectCurrentTorrent);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    window.clearTimeout(inspectTimer);
     const file = input.files?.[0];
-    const magnetUri = magnetInput.value.trim();
-    if ((!file && !magnetUri) || !sessionState.authenticated) return;
+    const sourceUrl = sourceInput.value.trim();
+    if ((!file && !sourceUrl) || !sessionState.authenticated) return;
     submit.disabled = true;
+    inspect.disabled = true;
     setIntakeStatus('Adding');
+    setIntakeMode('busy');
     try {
       const data = new FormData(form);
-      if (magnetUri) data.set('magnetUri', magnetUri);
+      if (sourceUrl) data.set('sourceUrl', sourceUrl);
       else data.set('torrent', file);
       const res = await fetch('/api/torrents', { method: 'POST', body: data });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || 'Add failed');
       setIntakeStatus(payload.restartMessage || 'Added');
+      setIntakeMode('ready');
       document.getElementById('torrentSummary').textContent = 'Queued ' + payload.item.title + ' - ' + fmt(payload.item.totalBytes);
       form.reset();
       submit.disabled = true;
+      updateInspectAvailability();
       document.getElementById('intakeDialog')?.close();
       refreshFallback().catch(() => {});
     } catch (error) {
       setIntakeStatus(error instanceof Error ? error.message : String(error));
+      setIntakeMode('error');
       submit.disabled = false;
+      updateInspectAvailability();
     }
   });
 }
