@@ -900,6 +900,15 @@ function page() {
       pointer-events: auto;
       transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
+    .map-peer-label.edge-right {
+      transform: translate(calc(-100% - 1px), 1px);
+    }
+    .map-peer-label.edge-bottom {
+      transform: translate(1px, calc(-100% - 1px));
+    }
+    .map-peer-label.edge-right.edge-bottom {
+      transform: translate(calc(-100% - 1px), calc(-100% - 1px));
+    }
     .map-peer-label:hover {
       max-width: min(320px, 68vw);
       border-color: rgba(87, 224, 194, .42);
@@ -1642,9 +1651,14 @@ function renderMapPeerLabels(width, height) {
       span.style.color = 'rgb(' + heatColor(item.peer.receiveRateBps) + ')';
     }
     if (detail) detail.textContent = detailText;
-    const estimatedWidth = Math.min(145, 12 + (flagUrl ? 21 : 0) + text.length * 5.5);
-    const x = Math.min(width - estimatedWidth - 6, Math.max(4, item.x + 1));
-    const y = Math.min(height - 4, Math.max(16, item.y - 1));
+    const expandedWidth = Math.min(320, Math.max(90, 12 + (flagUrl ? 21 : 0) + (text.length + detailText.length) * 5.5));
+    const expandedHeight = 18;
+    const edgeRight = item.x + expandedWidth + 4 > width;
+    const edgeBottom = item.y + expandedHeight + 4 > height;
+    node.classList.toggle('edge-right', edgeRight);
+    node.classList.toggle('edge-bottom', edgeBottom);
+    const x = Math.min(width - 4, Math.max(4, item.x + (edgeRight ? -1 : 1)));
+    const y = Math.min(height - 4, Math.max(16, item.y + (edgeBottom ? -1 : 1)));
     node.style.left = x.toFixed(1) + 'px';
     node.style.top = y.toFixed(1) + 'px';
     node.style.opacity = String(Math.min(.96, item.alpha));
