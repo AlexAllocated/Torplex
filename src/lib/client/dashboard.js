@@ -942,18 +942,18 @@ function initDialogControls() {
 function initIntakeControls() {
   const form = document.getElementById('intakeForm');
   const input = document.getElementById('torrentFile');
-  const urlInput = document.getElementById('torrentUrl');
+  const magnetInput = document.getElementById('magnetUri');
   const submit = document.getElementById('addTorrent');
-  if (!form || !input || !urlInput || !submit) return;
+  if (!form || !input || !magnetInput || !submit) return;
   if (!sessionState.authenticated) {
     setIntakeStatus('Unlock first');
     submit.disabled = true;
   }
   const inspectCurrentTorrent = async () => {
     const file = input.files?.[0];
-    const torrentUrl = urlInput.value.trim();
+    const magnetUri = magnetInput.value.trim();
     submit.disabled = true;
-    if (!file && !torrentUrl) {
+    if (!file && !magnetUri) {
       document.getElementById('torrentSummary').textContent = 'No torrent selected.';
       return;
     }
@@ -964,7 +964,7 @@ function initIntakeControls() {
     setIntakeStatus('Inspecting');
     try {
       const data = new FormData();
-      if (torrentUrl) data.set('torrentUrl', torrentUrl);
+      if (magnetUri) data.set('magnetUri', magnetUri);
       else data.set('torrent', file);
       const res = await fetch('/api/torrent/inspect', { method: 'POST', body: data });
       const payload = await res.json();
@@ -978,25 +978,25 @@ function initIntakeControls() {
     }
   };
   input.addEventListener('change', async () => {
-    if (input.files?.[0]) urlInput.value = '';
+    if (input.files?.[0]) magnetInput.value = '';
     await inspectCurrentTorrent();
   });
-  urlInput.addEventListener('input', () => {
+  magnetInput.addEventListener('input', () => {
     submit.disabled = true;
-    if (urlInput.value.trim()) input.value = '';
+    if (magnetInput.value.trim()) input.value = '';
   });
-  urlInput.addEventListener('change', inspectCurrentTorrent);
-  urlInput.addEventListener('blur', inspectCurrentTorrent);
+  magnetInput.addEventListener('change', inspectCurrentTorrent);
+  magnetInput.addEventListener('blur', inspectCurrentTorrent);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const file = input.files?.[0];
-    const torrentUrl = urlInput.value.trim();
-    if ((!file && !torrentUrl) || !sessionState.authenticated) return;
+    const magnetUri = magnetInput.value.trim();
+    if ((!file && !magnetUri) || !sessionState.authenticated) return;
     submit.disabled = true;
     setIntakeStatus('Adding');
     try {
       const data = new FormData(form);
-      if (torrentUrl) data.set('torrentUrl', torrentUrl);
+      if (magnetUri) data.set('magnetUri', magnetUri);
       else data.set('torrent', file);
       const res = await fetch('/api/torrents', { method: 'POST', body: data });
       const payload = await res.json();

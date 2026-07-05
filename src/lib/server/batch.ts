@@ -1,7 +1,5 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { mkdir, readdir, rename, writeFile } from "fs/promises";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { basename, join } from "path";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -15,7 +13,8 @@ const maxTorrentBytes = 20 * 1024 * 1024;
 type Item = {
   id: string;
   title: string;
-  torrentFile: string;
+  torrentFile?: string;
+  magnetUri?: string;
   payloadName: string;
   totalBytes: number;
   fileCount?: number;
@@ -238,104 +237,30 @@ function safeTorrentFilename(name: string) {
   return cleaned.toLowerCase().endsWith(".torrent") ? cleaned : `${cleaned || "upload"}.torrent`;
 }
 
-function isPrivateHostname(hostname: string) {
-  const lower = hostname.toLowerCase();
-  return lower === "localhost" || lower.endsWith(".localhost");
-}
-
-function isPrivateIp(address: string) {
-  const version = isIP(address);
-  if (version === 0) return false;
-  if (version === 6) {
-    const lower = address.toLowerCase();
-    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+function magnetMetadata(uri: string) {
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    throw new Error("Magnet link is invalid");
   }
-  const parts = address.split(".").map(Number);
-  const [a, b] = parts;
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  );
-}
-
-async function assertFetchableTorrentUrl(url: URL) {
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Torrent URL must use http or https");
-  if (isPrivateHostname(url.hostname)) throw new Error("Torrent URL cannot target localhost");
-  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((entry) => isPrivateIp(entry.address))) {
-    throw new Error("Torrent URL cannot target private network addresses");
-  }
-}
-
-function filenameFromResponse(url: URL, response: Response) {
-  const disposition = response.headers.get("content-disposition") || "";
-  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-  if (encoded) {
-    try {
-      return safeTorrentFilename(decodeURIComponent(encoded.replace(/^"|"$/g, "")));
-    } catch {
-      return safeTorrentFilename(encoded);
-    }
-  }
-  const quoted = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-  if (quoted) return safeTorrentFilename(quoted);
-  const pathName = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "download.torrent");
-  return safeTorrentFilename(pathName);
-}
-
-async function limitedBytes(response: Response) {
-  const length = Number(response.headers.get("content-length") || 0);
-  if (length > maxTorrentBytes) throw new Error("Torrent file is too large");
-  if (!response.body) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length > maxTorrentBytes) throw new Error("Torrent file is too large");
-    return bytes;
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.length;
-    if (total > maxTorrentBytes) {
-      await reader.cancel();
-      throw new Error("Torrent file is too large");
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
-}
-
-async function fetchTorrentResponse(inputUrl: URL) {
-  let url = inputUrl;
-  for (let redirect = 0; redirect < 6; redirect += 1) {
-    await assertFetchableTorrentUrl(url);
-    const response = await fetch(url, {
-      redirect: "manual",
-      headers: { "user-agent": "Torplex/1.0" },
-    });
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const location = response.headers.get("location");
-      if (!location) throw new Error("Torrent URL redirect is missing a location");
-      url = new URL(location, url);
-      continue;
-    }
-    return { url, response };
-  }
-  throw new Error("Torrent URL redirected too many times");
+  if (url.protocol !== "magnet:") throw new Error("Magnet link must start with magnet:");
+  const xt = url.searchParams.getAll("xt").find((value) => /^urn:btih:[a-z0-9]+$/i.test(value));
+  if (!xt) throw new Error("Magnet link is missing a btih hash");
+  const hash = xt.split(":").at(-1) ?? "";
+  if (!/^[a-z0-9]{32,40}$/i.test(hash)) throw new Error("Magnet link has an invalid btih hash");
+  const displayName = url.searchParams.get("dn")?.trim() || `Magnet ${hash.slice(0, 12)}`;
+  const suggested = suggestManifestFields(displayName, `${displayName}.torrent`, []);
+  return {
+    magnetUri: uri,
+    hash,
+    filename: "",
+    payloadName: displayName,
+    totalBytes: 0,
+    fileCount: 0,
+    files: [],
+    suggested,
+  };
 }
 
 async function saveManifest(manifest: Manifest) {
@@ -584,11 +509,12 @@ export async function buildStatus() {
     const log = readTail(join(root, "logs", `${item.id}.log`));
     const progress = parseProgress(log);
     const status = itemState.status ?? "pending";
+    const effectiveTotalBytes = item.totalBytes || progress.totalBytes;
     if (status === "completed") {
-      completedBytes += item.totalBytes;
+      completedBytes += effectiveTotalBytes;
     } else if (status === "active" || status === "organizing") {
-      activeBytes += Math.min(progress.downloadedBytes, item.totalBytes);
-      activeTotalBytes += item.totalBytes;
+      activeBytes += Math.min(progress.downloadedBytes, effectiveTotalBytes || progress.downloadedBytes);
+      activeTotalBytes += effectiveTotalBytes;
       activeRateBytesPerSecond += parseRateBytesPerSecond(progress.rate);
       activeConnections += progress.connections;
       activeSeeders += progress.seeders;
@@ -605,7 +531,7 @@ export async function buildStatus() {
     };
   });
 
-  const totalBytes = manifest.items.reduce((sum, item) => sum + item.totalBytes, 0);
+  const totalBytes = items.reduce((sum, item) => sum + (item.totalBytes || item.progress.totalBytes), 0);
   const activeItems = items.filter((item) => item.status === "active" || item.status === "organizing");
   const activeRemainingBytes = Math.max(0, activeTotalBytes - activeBytes);
   const doneBytes = completedBytes + activeBytes;
@@ -650,23 +576,7 @@ function formBool(form: FormData, key: string, fallback = false) {
 
 async function torrentFromForm(form: FormData) {
   const upload = form.get("torrent");
-  const torrentUrl = formString(form, "torrentUrl");
-  if (torrentUrl) {
-    let url: URL;
-    try {
-      url = new URL(torrentUrl);
-    } catch {
-      throw new Error("Torrent URL is invalid");
-    }
-    const fetched = await fetchTorrentResponse(url);
-    url = fetched.url;
-    const response = fetched.response;
-    if (!response.ok) throw new Error(`Torrent URL returned HTTP ${response.status}`);
-    const bytes = await limitedBytes(response);
-    if (!bytes.length) throw new Error("Torrent file is empty");
-    return { bytes, filename: filenameFromResponse(url, response) };
-  }
-  if (!(upload instanceof File) || !upload.name) throw new Error("Missing torrent file or URL");
+  if (!(upload instanceof File) || !upload.name) throw new Error("Missing torrent file");
   if (!upload.name.toLowerCase().endsWith(".torrent")) throw new Error("Upload must be a .torrent file");
   const bytes = new Uint8Array(await upload.arrayBuffer());
   if (bytes.length > maxTorrentBytes) throw new Error("Torrent file is too large");
@@ -676,14 +586,20 @@ async function torrentFromForm(form: FormData) {
 
 export async function inspectTorrentUpload(req: Request) {
   const form = await req.formData();
+  const magnetUri = formString(form, "magnetUri");
+  if (magnetUri) {
+    return Response.json(magnetMetadata(magnetUri), { headers: { "cache-control": "no-store" } });
+  }
   const { bytes, filename } = await torrentFromForm(form);
   return Response.json(torrentMetadata(bytes, filename), { headers: { "cache-control": "no-store" } });
 }
 
 export async function addTorrentUpload(req: Request) {
   const form = await req.formData();
-  const { bytes, filename } = await torrentFromForm(form);
-  const metadata = torrentMetadata(bytes, filename);
+  const magnetUri = formString(form, "magnetUri");
+  const torrentInput = magnetUri ? null : await torrentFromForm(form);
+  const metadata = magnetUri ? magnetMetadata(magnetUri) : torrentMetadata(torrentInput!.bytes, torrentInput!.filename);
+  const filename = torrentInput?.filename ?? "";
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const id = slugify(formString(form, "id", metadata.suggested.id));
   const title = formString(form, "title", metadata.suggested.title);
@@ -697,7 +613,8 @@ export async function addTorrentUpload(req: Request) {
     throw new Error(`Destination must be under ${moviesDir} or ${tvDir}`);
   }
   if (manifest.items.some((item) => item.id === id)) throw new Error(`Manifest already has item id ${id}`);
-  if (manifest.items.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
+  if (filename && manifest.items.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
+  if (magnetUri && manifest.items.some((item) => item.magnetUri === magnetUri)) throw new Error("Manifest already has this magnet link");
 
   const organize =
     strategyInput === "moveRoot"
@@ -706,7 +623,8 @@ export async function addTorrentUpload(req: Request) {
 
   const item = {
     id,
-    torrentFile: filename,
+    ...(filename ? { torrentFile: filename } : {}),
+    ...(magnetUri ? { magnetUri } : {}),
     title,
     destination: { type: mediaType, path: destinationPath },
     organize,
@@ -715,8 +633,10 @@ export async function addTorrentUpload(req: Request) {
     fileCount: metadata.fileCount,
   };
 
-  await mkdir(join(root, "torrents"), { recursive: true });
-  await writeFile(join(root, "torrents", filename), bytes);
+  if (torrentInput) {
+    await mkdir(join(root, "torrents"), { recursive: true });
+    await writeFile(join(root, "torrents", filename), torrentInput.bytes);
+  }
   manifest.items.push(item);
   await saveManifest(manifest);
 

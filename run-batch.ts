@@ -15,7 +15,8 @@ const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
 type ManifestItem = {
   id: string;
   title: string;
-  torrentFile: string;
+  torrentFile?: string;
+  magnetUri?: string;
   payloadName: string;
   totalBytes: number;
   destination: { type: "movie" | "show"; path: string };
@@ -237,6 +238,8 @@ async function processItem(item: ManifestItem) {
   await ensureDir(join(root, "logs"));
   await setItemState(item.id, { status: "active", startedAt: now(), error: null });
   await appendBatch(`Starting ${item.title}`);
+  const torrentSource = item.magnetUri || (item.torrentFile ? join(root, "torrents", item.torrentFile) : "");
+  if (!torrentSource) throw new Error(`${item.title}: missing torrent file or magnet link`);
 
   const exitCode = await runCommand(
     [
@@ -252,7 +255,7 @@ async function processItem(item: ManifestItem) {
       "--enable-peer-exchange=true",
       "--summary-interval=30",
       "--console-log-level=notice",
-      join(root, "torrents", item.torrentFile),
+      torrentSource,
     ],
     logPath,
   );

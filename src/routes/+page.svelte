@@ -69,8 +69,8 @@
           <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
         </div>
         <div class="intake-field">
-          <label for="torrentUrl">Torrent URL</label>
-          <input id="torrentUrl" name="torrentUrl" type="url" autocomplete="off" placeholder="https://..." />
+          <label for="magnetUri">Magnet Link</label>
+          <input id="magnetUri" name="magnetUri" type="text" autocomplete="off" placeholder="magnet:?xt=urn:btih:..." />
         </div>
         <div class="intake-field">
           <label for="torrentTitle">Title</label>
