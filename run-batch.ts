@@ -147,8 +147,25 @@ async function runCommand(args: string[], logPath: string) {
   return proc.exitCode ?? 1;
 }
 
+function cleanPathSegment(value: string) {
+  return String(value || "").replace(/\0/g, "").trim();
+}
+
 function sourceRoot(item: ManifestItem) {
-  return join(root, "staging", item.id, item.payloadName);
+  return join(root, "staging", item.id, cleanPathSegment(item.payloadName));
+}
+
+async function resolveSourceRoot(item: ManifestItem) {
+  const staging = join(root, "staging", item.id);
+  const expected = sourceRoot(item);
+  if (await pathExists(expected)) return expected;
+
+  const entries = await readdir(staging, { withFileTypes: true });
+  const downloadedRoots = entries.filter((entry) => !entry.name.endsWith(".aria2"));
+  const directories = downloadedRoots.filter((entry) => entry.isDirectory());
+  if (directories.length === 1) return join(staging, directories[0].name);
+
+  throw new Error(`Downloaded root not found: ${expected}`);
 }
 
 async function organize(item: ManifestItem) {
@@ -185,7 +202,7 @@ async function organize(item: ManifestItem) {
     await ensureDir(dest);
     const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
     await ensureDir(targetDir);
-    const source = sourceRoot(item);
+    const source = await resolveSourceRoot(item);
     const entries = new Bun.Glob("*").scan(source);
     for await (const entry of entries) {
       const target = join(targetDir, entry);
