@@ -69,6 +69,10 @@
           <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
         </div>
         <div class="intake-field">
+          <label for="torrentUrl">Torrent URL</label>
+          <input id="torrentUrl" name="torrentUrl" type="url" autocomplete="off" placeholder="https://..." />
+        </div>
+        <div class="intake-field">
           <label for="torrentTitle">Title</label>
           <input id="torrentTitle" name="title" autocomplete="off" />
         </div>
@@ -134,7 +138,6 @@
           </div>
         </div>
       </div>
-      <div id="peerPills" class="peer-pills"></div>
     </div>
   </section>
 

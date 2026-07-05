@@ -2,12 +2,12 @@
 
 Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a torrent upload dialog, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
 
-Torplex does not search for torrents or provide media. It only manages `.torrent` files you upload. Use it only with media you have the legal right to download and store.
+Torplex does not search for torrents or provide media. It only manages `.torrent` files you upload or HTTP(S) torrent URLs you provide. Use it only with media you have the legal right to download and store.
 
 ## What It Does
 
 - Serves a real-time dashboard over server-sent events.
-- Lets an authenticated user upload `.torrent` files through a dialog.
+- Lets an authenticated user upload `.torrent` files or paste HTTP(S) torrent URLs through a dialog.
 - Inspects torrent metadata and suggests Plex destination paths.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
@@ -169,7 +169,7 @@ These files are runtime state and are intentionally ignored by git.
 
 ## Queue Model
 
-The web app writes uploaded torrents to `BATCH_DIR/torrents/` and appends entries to `BATCH_DIR/manifest.json`.
+The web app writes uploaded or fetched torrent files to `BATCH_DIR/torrents/` and appends entries to `BATCH_DIR/manifest.json`.
 
 The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`.
 

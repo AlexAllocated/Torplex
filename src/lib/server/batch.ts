@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { mkdir, readdir, rename, writeFile } from "fs/promises";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { basename, join } from "path";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -8,6 +10,7 @@ const mediaRoot = (process.env.MEDIA_ROOT ?? "/media/plex").replace(/\/$/, "");
 const moviesDir = process.env.MOVIES_DIR ?? `${mediaRoot}/Movies`;
 const tvDir = process.env.TV_DIR ?? `${mediaRoot}/TV Shows`;
 const diskUsagePath = process.env.DISK_USAGE_PATH ?? mediaRoot;
+const maxTorrentBytes = 20 * 1024 * 1024;
 
 type Item = {
   id: string;
@@ -233,6 +236,106 @@ function suggestManifestFields(payloadName: string, filename: string, files: Arr
 function safeTorrentFilename(name: string) {
   const cleaned = basename(name).replace(/[^\w .()[\]{}+,&:;'!@#%=-]/g, "_").trim();
   return cleaned.toLowerCase().endsWith(".torrent") ? cleaned : `${cleaned || "upload"}.torrent`;
+}
+
+function isPrivateHostname(hostname: string) {
+  const lower = hostname.toLowerCase();
+  return lower === "localhost" || lower.endsWith(".localhost");
+}
+
+function isPrivateIp(address: string) {
+  const version = isIP(address);
+  if (version === 0) return false;
+  if (version === 6) {
+    const lower = address.toLowerCase();
+    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+  }
+  const parts = address.split(".").map(Number);
+  const [a, b] = parts;
+  return (
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+async function assertFetchableTorrentUrl(url: URL) {
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Torrent URL must use http or https");
+  if (isPrivateHostname(url.hostname)) throw new Error("Torrent URL cannot target localhost");
+  const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some((entry) => isPrivateIp(entry.address))) {
+    throw new Error("Torrent URL cannot target private network addresses");
+  }
+}
+
+function filenameFromResponse(url: URL, response: Response) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return safeTorrentFilename(decodeURIComponent(encoded.replace(/^"|"$/g, "")));
+    } catch {
+      return safeTorrentFilename(encoded);
+    }
+  }
+  const quoted = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  if (quoted) return safeTorrentFilename(quoted);
+  const pathName = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) || "download.torrent");
+  return safeTorrentFilename(pathName);
+}
+
+async function limitedBytes(response: Response) {
+  const length = Number(response.headers.get("content-length") || 0);
+  if (length > maxTorrentBytes) throw new Error("Torrent file is too large");
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > maxTorrentBytes) throw new Error("Torrent file is too large");
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxTorrentBytes) {
+      await reader.cancel();
+      throw new Error("Torrent file is too large");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+
+async function fetchTorrentResponse(inputUrl: URL) {
+  let url = inputUrl;
+  for (let redirect = 0; redirect < 6; redirect += 1) {
+    await assertFetchableTorrentUrl(url);
+    const response = await fetch(url, {
+      redirect: "manual",
+      headers: { "user-agent": "Torplex/1.0" },
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("Torrent URL redirect is missing a location");
+      url = new URL(location, url);
+      continue;
+    }
+    return { url, response };
+  }
+  throw new Error("Torrent URL redirected too many times");
 }
 
 async function saveManifest(manifest: Manifest) {
@@ -547,11 +650,28 @@ function formBool(form: FormData, key: string, fallback = false) {
 
 async function torrentFromForm(form: FormData) {
   const upload = form.get("torrent");
-  if (!(upload instanceof File)) throw new Error("Missing torrent file");
+  const torrentUrl = formString(form, "torrentUrl");
+  if (torrentUrl) {
+    let url: URL;
+    try {
+      url = new URL(torrentUrl);
+    } catch {
+      throw new Error("Torrent URL is invalid");
+    }
+    const fetched = await fetchTorrentResponse(url);
+    url = fetched.url;
+    const response = fetched.response;
+    if (!response.ok) throw new Error(`Torrent URL returned HTTP ${response.status}`);
+    const bytes = await limitedBytes(response);
+    if (!bytes.length) throw new Error("Torrent file is empty");
+    return { bytes, filename: filenameFromResponse(url, response) };
+  }
+  if (!(upload instanceof File) || !upload.name) throw new Error("Missing torrent file or URL");
   if (!upload.name.toLowerCase().endsWith(".torrent")) throw new Error("Upload must be a .torrent file");
   const bytes = new Uint8Array(await upload.arrayBuffer());
+  if (bytes.length > maxTorrentBytes) throw new Error("Torrent file is too large");
   if (!bytes.length) throw new Error("Torrent file is empty");
-  return { upload, bytes, filename: safeTorrentFilename(upload.name) };
+  return { bytes, filename: safeTorrentFilename(upload.name) };
 }
 
 export async function inspectTorrentUpload(req: Request) {

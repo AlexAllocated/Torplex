@@ -171,7 +171,6 @@ function flagUrlForCountry(countryCode) {
 
 function renderSwarmMap(swarm) {
   const routeStatus = document.getElementById('routeStatus');
-  const peerPills = document.getElementById('peerPills');
   const peers = Array.isArray(swarm?.peers) ? swarm.peers : [];
   const mapped = peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon));
   swarmMap.peers = peers;
@@ -182,22 +181,6 @@ function renderSwarmMap(swarm) {
       ', inactive ' + (swarm.inactiveCount ?? 0) +
       ' - ' + mapped.length + '/' + peers.length + ' mapped'
     : 'No connected aria2c peers visible yet';
-  peerPills.innerHTML = peers.length
-    ? peers.map((peer) => {
-      const place = [peer.city, peer.region, peer.countryCode || peer.country].filter(Boolean).join(', ') || 'Unmapped';
-      const network = peer.as || peer.isp || 'Network unknown';
-      const state = peer.active ? 'active' : peer.probing ? 'probing' : 'inactive';
-      const age = peer.active || peer.probing ? peer.state : 'last seen ' + Math.round((peer.ageSeconds || 0) / 60) + 'm ago';
-      const speed = peer.active ? formatPeerRate(peer.receiveRateBps) : '-';
-      return '<div class="peer-card ' + esc(state) + '">' +
-        '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
-        '<span>' + esc(place) + '</span>' +
-        '<span>' + esc(network) + '</span>' +
-        '<span>' + esc('Speed ' + speed) + '</span>' +
-        '<span class="peer-state">' + esc(state + ' - ' + age) + '</span>' +
-      '</div>';
-    }).join('')
-    : '<div class="peer-empty">No active peer sockets yet. The map will light up once aria2c has established connections.</div>';
   if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
 }
 
@@ -224,18 +207,8 @@ function applyMapTransform() {
 
 function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
-  const shell = document.querySelector('.world-shell');
   const fullscreenButton = document.getElementById('fullscreenMap');
   if (!frame) return;
-  const syncPeerListHeight = () => {
-    if (!shell) return;
-    shell.style.setProperty('--map-frame-height', Math.round(frame.getBoundingClientRect().height) + 'px');
-  };
-  syncPeerListHeight();
-  if ('ResizeObserver' in window) {
-    const observer = new ResizeObserver(syncPeerListHeight);
-    observer.observe(frame);
-  }
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
     const viewport = document.getElementById('worldMapViewport');
@@ -309,7 +282,6 @@ function initMapControls() {
       fullscreenButton.title = isFullscreen ? 'Exit fullscreen map' : 'Fullscreen map';
       fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
     }
-    syncPeerListHeight();
     applyMapTransform();
   });
 }
@@ -970,16 +942,18 @@ function initDialogControls() {
 function initIntakeControls() {
   const form = document.getElementById('intakeForm');
   const input = document.getElementById('torrentFile');
+  const urlInput = document.getElementById('torrentUrl');
   const submit = document.getElementById('addTorrent');
-  if (!form || !input || !submit) return;
+  if (!form || !input || !urlInput || !submit) return;
   if (!sessionState.authenticated) {
     setIntakeStatus('Unlock first');
     submit.disabled = true;
   }
-  input.addEventListener('change', async () => {
+  const inspectCurrentTorrent = async () => {
     const file = input.files?.[0];
+    const torrentUrl = urlInput.value.trim();
     submit.disabled = true;
-    if (!file) {
+    if (!file && !torrentUrl) {
       document.getElementById('torrentSummary').textContent = 'No torrent selected.';
       return;
     }
@@ -990,7 +964,8 @@ function initIntakeControls() {
     setIntakeStatus('Inspecting');
     try {
       const data = new FormData();
-      data.set('torrent', file);
+      if (torrentUrl) data.set('torrentUrl', torrentUrl);
+      else data.set('torrent', file);
       const res = await fetch('/api/torrent/inspect', { method: 'POST', body: data });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || 'Inspect failed');
@@ -1001,16 +976,28 @@ function initIntakeControls() {
     } catch (error) {
       setIntakeStatus(error instanceof Error ? error.message : String(error));
     }
+  };
+  input.addEventListener('change', async () => {
+    if (input.files?.[0]) urlInput.value = '';
+    await inspectCurrentTorrent();
   });
+  urlInput.addEventListener('input', () => {
+    submit.disabled = true;
+    if (urlInput.value.trim()) input.value = '';
+  });
+  urlInput.addEventListener('change', inspectCurrentTorrent);
+  urlInput.addEventListener('blur', inspectCurrentTorrent);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const file = input.files?.[0];
-    if (!file || !sessionState.authenticated) return;
+    const torrentUrl = urlInput.value.trim();
+    if ((!file && !torrentUrl) || !sessionState.authenticated) return;
     submit.disabled = true;
     setIntakeStatus('Adding');
     try {
       const data = new FormData(form);
-      data.set('torrent', file);
+      if (torrentUrl) data.set('torrentUrl', torrentUrl);
+      else data.set('torrent', file);
       const res = await fetch('/api/torrents', { method: 'POST', body: data });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || 'Add failed');
@@ -1107,9 +1094,6 @@ refreshSession();
 window.addEventListener('resize', () => {
   resizeWarp();
   if (document.getElementById('speedCanvas')) updateSpeedChart(speedChart.target);
-  const frame = document.querySelector('.world-map-frame');
-  const shell = document.querySelector('.world-shell');
-  if (frame && shell) shell.style.setProperty('--map-frame-height', Math.round(frame.getBoundingClientRect().height) + 'px');
   applyMapTransform();
 });
 }
