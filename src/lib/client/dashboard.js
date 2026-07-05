@@ -61,6 +61,21 @@ const sessionState = {
   logoutUrl: '/auth/logout',
 };
 const shapePalette = ['circle', 'square', 'diamond', 'triangle', 'hexagon', 'pentagon', 'star', 'plus', 'cross', 'chevron'];
+const colorPalette = [
+  '#57e0c2',
+  '#8ab4ff',
+  '#ffcf5a',
+  '#f47086',
+  '#c084fc',
+  '#22d3ee',
+  '#fb923c',
+  '#a3e635',
+  '#f9a8d4',
+  '#facc15',
+  '#38bdf8',
+  '#f87171',
+];
+const vmLimeRgb = '191, 255, 0';
 let latestItems = [];
 
 function esc(value) {
@@ -325,29 +340,6 @@ function pulseForSpeed(now, bytesPerSecond, phase = 0) {
   };
 }
 
-function mixColor(a, b, t) {
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
-  ];
-}
-
-function heatColor(bytesPerSecond) {
-  const value = Number(bytesPerSecond) || 0;
-  const t = Math.max(0, Math.min(1, Math.log2(value / 32768 + 1) / 8));
-  const stops = [
-    [45, 126, 255],
-    [0, 170, 0],
-    [191, 255, 0],
-    [255, 140, 0],
-    [255, 46, 46],
-  ];
-  const scaled = t * (stops.length - 1);
-  const index = Math.min(stops.length - 2, Math.floor(scaled));
-  return mixColor(stops[index], stops[index + 1], scaled - index).join(', ');
-}
-
 function hashString(value) {
   let hash = 2166136261;
   for (let i = 0; i < String(value).length; i += 1) {
@@ -357,16 +349,36 @@ function hashString(value) {
   return hash >>> 0;
 }
 
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '');
+  if (clean.length !== 6) return '87, 224, 194';
+  return [
+    parseInt(clean.slice(0, 2), 16),
+    parseInt(clean.slice(2, 4), 16),
+    parseInt(clean.slice(4, 6), 16),
+  ].join(', ');
+}
+
 function itemVisual(itemId) {
   const id = String(itemId || 'unknown');
   const activeIds = latestItems
     .filter((item) => item.status === 'active' || item.status === 'organizing')
     .map((item) => String(item.id));
   const activeIndex = activeIds.indexOf(id);
-  if (activeIndex >= 0) return { shape: shapePalette[activeIndex % shapePalette.length] };
+  if (activeIndex >= 0) {
+    const color = colorPalette[activeIndex % colorPalette.length];
+    return {
+      shape: shapePalette[activeIndex % shapePalette.length],
+      color,
+      rgb: hexToRgb(color),
+    };
+  }
   const hash = hashString(id);
+  const color = colorPalette[hash % colorPalette.length];
   return {
     shape: shapePalette[hash % shapePalette.length],
+    color,
+    rgb: hexToRgb(color),
   };
 }
 
@@ -435,7 +447,6 @@ function drawPacketShape(ctx, shape, x, y, radius) {
 }
 
 function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
-  const vmLabelColor = '191, 255, 0';
   ctx.beginPath();
   ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(' + vmColor + ', ' + (.10 + vmPulse.value * .14) + ')';
@@ -448,7 +459,7 @@ function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(' + vmLabelColor + ', .95)';
+  ctx.fillStyle = 'rgba(' + vmLimeRgb + ', .95)';
   ctx.textAlign = 'center';
   ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
   ctx.textAlign = 'start';
@@ -526,6 +537,7 @@ function renderMapPeerLabels(width, height) {
     const country = item.peer.country || item.peer.countryCode || 'Unknown country';
     const detailText = country + ' - ' + item.peer.ip + ':' + item.peer.port;
     const flagUrl = flagUrlForCountry(item.peer.countryCode);
+    const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
     const img = node.querySelector('img');
     const span = node.querySelector('.map-peer-speed');
     const detail = node.querySelector('.map-peer-detail');
@@ -538,9 +550,12 @@ function renderMapPeerLabels(width, height) {
     }
     if (span) {
       span.textContent = text;
-      span.style.color = 'rgb(' + heatColor(item.peer.receiveRateBps) + ')';
+      span.style.color = visual.color;
     }
-    if (detail) detail.textContent = detailText;
+    if (detail) {
+      detail.textContent = detailText;
+      detail.style.color = visual.color;
+    }
     const collapsedWidth = Math.min(150, Math.max(76, 18 + (flagUrl ? 28 : 0) + text.length * 7.2));
     const labelHeight = 24;
     const point = cameraPoint({ x: item.x, y: item.y });
@@ -644,7 +659,7 @@ function drawWorldFrame(now) {
   const originWorld = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   const origin = cameraPoint(originWorld);
   const vmPulse = pulseForSpeed(now, totalIngestBps);
-  const vmColor = heatColor(totalIngestBps);
+  const vmColor = vmLimeRgb;
   const vmRadius = 4.5 * (1 + vmPulse.value);
 
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
@@ -659,10 +674,9 @@ function drawWorldFrame(now) {
     item.alpha += ((item.fading ? 0 : 1) - item.alpha) * (1 - Math.exp(-dt / 360));
     const targetAlpha = item.peer.active ? 1 : item.peer.probing ? .72 : .38;
     const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
-    const hue = 166 + (item.rank % 9) * 12;
     const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
-    const activeColor = heatColor(item.peer.receiveRateBps);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
+    const activeColor = visual.rgb;
 
     const start = { x: origin.x, y: origin.y };
     const screen = cameraPoint({ x: item.x, y: item.y });
@@ -704,20 +718,12 @@ function drawWorldFrame(now) {
     const activePeerRadius = 2.25 + (1 - peerPulse.value) * 2.25;
     const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
     ctx.arc(screen.x, screen.y, outerRadius, 0, Math.PI * 2);
-    ctx.fillStyle = item.peer.active
-      ? 'rgba(' + activeColor + ', ' + (.17 * alpha) + ')'
-      : item.peer.probing
-        ? 'rgba(247, 198, 95, ' + (.06 * alpha) + ')'
-        : 'rgba(247, 198, 95, ' + (.05 * alpha) + ')';
+    ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? .17 : .07) * alpha) + ')';
     ctx.fill();
     ctx.beginPath();
     const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
     ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
-    ctx.fillStyle = item.peer.active
-      ? 'rgba(' + activeColor + ', ' + alpha + ')'
-      : item.peer.probing
-        ? 'rgba(247, 198, 95, ' + (.88 * alpha) + ')'
-        : 'rgba(247, 198, 95, ' + (.78 * alpha) + ')';
+    ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? 1 : .68) * alpha) + ')';
     ctx.shadowColor = item.peer.active ? 'rgba(' + activeColor + ', ' + (.75 * alpha) + ')' : 'transparent';
     ctx.shadowBlur = item.peer.active ? 7 + (1 - peerPulse.value) * 7 : 0;
     ctx.fill();
