@@ -1567,24 +1567,25 @@ function drawWorldFrame(now) {
     }
 
     ctx.beginPath();
-    const outerRadius = item.peer.active ? 6 + (1 - peerPulse.value) * 8 : item.peer.probing ? 5 : 4;
+    const activePeerRadius = 2.25 + (1 - peerPulse.value) * 2.25;
+    const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
     ctx.arc(item.x, item.y, outerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
       ? 'rgba(' + activeColor + ', ' + (.075 * alpha) + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.06 * alpha) + ')'
-        : 'rgba(150, 167, 190, ' + (.05 * alpha) + ')';
+        : 'rgba(247, 198, 95, ' + (.05 * alpha) + ')';
     ctx.fill();
     ctx.beginPath();
-    const innerRadius = item.peer.active ? 3.6 + (1 - peerPulse.value) * 3.6 : item.peer.probing ? 3.1 : 2.6;
+    const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
     ctx.arc(item.x, item.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
       ? 'rgba(' + activeColor + ', ' + (.95 * alpha) + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.88 * alpha) + ')'
-        : 'rgba(165, 176, 193, ' + (.80 * alpha) + ')';
+        : 'rgba(247, 198, 95, ' + (.78 * alpha) + ')';
     ctx.shadowColor = item.peer.active ? 'rgba(' + activeColor + ', ' + (.75 * alpha) + ')' : 'transparent';
-    ctx.shadowBlur = item.peer.active ? 10 + (1 - peerPulse.value) * 10 : 0;
+    ctx.shadowBlur = item.peer.active ? 7 + (1 - peerPulse.value) * 7 : 0;
     ctx.fill();
     ctx.shadowBlur = 0;
 
