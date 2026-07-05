@@ -813,6 +813,7 @@ export async function buildStatus() {
     }
     return {
       ...item,
+      totalBytes: effectiveTotalBytes,
       status,
       startedAt: itemState.startedAt,
       completedAt: itemState.completedAt,

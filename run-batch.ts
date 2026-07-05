@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "fs/promises";
-import { dirname, join } from "path";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
+import { dirname, extname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
@@ -19,6 +19,7 @@ type ManifestItem = {
   magnetUri?: string;
   payloadName: string;
   totalBytes: number;
+  fileCount?: number;
   destination: { type: "movie" | "show"; path: string };
   organize:
     | { strategy: "moveRoot"; seasonRenames?: Record<string, string>; fileRenames?: Record<string, string> }
@@ -54,6 +55,21 @@ async function loadManifest(): Promise<Manifest> {
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
     return manifest;
   }
+}
+
+async function saveManifest(manifest: Manifest) {
+  const manifestPath = join(root, "manifest.json");
+  const tmp = `${manifestPath}.tmp`;
+  await writeFile(tmp, JSON.stringify(manifest, null, 2));
+  await rename(tmp, manifestPath);
+}
+
+async function updateManifestItem(id: string, values: Partial<ManifestItem>) {
+  const manifest = await loadManifest();
+  const item = manifest.items.find((entry) => entry.id === id);
+  if (!item) return;
+  Object.assign(item, values);
+  await saveManifest(manifest);
 }
 
 function now() {
@@ -124,6 +140,31 @@ async function pathExists(path: string) {
 async function movePath(source: string, destination: string) {
   await ensureDir(dirname(destination));
   await rename(source, destination);
+}
+
+async function collectFileStats(path: string) {
+  let totalBytes = 0;
+  let fileCount = 0;
+  let videoCount = 0;
+  const videoExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov"]);
+
+  async function visit(current: string) {
+    const currentStat = await stat(current);
+    if (currentStat.isFile()) {
+      fileCount += 1;
+      totalBytes += currentStat.size;
+      if (videoExtensions.has(extname(current).toLowerCase())) videoCount += 1;
+      return;
+    }
+    if (!currentStat.isDirectory()) return;
+    for (const entry of await readdir(current)) {
+      if (entry.endsWith(".aria2")) continue;
+      await visit(join(current, entry));
+    }
+  }
+
+  if (await pathExists(path)) await visit(path);
+  return { totalBytes, fileCount, videoCount };
 }
 
 async function runCommand(args: string[], logPath: string) {
@@ -203,8 +244,9 @@ async function organize(item: ManifestItem) {
     const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
     await ensureDir(targetDir);
     const source = await resolveSourceRoot(item);
-    const entries = new Bun.Glob("*").scan(source);
-    for await (const entry of entries) {
+    const entries = (await readdir(source)).filter((entry) => !entry.endsWith(".aria2"));
+    if (!entries.length) throw new Error(`No downloaded files found in ${source}`);
+    for (const entry of entries) {
       const target = join(targetDir, entry);
       if (await pathExists(target)) throw new Error(`Destination already exists: ${target}`);
       await movePath(join(source, entry), target);
@@ -221,6 +263,8 @@ async function organize(item: ManifestItem) {
   }
 
   await rm(staging, { recursive: true, force: true });
+  const stats = await collectFileStats(dest);
+  if (stats.videoCount === 0) throw new Error(`Organized destination has no video files: ${dest}`);
   if (mediaChown) {
     const chown = Bun.spawnSync(["sudo", "chown", "-R", mediaChown, dest]);
     if (chown.exitCode !== 0) throw new Error(`chown failed for ${dest}`);
@@ -290,6 +334,16 @@ async function processItem(item: ManifestItem) {
     await setItemState(item.id, { status: "failed", failedAt: now(), error: `aria2c exited ${exitCode}` });
     await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
     throw new Error(`${item.title}: aria2c exited ${exitCode}`);
+  }
+
+  const downloadedStats = await collectFileStats(staging);
+  if (downloadedStats.totalBytes > 0) {
+    item.totalBytes = downloadedStats.totalBytes;
+    item.fileCount = downloadedStats.fileCount;
+    await updateManifestItem(item.id, {
+      totalBytes: downloadedStats.totalBytes,
+      fileCount: downloadedStats.fileCount,
+    });
   }
 
   await setItemState(item.id, { status: "organizing" });
