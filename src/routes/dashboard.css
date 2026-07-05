@@ -613,6 +613,8 @@
       opacity: .48;
       filter: invert(1) hue-rotate(145deg) saturate(.65) brightness(1.25);
       mix-blend-mode: screen;
+      transform-origin: 0 0;
+      will-change: transform;
     }
     #worldCanvas {
       position: absolute;
@@ -645,20 +647,21 @@
       font-weight: 700;
       line-height: 1.2;
       white-space: nowrap;
-      transform: translate(1px, 1px);
+      transform: none;
       pointer-events: auto;
       transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
     .map-peer-label.edge-right {
-      transform: translate(calc(-100% - 1px), 1px);
+      transform: none;
     }
     .map-peer-label.edge-bottom {
-      transform: translate(1px, calc(-100% - 1px));
+      transform: none;
     }
     .map-peer-label.edge-right.edge-bottom {
-      transform: translate(calc(-100% - 1px), calc(-100% - 1px));
+      transform: none;
     }
     .map-peer-label:hover {
+      z-index: 5;
       max-width: min(320px, 68vw);
       border-color: rgba(87, 224, 194, .42);
       background: rgba(5, 10, 16, .90);

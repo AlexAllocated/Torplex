@@ -202,7 +202,20 @@ function clampMapView() {
 function applyMapTransform() {
   clampMapView();
   const layer = document.getElementById('worldMapLayer');
-  if (layer) layer.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+  if (layer) layer.style.transform = '';
+  const image = document.querySelector('.world-map-image');
+  if (image) image.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+}
+
+function cameraPoint(point) {
+  return {
+    x: point.x * mapView.scale + mapView.x,
+    y: point.y * mapView.scale + mapView.y,
+  };
+}
+
+function projectWorldScreen(lat, lon, width, height) {
+  return cameraPoint(projectWorld(lat, lon, width, height));
 }
 
 function initMapControls() {
@@ -359,8 +372,14 @@ function syncDisplayPeers(peers) {
 function renderMapPeerLabels(width, height) {
   const layer = document.getElementById('mapPeerLabels');
   if (!layer) return;
-  const visible = swarmMap.displayPeers.filter((item) => item.peer?.active && item.rank < 12 && item.alpha > .05);
+  const visible = swarmMap.displayPeers
+    .filter((item) => item.peer?.active && item.rank < 16 && item.alpha > .05)
+    .sort((a, b) => (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0));
   const seen = new Set();
+  const placed = [];
+  const overlaps = (rect) => placed.some((other) =>
+    rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+  );
   visible.forEach((item) => {
     const key = item.peer.ip + ':' + item.peer.port;
     seen.add(key);
@@ -398,16 +417,45 @@ function renderMapPeerLabels(width, height) {
       span.style.color = 'rgb(' + heatColor(item.peer.receiveRateBps) + ')';
     }
     if (detail) detail.textContent = detailText;
-    const expandedWidth = Math.min(320, Math.max(90, 12 + (flagUrl ? 21 : 0) + (text.length + detailText.length) * 5.5));
-    const expandedHeight = 18;
-    const edgeRight = item.x + expandedWidth + 4 > width;
-    const edgeBottom = item.y + expandedHeight + 4 > height;
-    node.classList.toggle('edge-right', edgeRight);
-    node.classList.toggle('edge-bottom', edgeBottom);
-    const x = Math.min(width - 4, Math.max(4, item.x + (edgeRight ? -1 : 1)));
-    const y = Math.min(height - 4, Math.max(16, item.y + (edgeBottom ? -1 : 1)));
-    node.style.left = x.toFixed(1) + 'px';
-    node.style.top = y.toFixed(1) + 'px';
+    const collapsedWidth = Math.min(120, Math.max(58, 12 + (flagUrl ? 21 : 0) + text.length * 5.8));
+    const labelHeight = 18;
+    const point = cameraPoint({ x: item.x, y: item.y });
+    if (point.x < -24 || point.x > width + 24 || point.y < -24 || point.y > height + 24) {
+      node.style.opacity = '0';
+      return;
+    }
+    const candidates = [
+      { x: point.x + 5, y: point.y + 5, right: false, bottom: false },
+      { x: point.x + 5, y: point.y - labelHeight - 5, right: false, bottom: true },
+      { x: point.x - collapsedWidth - 5, y: point.y + 5, right: true, bottom: false },
+      { x: point.x - collapsedWidth - 5, y: point.y - labelHeight - 5, right: true, bottom: true },
+      { x: point.x + 10, y: point.y - labelHeight / 2, right: false, bottom: false },
+      { x: point.x - collapsedWidth - 10, y: point.y - labelHeight / 2, right: true, bottom: false },
+    ].map((candidate) => ({
+      ...candidate,
+      x: Math.min(width - collapsedWidth - 4, Math.max(4, candidate.x)),
+      y: Math.min(height - labelHeight - 4, Math.max(4, candidate.y)),
+    }));
+    const choice = candidates.find((candidate) => !overlaps({
+      left: candidate.x - 3,
+      right: candidate.x + collapsedWidth + 3,
+      top: candidate.y - 3,
+      bottom: candidate.y + labelHeight + 3,
+    }));
+    if (!choice) {
+      node.style.opacity = '0';
+      return;
+    }
+    placed.push({
+      left: choice.x - 3,
+      right: choice.x + collapsedWidth + 3,
+      top: choice.y - 3,
+      bottom: choice.y + labelHeight + 3,
+    });
+    node.classList.toggle('edge-right', choice.right);
+    node.classList.toggle('edge-bottom', choice.bottom);
+    node.style.left = choice.x.toFixed(1) + 'px';
+    node.style.top = choice.y.toFixed(1) + 'px';
     node.style.opacity = String(Math.min(.96, item.alpha));
   });
   swarmMap.labelNodes.forEach((node, key) => {
@@ -451,14 +499,14 @@ function drawWorldFrame(now) {
   ctx.strokeStyle = 'rgba(150, 167, 190, .13)';
   ctx.lineWidth = 1;
   for (let lon = -150; lon <= 150; lon += 30) {
-    const x = projectWorld(0, lon, width, height).x;
+    const x = projectWorldScreen(0, lon, width, height).x;
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
   }
   for (let lat = -60; lat <= 60; lat += 30) {
-    const y = projectWorld(lat, 0, width, height).y;
+    const y = projectWorldScreen(lat, 0, width, height).y;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
@@ -469,7 +517,8 @@ function drawWorldFrame(now) {
     (sum, item) => sum + (item.peer?.active ? Number(item.peer.receiveRateBps) || 0 : 0),
     0,
   );
-  const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
+  const originWorld = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
+  const origin = cameraPoint(originWorld);
   const vmPulse = pulseForSpeed(now, totalIngestBps);
   const vmColor = heatColor(totalIngestBps);
   const vmLabelColor = '191, 255, 0';
@@ -508,9 +557,10 @@ function drawWorldFrame(now) {
     const activeColor = heatColor(item.peer.receiveRateBps);
 
     const start = { x: origin.x, y: origin.y };
-    const end = { x: item.x, y: item.y };
-    const midX = (origin.x + item.x) / 2;
-    const midY = (origin.y + item.y) / 2 - Math.min(80, Math.abs(origin.x - item.x) * .12);
+    const screen = cameraPoint({ x: item.x, y: item.y });
+    const end = { x: screen.x, y: screen.y };
+    const midX = (origin.x + screen.x) / 2;
+    const midY = (origin.y + screen.y) / 2 - Math.min(80, Math.abs(origin.x - screen.x) * .12);
     const control = { x: midX, y: midY };
     if (item.peer.active) {
       ctx.beginPath();
@@ -553,7 +603,7 @@ function drawWorldFrame(now) {
     ctx.beginPath();
     const activePeerRadius = 2.25 + (1 - peerPulse.value) * 2.25;
     const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
-    ctx.arc(item.x, item.y, outerRadius, 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, outerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
       ? 'rgba(' + activeColor + ', ' + (.075 * alpha) + ')'
       : item.peer.probing
@@ -562,7 +612,7 @@ function drawWorldFrame(now) {
     ctx.fill();
     ctx.beginPath();
     const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
-    ctx.arc(item.x, item.y, innerRadius, 0, Math.PI * 2);
+    ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
       ? 'rgba(' + activeColor + ', ' + (.95 * alpha) + ')'
       : item.peer.probing
