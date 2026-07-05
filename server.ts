@@ -1493,7 +1493,7 @@ function drawWorldFrame(now) {
   );
   const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   const vmPulse = pulseForSpeed(now, totalIngestBps);
-  const vmColor = heatColor(totalIngestBps);
+  const vmColor = '191, 255, 0';
   const vmRadius = 4.5 * (1 + vmPulse.value);
   ctx.beginPath();
   ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
