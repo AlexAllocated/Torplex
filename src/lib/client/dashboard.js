@@ -404,9 +404,9 @@ function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
 }
 
 function streamSpeedFactor(bytesPerSecond) {
-  const targetFastBps = 1 * 1024 * 1024;
+  const targetFastBps = 100 * 1024 * 1024;
   const t = Math.max(0, Math.min(1, (Number(bytesPerSecond) || 0) / targetFastBps));
-  return .18 + Math.pow(t, .9) * 1.65;
+  return .45 + Math.pow(t, .3) * 3.3;
 }
 
 function syncDisplayPeers(peers) {
@@ -634,9 +634,9 @@ function drawWorldFrame(now) {
     const rateBps = Number(item.peer.receiveRateBps) || 0;
     if (item.peer.active && Math.round(rateBps) > 0) {
       const speedFactor = streamSpeedFactor(rateBps);
-      const packetCount = Math.max(2, Math.min(6, Math.round(1.5 + speedFactor * 1.2)));
+      const packetCount = Math.max(2, Math.min(14, Math.round(2 + speedFactor * 3.1)));
       for (let i = 0; i < packetCount; i += 1) {
-        const travel = ((now / (3600 / speedFactor)) + i / packetCount + item.phase) % 1;
+        const travel = ((now / (2600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
         const head = quadPoint(start, control, end, t);
         const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
