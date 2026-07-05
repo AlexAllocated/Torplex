@@ -829,7 +829,7 @@ function page() {
       position: absolute;
       top: 10px;
       right: 10px;
-      z-index: 3;
+      z-index: 20;
       background: rgba(7, 16, 26, .72);
       backdrop-filter: blur(10px);
     }
@@ -854,6 +854,7 @@ function page() {
       inset: 0;
       transform-origin: 0 0;
       will-change: transform;
+      z-index: 1;
     }
     .world-map-image {
       position: absolute;
@@ -943,7 +944,7 @@ function page() {
       position: absolute;
       left: 50%;
       bottom: 12px;
-      z-index: 3;
+      z-index: 10;
       width: min(300px, calc(100% - 24px));
       padding: 6px 8px;
       border: 1px solid rgba(191, 255, 0, .28);
@@ -1314,6 +1315,7 @@ const mapView = {
   baseX: 0,
   baseY: 0,
 };
+let fullscreenBusy = false;
 const completedSeen = new Set();
 const tweens = new Map();
 const elementTweens = new WeakMap();
@@ -1482,6 +1484,7 @@ function applyMapTransform() {
 
 function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
+  const fullscreenButton = document.getElementById('fullscreenMap');
   if (!frame) return;
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
@@ -1500,6 +1503,7 @@ function initMapControls() {
     applyMapTransform();
   }, { passive: false });
   frame.addEventListener('pointerdown', (event) => {
+    if (event.target?.closest?.('#fullscreenMap, .map-peer-label')) return;
     if (mapView.scale <= 1) return;
     mapView.dragging = true;
     mapView.startX = event.clientX;
@@ -1527,14 +1531,34 @@ function initMapControls() {
     mapView.y = 0;
     applyMapTransform();
   });
-  document.getElementById('fullscreenMap')?.addEventListener('click', async () => {
-    if (document.fullscreenElement === frame) {
-      await document.exitFullscreen();
-    } else {
-      await frame.requestFullscreen();
+  fullscreenButton?.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+  });
+  fullscreenButton?.addEventListener('click', async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (fullscreenBusy) return;
+    fullscreenBusy = true;
+    fullscreenButton.disabled = true;
+    try {
+      if (document.fullscreenElement === frame) {
+        await document.exitFullscreen();
+      } else {
+        await frame.requestFullscreen();
+      }
+    } catch (error) {
+      console.warn('Fullscreen toggle failed', error);
+    } finally {
+      fullscreenBusy = false;
+      fullscreenButton.disabled = false;
     }
   });
   document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = document.fullscreenElement === frame;
+    if (fullscreenButton) {
+      fullscreenButton.title = isFullscreen ? 'Exit fullscreen map' : 'Fullscreen map';
+      fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
+    }
     applyMapTransform();
   });
 }
