@@ -632,15 +632,38 @@ function page() {
       gap: 14px;
       align-items: stretch;
     }
-    #worldCanvas {
-      display: block;
+    .world-map-frame {
+      position: relative;
       width: 100%;
-      height: 330px;
-      margin: 0;
+      aspect-ratio: 2 / 1;
+      min-height: 260px;
+      overflow: hidden;
       border-color: rgba(87, 224, 194, .24);
+      border: 1px solid var(--line);
+      border-radius: 8px;
       background:
         radial-gradient(circle at 50% 50%, rgba(87, 224, 194, .12), transparent 50%),
         linear-gradient(180deg, rgba(10, 18, 28, .96), rgba(7, 11, 17, .96));
+    }
+    .world-map-frame img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+      opacity: .48;
+      filter: invert(1) hue-rotate(145deg) saturate(.65) brightness(1.25);
+      mix-blend-mode: screen;
+    }
+    #worldCanvas {
+      position: absolute;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      border: 0;
+      background: transparent;
     }
     .peer-pills {
       display: grid;
@@ -866,7 +889,10 @@ function page() {
       <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
     </div>
     <div class="world-shell">
-      <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+      <div class="world-map-frame">
+        <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
+        <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+      </div>
       <div id="peerPills" class="peer-pills"></div>
     </div>
   </section>
@@ -910,17 +936,6 @@ const swarmMap = {
   lastFrame: 0,
   origin: { lat: 39, lon: -98 },
 };
-const landShapes = [
-  [[-168, 72], [-140, 70], [-124, 58], [-118, 48], [-99, 48], [-82, 42], [-66, 46], [-56, 54], [-78, 70], [-116, 74]],
-  [[-124, 49], [-111, 32], [-96, 23], [-84, 15], [-78, 8], [-81, -2], [-68, -16], [-62, -36], [-72, -54], [-55, -52], [-42, -22], [-52, 5], [-76, 21], [-86, 30], [-102, 32]],
-  [[-18, 35], [7, 44], [34, 38], [50, 28], [45, 12], [36, -2], [32, -28], [20, -35], [10, -30], [0, -8], [-13, 4], [-18, 18]],
-  [[-10, 58], [2, 70], [22, 66], [32, 58], [24, 45], [8, 42], [-6, 49]],
-  [[28, 70], [65, 72], [96, 62], [128, 58], [150, 48], [140, 30], [112, 22], [98, 8], [80, 18], [68, 8], [48, 28], [32, 36], [22, 54]],
-  [[66, 24], [78, 30], [90, 24], [88, 8], [78, 6], [68, 16]],
-  [[96, 6], [122, 14], [142, 2], [132, -9], [112, -8]],
-  [[112, -11], [154, -10], [154, -33], [136, -42], [116, -34], [108, -22]],
-  [[-52, 74], [-28, 72], [-20, 62], [-44, 60]]
-];
 const completedSeen = new Set();
 const tweens = new Map();
 const elementTweens = new WeakMap();
@@ -1103,10 +1118,11 @@ function drawWorldFrame(now) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const sea = ctx.createLinearGradient(0, 0, 0, height);
-  sea.addColorStop(0, 'rgba(15, 30, 45, .88)');
-  sea.addColorStop(1, 'rgba(7, 12, 19, .94)');
-  ctx.fillStyle = sea;
+  const vignette = ctx.createRadialGradient(width / 2, height / 2, height * .1, width / 2, height / 2, width * .62);
+  vignette.addColorStop(0, 'rgba(87, 224, 194, .10)');
+  vignette.addColorStop(.55, 'rgba(7, 12, 19, 0)');
+  vignette.addColorStop(1, 'rgba(7, 12, 19, .40)');
+  ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, width, height);
 
   ctx.strokeStyle = 'rgba(150, 167, 190, .13)';
@@ -1125,21 +1141,6 @@ function drawWorldFrame(now) {
     ctx.lineTo(width, y);
     ctx.stroke();
   }
-
-  landShapes.forEach((shape) => {
-    ctx.beginPath();
-    shape.forEach(([lon, lat], index) => {
-      const point = projectWorld(lat, lon, width, height);
-      if (index === 0) ctx.moveTo(point.x, point.y);
-      else ctx.lineTo(point.x, point.y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(87, 224, 194, .105)';
-    ctx.strokeStyle = 'rgba(87, 224, 194, .22)';
-    ctx.lineWidth = 1;
-    ctx.fill();
-    ctx.stroke();
-  });
 
   const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   ctx.fillStyle = '#f7c65f';
@@ -1553,6 +1554,11 @@ Bun.serve({
     }
     if (url.pathname === "/status.json") {
       return Response.json(await buildStatus(), { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/assets/BlankMap-Equirectangular.svg") {
+      return new Response(Bun.file(join(import.meta.dir, "assets", "BlankMap-Equirectangular.svg")), {
+        headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" },
+      });
     }
     return new Response(page(), {
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
