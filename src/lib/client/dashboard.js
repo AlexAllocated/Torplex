@@ -740,7 +740,14 @@ function renderItems(items) {
     '<div class="item-actions"><button data-role="remove" class="danger-button" type="button">Remove</button></div>';
   const orderedItems = items
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => (priority[a.item.status] ?? 1) - (priority[b.item.status] ?? 1) || a.index - b.index)
+    .sort((a, b) => {
+      const priorityDelta = (priority[a.item.status] ?? 1) - (priority[b.item.status] ?? 1);
+      if (priorityDelta) return priorityDelta;
+      if (a.item.status === 'completed' && b.item.status === 'completed') {
+        return (Date.parse(b.item.completedAt || '') || 0) - (Date.parse(a.item.completedAt || '') || 0) || a.index - b.index;
+      }
+      return a.index - b.index;
+    })
     .map((entry) => entry.item);
   orderedItems.forEach((item) => {
     const rowId = rowIdFor(item.id);
