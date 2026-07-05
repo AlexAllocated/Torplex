@@ -391,18 +391,27 @@ function statusStream() {
 
   return new ReadableStream({
     start(controller) {
+      const enqueue = (chunk: Uint8Array) => {
+        if (closed) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          closed = true;
+          if (timer) clearInterval(timer);
+          return false;
+        }
+      };
       const send = async () => {
         if (closed) return;
         try {
-          controller.enqueue(encodeEvent("status", await buildStatus()));
+          enqueue(encodeEvent("status", await buildStatus()));
         } catch (error) {
-          controller.enqueue(
-            encodeEvent("error", { message: error instanceof Error ? error.message : String(error) }),
-          );
+          enqueue(encodeEvent("error", { message: error instanceof Error ? error.message : String(error) }));
         }
       };
 
-      controller.enqueue(encoder.encode("retry: 1000\n\n"));
+      enqueue(encoder.encode("retry: 1000\n\n"));
       void send();
       timer = setInterval(() => void send(), 500);
     },
@@ -833,6 +842,54 @@ function page() {
       border: 0;
       background: transparent;
     }
+    .map-progress-widget {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 3;
+      width: min(330px, calc(100% - 66px));
+      padding: 11px 12px;
+      border: 1px solid rgba(191, 255, 0, .28);
+      border-radius: 8px;
+      background: rgba(7, 16, 26, .72);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .30);
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+    }
+    .map-progress-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #e7edf5;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .map-progress-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .map-progress-bar {
+      position: relative;
+      height: 7px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(150, 167, 190, .20);
+    }
+    .map-progress-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #00aa00, #bfff00);
+      box-shadow: 0 0 16px rgba(191, 255, 0, .30);
+      transition: width .8s cubic-bezier(.22, 1, .36, 1);
+    }
     .peer-pills {
       display: grid;
       align-content: start;
@@ -1092,6 +1149,12 @@ function page() {
               <path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
             </svg>
           </button>
+          <div class="map-progress-widget">
+            <div class="label">Active Torrent</div>
+            <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
+            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span></div>
+            <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
+          </div>
           <div id="worldMapLayer" class="world-map-layer">
             <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
             <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
@@ -1519,8 +1582,8 @@ function drawWorldFrame(now) {
       item.x = target.x;
       item.y = target.y;
     }
-    item.x += (target.x - item.x) * (1 - Math.exp(-dt / 450));
-    item.y += (target.y - item.y) * (1 - Math.exp(-dt / 450));
+    item.x = target.x;
+    item.y = target.y;
     item.alpha += ((item.fading ? 0 : 1) - item.alpha) * (1 - Math.exp(-dt / 360));
     const targetAlpha = item.peer.active ? 1 : item.peer.probing ? .72 : .38;
     const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
@@ -1918,6 +1981,11 @@ function render(data) {
   if (active) tweenNumber('currentMini', activePercent, (value) => Math.round(value) + '% @ ' + (active.progress.rate || '-'), 700);
   else document.getElementById('currentMini').textContent = '-';
   document.getElementById('etaMini').textContent = active?.progress?.eta || '-';
+  document.getElementById('mapTorrentTitle').textContent = active ? active.title : 'Queue idle';
+  document.getElementById('mapTorrentProgress').textContent = active ? Math.round(activePercent) + '%' : '-';
+  document.getElementById('mapTorrentRate').textContent = active?.progress?.rate || '-';
+  document.getElementById('mapTorrentEta').textContent = active?.progress?.eta || '-';
+  document.getElementById('mapTorrentFill').style.width = clamp(activePercent) + '%';
   tweenNumber('remainingMini', Math.max(0, data.totals.totalBytes - data.totals.doneBytes), fmt, 700);
   updateSpeedChart(speed);
 
