@@ -363,6 +363,9 @@ function sourceHttpError(response: Response) {
   if (response.headers.get("cf-mitigated") === "challenge") {
     return `URL returned HTTP ${response.status}: the site is presenting a Cloudflare browser challenge to this server. Open it in a browser and paste the magnet link or upload the .torrent file.`;
   }
+  if (response.status === 403) {
+    return "URL returned HTTP 403: the site blocked this server or requires an interactive browser challenge. Open it in a browser and paste the magnet link, or download and upload the .torrent file.";
+  }
   return `URL returned HTTP ${response.status}`;
 }
 
