@@ -60,6 +60,7 @@ const sessionState = {
   loginUrl: '/auth/login',
   logoutUrl: '/auth/logout',
 };
+const shapePalette = ['circle', 'square', 'diamond', 'triangle', 'hexagon', 'pentagon', 'star', 'plus', 'cross', 'chevron'];
 let latestItems = [];
 
 function esc(value) {
@@ -356,10 +357,15 @@ function hashString(value) {
 }
 
 function itemVisual(itemId) {
-  const shapes = ['circle', 'diamond', 'square', 'triangle'];
-  const hash = hashString(itemId || 'unknown');
+  const id = String(itemId || 'unknown');
+  const activeIds = latestItems
+    .filter((item) => item.status === 'active' || item.status === 'organizing')
+    .map((item) => String(item.id));
+  const activeIndex = activeIds.indexOf(id);
+  if (activeIndex >= 0) return { shape: shapePalette[activeIndex % shapePalette.length] };
+  const hash = hashString(id);
   return {
-    shape: shapes[hash % shapes.length],
+    shape: shapePalette[hash % shapePalette.length],
   };
 }
 
@@ -377,6 +383,50 @@ function drawPacketShape(ctx, shape, x, y, radius) {
     ctx.moveTo(x, y - radius * 1.55);
     ctx.lineTo(x + radius * 1.34, y + radius * .775);
     ctx.lineTo(x - radius * 1.34, y + radius * .775);
+    ctx.closePath();
+  } else if (shape === 'hexagon' || shape === 'pentagon') {
+    const sides = shape === 'hexagon' ? 6 : 5;
+    const rotation = shape === 'hexagon' ? Math.PI / 6 : -Math.PI / 2;
+    for (let i = 0; i < sides; i += 1) {
+      const angle = rotation + i * Math.PI * 2 / sides;
+      const px = x + Math.cos(angle) * radius * 1.22;
+      const py = y + Math.sin(angle) * radius * 1.22;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  } else if (shape === 'star') {
+    for (let i = 0; i < 10; i += 1) {
+      const angle = -Math.PI / 2 + i * Math.PI / 5;
+      const r = i % 2 === 0 ? radius * 1.42 : radius * .62;
+      const px = x + Math.cos(angle) * r;
+      const py = y + Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  } else if (shape === 'plus' || shape === 'cross') {
+    const arm = radius * .42;
+    const extent = radius * 1.42;
+    const points = [
+      [-arm, -extent], [arm, -extent], [arm, -arm], [extent, -arm],
+      [extent, arm], [arm, arm], [arm, extent], [-arm, extent],
+      [-arm, arm], [-extent, arm], [-extent, -arm], [-arm, -arm],
+    ];
+    ctx.save();
+    ctx.translate(x, y);
+    if (shape === 'cross') ctx.rotate(Math.PI / 4);
+    points.forEach(([px, py], index) => {
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+    ctx.restore();
+  } else if (shape === 'chevron') {
+    ctx.moveTo(x - radius * 1.35, y - radius * 1.15);
+    ctx.lineTo(x + radius * 1.35, y);
+    ctx.lineTo(x - radius * 1.35, y + radius * 1.15);
+    ctx.lineTo(x - radius * .55, y);
     ctx.closePath();
   } else {
     ctx.arc(x, y, radius, 0, Math.PI * 2);
