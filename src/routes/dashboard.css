@@ -438,7 +438,7 @@
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
       gap: 14px;
-      align-items: stretch;
+      align-items: start;
     }
     .world-map-frame {
       position: relative;
@@ -639,7 +639,8 @@
       align-content: start;
       align-self: stretch;
       gap: 8px;
-      height: 100%;
+      height: var(--map-frame-height, 330px);
+      max-height: var(--map-frame-height, 330px);
       min-height: 0;
       overflow: auto;
       padding-right: 4px;
@@ -817,7 +818,10 @@
     @media (max-width: 980px) {
       .dashboard { grid-template-columns: 1fr; }
       .world-shell { grid-template-columns: 1fr; }
-      .peer-pills { max-height: 330px; }
+      .peer-pills {
+        height: auto;
+        max-height: 330px;
+      }
       .intake-grid { grid-template-columns: 1fr; }
       .item { grid-template-columns: 1fr; }
       .title div:first-child { white-space: normal; }

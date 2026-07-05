@@ -224,8 +224,18 @@ function applyMapTransform() {
 
 function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
+  const shell = document.querySelector('.world-shell');
   const fullscreenButton = document.getElementById('fullscreenMap');
   if (!frame) return;
+  const syncPeerListHeight = () => {
+    if (!shell) return;
+    shell.style.setProperty('--map-frame-height', Math.round(frame.getBoundingClientRect().height) + 'px');
+  };
+  syncPeerListHeight();
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(syncPeerListHeight);
+    observer.observe(frame);
+  }
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
     const viewport = document.getElementById('worldMapViewport');
@@ -299,6 +309,7 @@ function initMapControls() {
       fullscreenButton.title = isFullscreen ? 'Exit fullscreen map' : 'Fullscreen map';
       fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
     }
+    syncPeerListHeight();
     applyMapTransform();
   });
 }
@@ -1096,6 +1107,9 @@ refreshSession();
 window.addEventListener('resize', () => {
   resizeWarp();
   if (document.getElementById('speedCanvas')) updateSpeedChart(speedChart.target);
+  const frame = document.querySelector('.world-map-frame');
+  const shell = document.querySelector('.world-shell');
+  if (frame && shell) shell.style.setProperty('--map-frame-height', Math.round(frame.getBoundingClientRect().height) + 'px');
   applyMapTransform();
 });
 }
