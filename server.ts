@@ -1604,7 +1604,10 @@ function renderMapPeerLabels(width, height) {
         img.alt = item.peer.countryCode || '';
       }
     }
-    if (span) span.textContent = text;
+    if (span) {
+      span.textContent = text;
+      span.style.color = 'rgb(' + heatColor(item.peer.receiveRateBps) + ')';
+    }
     if (detail) detail.textContent = detailText;
     const estimatedWidth = Math.min(145, 12 + (flagUrl ? 21 : 0) + text.length * 5.5);
     const x = Math.min(width - estimatedWidth - 6, Math.max(4, item.x + 1));
