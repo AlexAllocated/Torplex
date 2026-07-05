@@ -11,7 +11,7 @@ const sessionCookie = "plex_batch_session";
 const oauthStateCookie = "plex_oauth_state";
 const sessionMaxAgeSeconds = 7 * 24 * 60 * 60;
 const allowedEmails = new Set(
-  (process.env.AUTH_ALLOWED_EMAILS ?? "alex@hivetech.ai")
+  (process.env.AUTH_ALLOWED_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
@@ -50,7 +50,7 @@ export function appOrigin(url: URL) {
 
 export function authConfig() {
   return {
-    configured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    configured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && allowedEmails.size),
     allowedEmails: [...allowedEmails],
   };
 }

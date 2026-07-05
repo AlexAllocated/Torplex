@@ -3,6 +3,14 @@ import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
+const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
+const plexPreferencesPath =
+  process.env.PLEX_PREFERENCES_PATH ?? "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml";
+const plexMovieSectionId = process.env.PLEX_MOVIE_SECTION_ID ?? "1";
+const plexShowSectionId = process.env.PLEX_SHOW_SECTION_ID ?? "2";
+const mediaChown = process.env.MEDIA_CHOWN ?? "";
+const mediaDirMode = process.env.MEDIA_DIR_MODE ?? "775";
+const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
 
 type ManifestItem = {
   id: string;
@@ -185,23 +193,26 @@ async function organize(item: ManifestItem) {
   }
 
   await rm(staging, { recursive: true, force: true });
-  const chown = Bun.spawnSync(["sudo", "chown", "-R", "alex:plex", dest]);
-  if (chown.exitCode !== 0) throw new Error(`chown failed for ${dest}`);
-  Bun.spawnSync(["find", dest, "-type", "d", "-exec", "chmod", "775", "{}", "+"]);
-  Bun.spawnSync(["find", dest, "-type", "f", "-exec", "chmod", "664", "{}", "+"]);
+  if (mediaChown) {
+    const chown = Bun.spawnSync(["sudo", "chown", "-R", mediaChown, dest]);
+    if (chown.exitCode !== 0) throw new Error(`chown failed for ${dest}`);
+  }
+  if (mediaDirMode) Bun.spawnSync(["find", dest, "-type", "d", "-exec", "chmod", mediaDirMode, "{}", "+"]);
+  if (mediaFileMode) Bun.spawnSync(["find", dest, "-type", "f", "-exec", "chmod", mediaFileMode, "{}", "+"]);
 }
 
 function plexToken() {
-  const pref = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml";
-  const proc = Bun.spawnSync(["sudo", "sed", "-n", 's/.*PlexOnlineToken="\\([^"]*\\)".*/\\1/p', pref]);
+  if (process.env.PLEX_TOKEN) return process.env.PLEX_TOKEN;
+  const proc = Bun.spawnSync(["sudo", "sed", "-n", 's/.*PlexOnlineToken="\\([^"]*\\)".*/\\1/p', plexPreferencesPath]);
   return proc.stdout.toString().trim();
 }
 
 async function scanPlex(section: "movie" | "show") {
   const token = plexToken();
-  const key = section === "movie" ? "1" : "2";
+  const key = section === "movie" ? plexMovieSectionId : plexShowSectionId;
+  if (!key) return;
   if (!token) throw new Error("Could not read Plex token");
-  const url = `http://127.0.0.1:32400/library/sections/${key}/refresh?X-Plex-Token=${encodeURIComponent(token)}`;
+  const url = `${plexUrl}/library/sections/${key}/refresh?X-Plex-Token=${encodeURIComponent(token)}`;
   const proc = Bun.spawnSync(["curl", "-fsS", url]);
   if (proc.exitCode !== 0) throw new Error(`Plex scan failed for section ${key}`);
 }

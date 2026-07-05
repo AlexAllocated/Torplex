@@ -3,7 +3,11 @@ import { mkdir, readdir, rename, writeFile } from "fs/promises";
 import { basename, join } from "path";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
-const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "20.172.155.193").split(",").map((ip) => ip.trim()).filter(Boolean));
+const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
+const mediaRoot = (process.env.MEDIA_ROOT ?? "/media/plex").replace(/\/$/, "");
+const moviesDir = process.env.MOVIES_DIR ?? `${mediaRoot}/Movies`;
+const tvDir = process.env.TV_DIR ?? `${mediaRoot}/TV Shows`;
+const diskUsagePath = process.env.DISK_USAGE_PATH ?? mediaRoot;
 
 type Item = {
   id: string;
@@ -214,13 +218,13 @@ function suggestManifestFields(payloadName: string, filename: string, files: Arr
     .trim();
   const displayTitle = yearMatch && !titleBase.includes(yearMatch[1]) ? `${titleBase} (${yearMatch[1]})` : titleBase;
   const season = seasonMatch ? Number(seasonMatch[1]) : 1;
-  const mediaRoot = isShow ? "TV Shows" : "Movies";
+  const destinationRoot = isShow ? tvDir : moviesDir;
   const title = isShow ? `${displayTitle} S${String(season).padStart(2, "0")}` : displayTitle;
   return {
     id: slugify(title),
     title,
     mediaType: isShow ? "show" : "movie",
-    destinationPath: `/media/plex/${mediaRoot}/${displayTitle || payloadName}`,
+    destinationPath: `${destinationRoot}/${displayTitle || payloadName}`,
     organizeStrategy: isShow ? "mergeRoot" : "moveRoot",
     targetSubdir: isShow ? `Season ${season}` : "",
   };
@@ -286,7 +290,7 @@ function parseProgress(log: string) {
 }
 
 async function diskUsage() {
-  const proc = Bun.spawnSync(["df", "-h", "/media/plex"]);
+  const proc = Bun.spawnSync(["df", "-h", diskUsagePath]);
   const text = proc.stdout.toString().trim();
   const line = text.split(/\r?\n/)[1] ?? "";
   const parts = line.trim().split(/\s+/);
@@ -568,7 +572,10 @@ export async function addTorrentUpload(req: Request) {
   const strategyInput = formString(form, "organizeStrategy", metadata.suggested.organizeStrategy);
   const targetSubdir = formString(form, "targetSubdir", metadata.suggested.targetSubdir);
   if (!id || !title || !destinationPath) throw new Error("Missing required manifest fields");
-  if (!destinationPath.startsWith("/media/plex/")) throw new Error("Destination must be under /media/plex");
+  const allowedRoots = [moviesDir, tvDir].map((path) => path.replace(/\/$/, ""));
+  if (!allowedRoots.some((root) => destinationPath === root || destinationPath.startsWith(`${root}/`))) {
+    throw new Error(`Destination must be under ${moviesDir} or ${tvDir}`);
+  }
   if (manifest.items.some((item) => item.id === id)) throw new Error(`Manifest already has item id ${id}`);
   if (manifest.items.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
 
