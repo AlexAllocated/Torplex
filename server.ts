@@ -1508,7 +1508,9 @@ function drawWorldFrame(now) {
   ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
   ctx.fillStyle = 'rgba(' + vmColor + ', .95)';
-  ctx.fillText('VM', origin.x + vmRadius + 5, origin.y - 7);
+  ctx.textAlign = 'center';
+  ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
+  ctx.textAlign = 'start';
 
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
   swarmMap.displayPeers.forEach((item) => {
