@@ -33,6 +33,24 @@ type State = {
   items?: Record<string, StateItem>;
 };
 
+type Peer = {
+  ip: string;
+  port: string;
+  state: string;
+};
+
+type PeerGeo = Peer & {
+  country?: string;
+  countryCode?: string;
+  region?: string;
+  city?: string;
+  lat?: number;
+  lon?: number;
+  isp?: string;
+  as?: string;
+  lookupStatus: "mapped" | "unmapped";
+};
+
 const byteUnits: Record<string, number> = {
   B: 1,
   KiB: 1024,
@@ -40,6 +58,12 @@ const byteUnits: Record<string, number> = {
   GiB: 1024 ** 3,
   TiB: 1024 ** 4,
 };
+
+const peerGeoCache = new Map<string, { expiresAt: number; value: PeerGeo }>();
+let peerSnapshot: { updatedAt: string; peers: PeerGeo[] } = { updatedAt: new Date(0).toISOString(), peers: [] };
+let lastPeerRefresh = 0;
+const peerRefreshMs = 5_000;
+const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 
 function readJson<T>(path: string, fallback: T): T {
   try {
@@ -102,6 +126,88 @@ async function diskUsage() {
   };
 }
 
+function parseRemoteAddress(value: string): { ip: string; port: string } | null {
+  if (value.startsWith("[")) {
+    const match = value.match(/^\[([^\]]+)\]:(\d+)$/);
+    return match ? { ip: match[1], port: match[2] } : null;
+  }
+  const match = value.match(/^(.+):(\d+)$/);
+  return match ? { ip: match[1], port: match[2] } : null;
+}
+
+function isPublicIp(ip: string) {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return false;
+  const parts = ip.split(".").map(Number);
+  if (parts.some((part) => part < 0 || part > 255)) return false;
+  const [a, b] = parts;
+  return !(
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+function connectedPeers(): Peer[] {
+  const proc = Bun.spawnSync(["ss", "-Htnp"]);
+  const lines = proc.stdout.toString().split(/\r?\n/).filter((line) => line.includes("aria2c"));
+  const peers = new Map<string, Peer>();
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    const state = parts[0] ?? "";
+    const remote = parseRemoteAddress(parts[4] ?? "");
+    if (!remote || !isPublicIp(remote.ip)) continue;
+    peers.set(remote.ip, { ip: remote.ip, port: remote.port, state });
+  }
+  return [...peers.values()].slice(0, 48);
+}
+
+async function lookupPeer(peer: Peer): Promise<PeerGeo> {
+  const cached = peerGeoCache.get(peer.ip);
+  if (cached && cached.expiresAt > Date.now()) return { ...cached.value, port: peer.port, state: peer.state };
+  try {
+    const fields = "status,country,countryCode,regionName,city,lat,lon,isp,as,query";
+    const response = await fetch(`http://ip-api.com/json/${peer.ip}?fields=${fields}`);
+    const data = (await response.json()) as Record<string, unknown>;
+    if (data.status === "success") {
+      const value: PeerGeo = {
+        ...peer,
+        country: String(data.country ?? ""),
+        countryCode: String(data.countryCode ?? ""),
+        region: String(data.regionName ?? ""),
+        city: String(data.city ?? ""),
+        lat: Number(data.lat),
+        lon: Number(data.lon),
+        isp: String(data.isp ?? ""),
+        as: String(data.as ?? ""),
+        lookupStatus: "mapped",
+      };
+      peerGeoCache.set(peer.ip, { expiresAt: Date.now() + peerGeoTtlMs, value });
+      return value;
+    }
+  } catch {
+    // Keep the dashboard live even if the geo service is unavailable.
+  }
+  const value: PeerGeo = { ...peer, lookupStatus: "unmapped" };
+  peerGeoCache.set(peer.ip, { expiresAt: Date.now() + 5 * 60 * 1000, value });
+  return value;
+}
+
+async function swarmPeers() {
+  if (Date.now() - lastPeerRefresh < peerRefreshMs) return peerSnapshot;
+  lastPeerRefresh = Date.now();
+  const peers = connectedPeers();
+  peerSnapshot = {
+    updatedAt: new Date().toISOString(),
+    peers: await Promise.all(peers.map((peer) => lookupPeer(peer))),
+  };
+  return peerSnapshot;
+}
+
 async function listLogs() {
   try {
     return (await readdir(join(root, "logs"))).filter((name) => name.endsWith(".log"));
@@ -154,6 +260,7 @@ async function buildStatus() {
       totalItems: items.length,
     },
     disk: await diskUsage(),
+    swarm: await swarmPeers(),
     items,
     logs: await listLogs(),
     batchLogTail: rawLog.split(/\r?\n/).slice(-80).join("\n"),
@@ -518,6 +625,62 @@ function page() {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .world-panel { padding-bottom: 14px; }
+    .world-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+    #worldCanvas {
+      display: block;
+      width: 100%;
+      height: 330px;
+      margin: 0;
+      border-color: rgba(87, 224, 194, .24);
+      background:
+        radial-gradient(circle at 50% 50%, rgba(87, 224, 194, .12), transparent 50%),
+        linear-gradient(180deg, rgba(10, 18, 28, .96), rgba(7, 11, 17, .96));
+    }
+    .peer-pills {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      max-height: 330px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .peer-card {
+      display: grid;
+      gap: 3px;
+      padding: 10px;
+      border: 1px solid rgba(150, 167, 190, .20);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .035);
+      box-shadow: inset 0 0 18px rgba(255, 255, 255, .025);
+    }
+    .peer-card strong {
+      color: #d9fff6;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .peer-card span {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .peer-empty {
+      display: grid;
+      place-items: center;
+      min-height: 120px;
+      color: var(--muted);
+      border: 1px dashed rgba(150, 167, 190, .24);
+      border-radius: 8px;
+      font-size: 13px;
+      text-align: center;
+      padding: 14px;
+    }
     .item {
       position: relative;
       display: grid;
@@ -634,6 +797,7 @@ function page() {
     }
     @media (max-width: 980px) {
       .dashboard { grid-template-columns: 1fr; }
+      .world-shell { grid-template-columns: 1fr; }
       .item { grid-template-columns: 1fr; }
       .title div:first-child { white-space: normal; }
     }
@@ -696,12 +860,15 @@ function page() {
     </div>
   </section>
 
-  <section class="transfer-map">
+  <section class="transfer-map world-panel">
     <div class="map-title">
-      <div class="label">Transfer Route</div>
-      <div class="small" id="routeStatus">Plotting course...</div>
+      <div class="label">Swarm Atlas</div>
+      <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
     </div>
-    <div id="transferMap" class="map-track" style="--count: 1;"></div>
+    <div class="world-shell">
+      <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+      <div id="peerPills" class="peer-pills"></div>
+    </div>
   </section>
 
   <section>
@@ -736,6 +903,24 @@ const warp = {
   height: 0,
   dpr: 1,
 };
+const swarmMap = {
+  peers: [],
+  displayPeers: [],
+  raf: 0,
+  lastFrame: 0,
+  origin: { lat: 39, lon: -98 },
+};
+const landShapes = [
+  [[-168, 72], [-140, 70], [-124, 58], [-118, 48], [-99, 48], [-82, 42], [-66, 46], [-56, 54], [-78, 70], [-116, 74]],
+  [[-124, 49], [-111, 32], [-96, 23], [-84, 15], [-78, 8], [-81, -2], [-68, -16], [-62, -36], [-72, -54], [-55, -52], [-42, -22], [-52, 5], [-76, 21], [-86, 30], [-102, 32]],
+  [[-18, 35], [7, 44], [34, 38], [50, 28], [45, 12], [36, -2], [32, -28], [20, -35], [10, -30], [0, -8], [-13, 4], [-18, 18]],
+  [[-10, 58], [2, 70], [22, 66], [32, 58], [24, 45], [8, 42], [-6, 49]],
+  [[28, 70], [65, 72], [96, 62], [128, 58], [150, 48], [140, 30], [112, 22], [98, 8], [80, 18], [68, 8], [48, 28], [32, 36], [22, 54]],
+  [[66, 24], [78, 30], [90, 24], [88, 8], [78, 6], [68, 16]],
+  [[96, 6], [122, 14], [142, 2], [132, -9], [112, -8]],
+  [[112, -11], [154, -10], [154, -33], [136, -42], [116, -34], [108, -22]],
+  [[-52, 74], [-28, 72], [-20, 62], [-44, 60]]
+];
 const completedSeen = new Set();
 const tweens = new Map();
 const elementTweens = new WeakMap();
@@ -843,19 +1028,175 @@ function shortTitle(title) {
     .slice(0, 3) || '...';
 }
 
-function renderTransferMap(items, totals) {
-  const map = document.getElementById('transferMap');
+function renderSwarmMap(swarm) {
   const routeStatus = document.getElementById('routeStatus');
-  map.style.setProperty('--count', Math.max(1, items.length));
-  routeStatus.textContent = totals.completedItems + '/' + totals.totalItems + ' complete - ' + totals.percent + '% of payload';
-  map.innerHTML = items.map((item, index) => {
-    const statusClass = statusClassFor(item.status);
-    const label = shortTitle(item.title);
-    return '<div class="map-node ' + statusClass + '" title="' + esc(item.title) + '">' +
-      '<div class="map-dot">' + esc(String(index + 1)) + '</div>' +
-      '<div class="map-label">' + esc(label) + '</div>' +
-    '</div>';
-  }).join('');
+  const peerPills = document.getElementById('peerPills');
+  const peers = Array.isArray(swarm?.peers) ? swarm.peers : [];
+  const mapped = peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon));
+  swarmMap.peers = peers;
+  routeStatus.textContent = peers.length
+    ? mapped.length + '/' + peers.length + ' mapped - raw IPs visible - refreshed ' + new Date(swarm.updatedAt).toLocaleTimeString()
+    : 'No connected aria2c peers visible yet';
+  peerPills.innerHTML = peers.length
+    ? peers.map((peer) => {
+      const place = [peer.city, peer.region, peer.countryCode || peer.country].filter(Boolean).join(', ') || 'Unmapped';
+      const network = peer.as || peer.isp || 'Network unknown';
+      return '<div class="peer-card">' +
+        '<strong>' + esc(peer.ip + ':' + peer.port) + '</strong>' +
+        '<span>' + esc(place) + '</span>' +
+        '<span>' + esc(network) + '</span>' +
+      '</div>';
+    }).join('')
+    : '<div class="peer-empty">No active peer sockets yet. The map will light up once aria2c has established connections.</div>';
+  if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+}
+
+function projectWorld(lat, lon, width, height) {
+  return {
+    x: ((lon + 180) / 360) * width,
+    y: ((90 - lat) / 180) * height,
+  };
+}
+
+function syncDisplayPeers(peers) {
+  const now = performance.now();
+  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer?.ip, peer]));
+  const next = [];
+  peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).forEach((peer, index) => {
+    const current = existing.get(peer.ip) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
+    current.peer = peer;
+    current.targetLat = Number(peer.lat);
+    current.targetLon = Number(peer.lon);
+    current.lastSeen = now;
+    current.rank = index;
+    current.fading = false;
+    next.push(current);
+  });
+  existing.forEach((peer, ip) => {
+    if (ip && !next.some((item) => item.peer?.ip === ip)) {
+      peer.fading = true;
+      next.push(peer);
+    }
+  });
+  swarmMap.displayPeers = next.slice(0, 40);
+}
+
+function drawWorldFrame(now) {
+  swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+  const canvas = document.getElementById('worldCanvas');
+  if (!canvas) return;
+  syncDisplayPeers(swarmMap.peers);
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
+  const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const ctx = canvas.getContext('2d');
+  const dt = swarmMap.lastFrame ? Math.min(80, now - swarmMap.lastFrame) : 16;
+  swarmMap.lastFrame = now;
+  const width = rect.width;
+  const height = rect.height;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const sea = ctx.createLinearGradient(0, 0, 0, height);
+  sea.addColorStop(0, 'rgba(15, 30, 45, .88)');
+  sea.addColorStop(1, 'rgba(7, 12, 19, .94)');
+  ctx.fillStyle = sea;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = 'rgba(150, 167, 190, .13)';
+  ctx.lineWidth = 1;
+  for (let lon = -150; lon <= 150; lon += 30) {
+    const x = projectWorld(0, lon, width, height).x;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let lat = -60; lat <= 60; lat += 30) {
+    const y = projectWorld(lat, 0, width, height).y;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  landShapes.forEach((shape) => {
+    ctx.beginPath();
+    shape.forEach(([lon, lat], index) => {
+      const point = projectWorld(lat, lon, width, height);
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(87, 224, 194, .105)';
+    ctx.strokeStyle = 'rgba(87, 224, 194, .22)';
+    ctx.lineWidth = 1;
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
+  ctx.fillStyle = '#f7c65f';
+  ctx.beginPath();
+  ctx.arc(origin.x, origin.y, 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  ctx.fillStyle = 'rgba(247, 198, 95, .92)';
+  ctx.fillText('VM', origin.x + 8, origin.y - 7);
+
+  const pulse = .55 + Math.sin(now / 360) * .45;
+  swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
+  swarmMap.displayPeers.forEach((item) => {
+    const target = projectWorld(item.targetLat, item.targetLon, width, height);
+    if (!item.x && !item.y) {
+      item.x = target.x;
+      item.y = target.y;
+    }
+    item.x += (target.x - item.x) * (1 - Math.exp(-dt / 450));
+    item.y += (target.y - item.y) * (1 - Math.exp(-dt / 450));
+    item.alpha += ((item.fading ? 0 : 1) - item.alpha) * (1 - Math.exp(-dt / 360));
+    const alpha = Math.max(0, Math.min(1, item.alpha));
+    const hue = 166 + (item.rank % 9) * 12;
+
+    ctx.beginPath();
+    ctx.moveTo(origin.x, origin.y);
+    const midX = (origin.x + item.x) / 2;
+    const midY = (origin.y + item.y) / 2 - Math.min(80, Math.abs(origin.x - item.x) * .12);
+    ctx.quadraticCurveTo(midX, midY, item.x, item.y);
+    ctx.strokeStyle = 'hsla(' + hue + ', 86%, 66%, ' + (.14 * alpha) + ')';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, 6 + pulse * 8, 0, Math.PI * 2);
+    ctx.fillStyle = 'hsla(' + hue + ', 92%, 68%, ' + (.075 * alpha) + ')';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(item.x, item.y, 3.6 + pulse * 1.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'hsla(' + hue + ', 92%, 70%, ' + (.95 * alpha) + ')';
+    ctx.shadowColor = 'hsla(' + hue + ', 92%, 68%, ' + (.75 * alpha) + ')';
+    ctx.shadowBlur = 14;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (item.rank < 12) {
+      const label = item.peer.ip;
+      ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      const metrics = ctx.measureText(label);
+      const labelX = Math.min(width - metrics.width - 12, Math.max(6, item.x + 8));
+      const labelY = Math.min(height - 8, Math.max(12, item.y - 8));
+      ctx.fillStyle = 'rgba(5, 10, 16, ' + (.72 * alpha) + ')';
+      ctx.fillRect(labelX - 4, labelY - 10, metrics.width + 8, 14);
+      ctx.fillStyle = 'rgba(231, 237, 245, ' + (.92 * alpha) + ')';
+      ctx.fillText(label, labelX, labelY);
+    }
+  });
 }
 
 function renderItems(items) {
@@ -1167,7 +1508,7 @@ function render(data) {
   renderedOnce = true;
 
   renderItems(data.items);
-  renderTransferMap(data.items, data.totals);
+  renderSwarmMap(data.swarm);
   document.getElementById('log').textContent = data.batchLogTail || '';
 }
 async function refreshFallback() {
