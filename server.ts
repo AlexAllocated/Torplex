@@ -864,7 +864,14 @@ function page() {
       line-height: 1.2;
       white-space: nowrap;
       transform: translate(8px, -14px);
-      transition: opacity .24s ease;
+      pointer-events: auto;
+      transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+    }
+    .map-peer-label:hover {
+      max-width: min(360px, 72vw);
+      border-color: rgba(87, 224, 194, .42);
+      background: rgba(5, 10, 16, .90);
+      box-shadow: 0 0 24px rgba(87, 224, 194, .18);
     }
     .map-peer-label img {
       position: static;
@@ -883,6 +890,13 @@ function page() {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .map-peer-detail {
+      display: none;
+      color: rgba(231, 237, 245, .72);
+    }
+    .map-peer-label:hover .map-peer-detail {
+      display: inline;
     }
     .map-progress-widget {
       position: absolute;
@@ -1570,14 +1584,20 @@ function renderMapPeerLabels(width, height) {
       img.loading = 'lazy';
       img.decoding = 'async';
       const text = document.createElement('span');
-      node.append(img, text);
+      text.className = 'map-peer-speed';
+      const detail = document.createElement('span');
+      detail.className = 'map-peer-detail';
+      node.append(img, text, detail);
       layer.appendChild(node);
       swarmMap.labelNodes.set(key, node);
     }
-    const text = item.peer.ip + ' ' + formatPeerRate(item.peer.receiveRateBps);
+    const text = formatPeerRate(item.peer.receiveRateBps);
+    const country = item.peer.country || item.peer.countryCode || 'Unknown country';
+    const detailText = country + ' - ' + item.peer.ip + ':' + item.peer.port;
     const flagUrl = flagUrlForCountry(item.peer.countryCode);
     const img = node.querySelector('img');
-    const span = node.querySelector('span');
+    const span = node.querySelector('.map-peer-speed');
+    const detail = node.querySelector('.map-peer-detail');
     if (img) {
       img.hidden = !flagUrl;
       if (flagUrl && img.src !== flagUrl) {
@@ -1586,7 +1606,9 @@ function renderMapPeerLabels(width, height) {
       }
     }
     if (span) span.textContent = text;
-    const estimatedWidth = Math.min(220, 16 + (flagUrl ? 25 : 0) + text.length * 6);
+    if (detail) detail.textContent = detailText;
+    node.title = country + ' - ' + item.peer.ip + ':' + item.peer.port + ' - ' + text;
+    const estimatedWidth = Math.min(170, 16 + (flagUrl ? 25 : 0) + text.length * 6);
     const x = Math.min(width - estimatedWidth - 8, Math.max(6, item.x + 8));
     const y = Math.min(height - 18, Math.max(10, item.y - 14));
     node.style.left = x.toFixed(1) + 'px';
