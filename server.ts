@@ -791,6 +791,9 @@ function page() {
       background: rgba(7, 16, 26, .72);
       backdrop-filter: blur(10px);
     }
+    .world-map-frame .exit-fullscreen-icon { display: none; }
+    .world-map-frame:fullscreen .enter-fullscreen-icon { display: none; }
+    .world-map-frame:fullscreen .exit-fullscreen-icon { display: block; }
     .world-map-layer {
       position: absolute;
       inset: 0;
@@ -1068,8 +1071,11 @@ function page() {
     <div class="world-shell">
       <div class="world-map-frame">
         <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="enter-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+          </svg>
+          <svg class="exit-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
           </svg>
         </button>
         <div id="worldMapLayer" class="world-map-layer">
@@ -1463,14 +1469,12 @@ function drawWorldFrame(now) {
     const midX = (origin.x + item.x) / 2;
     const midY = (origin.y + item.y) / 2 - Math.min(80, Math.abs(origin.x - item.x) * .12);
     const control = { x: midX, y: midY };
-    if (item.peer.active || item.peer.probing) {
+    if (item.peer.active) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = item.peer.active
-        ? 'rgba(191, 255, 0, ' + (.42 * alpha) + ')'
-        : 'rgba(247, 198, 95, ' + (.12 * alpha) + ')';
-      ctx.lineWidth = item.peer.active ? 1.8 : 1;
+      ctx.strokeStyle = 'rgba(191, 255, 0, ' + (.42 * alpha) + ')';
+      ctx.lineWidth = 1.8;
       ctx.stroke();
     }
 
