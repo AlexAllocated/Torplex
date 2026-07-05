@@ -715,7 +715,7 @@ function renderItems(items) {
     if (marker) {
       marker.hidden = item.status === 'completed';
       marker.className = item.status === 'completed' ? 'torrent-marker' : 'torrent-marker shape-' + visual.shape;
-      if (item.status === 'active' || item.status === 'organizing') marker.style.setProperty('--torrent-color', 'var(--teal)');
+      if (item.status === 'active' || item.status === 'organizing') marker.style.setProperty('--torrent-color', '#bfff00');
       else if (item.status === 'failed') marker.style.setProperty('--torrent-color', 'var(--rose)');
       else if (item.status !== 'completed') marker.style.setProperty('--torrent-color', 'var(--amber)');
       else marker.style.removeProperty('--torrent-color');
