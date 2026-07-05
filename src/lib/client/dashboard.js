@@ -345,12 +345,67 @@ function heatColor(bytesPerSecond) {
   return mixColor(stops[index], stops[index + 1], scaled - index).join(', ');
 }
 
+function hashString(value) {
+  let hash = 2166136261;
+  for (let i = 0; i < String(value).length; i += 1) {
+    hash ^= String(value).charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function itemVisual(itemId) {
+  const palette = [
+    '87, 224, 194',
+    '247, 198, 95',
+    '244, 112, 134',
+    '120, 166, 255',
+    '191, 255, 0',
+    '255, 140, 0',
+    '176, 132, 255',
+    '64, 221, 255',
+  ];
+  const shapes = ['circle', 'diamond', 'square', 'triangle'];
+  const hash = hashString(itemId || 'unknown');
+  return {
+    rgb: palette[hash % palette.length],
+    shape: shapes[Math.floor(hash / palette.length) % shapes.length],
+  };
+}
+
+function drawPacketShape(ctx, shape, x, y, radius) {
+  ctx.beginPath();
+  if (shape === 'square') {
+    ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+  } else if (shape === 'diamond') {
+    ctx.moveTo(x, y - radius * 1.35);
+    ctx.lineTo(x + radius * 1.35, y);
+    ctx.lineTo(x, y + radius * 1.35);
+    ctx.lineTo(x - radius * 1.35, y);
+    ctx.closePath();
+  } else if (shape === 'triangle') {
+    ctx.moveTo(x, y - radius * 1.35);
+    ctx.lineTo(x + radius * 1.25, y + radius);
+    ctx.lineTo(x - radius * 1.25, y + radius);
+    ctx.closePath();
+  } else {
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+  }
+}
+
+function streamSpeedFactor(bytesPerSecond) {
+  const targetFastBps = 10 * 1024 * 1024;
+  const t = Math.max(0, Math.min(1, (Number(bytesPerSecond) || 0) / targetFastBps));
+  return .55 + Math.pow(t, .65) * 3.5;
+}
+
 function syncDisplayPeers(peers) {
   const now = performance.now();
-  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer ? peer.peer.ip + ':' + peer.peer.port : '', peer]));
+  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer ? peer.peerKey : '', peer]));
   const next = [];
   peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).forEach((peer, index) => {
-    const key = peer.ip + ':' + peer.port;
+    peer.peerKey = (peer.itemId || peer.pid || 'unknown') + ':' + peer.ip + ':' + peer.port;
+    const key = peer.peerKey;
     const current = existing.get(key) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
     current.peer = peer;
     current.targetLat = Number(peer.lat);
@@ -361,7 +416,7 @@ function syncDisplayPeers(peers) {
     next.push(current);
   });
   existing.forEach((peer, ip) => {
-    if (ip && !next.some((item) => item.peer && item.peer.ip + ':' + item.peer.port === ip)) {
+    if (ip && !next.some((item) => item.peer && item.peer.peerKey === ip)) {
       peer.fading = true;
       next.push(peer);
     }
@@ -384,7 +439,7 @@ function renderMapPeerLabels(width, height) {
     rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
   );
   visible.forEach((item) => {
-    const key = item.peer.ip + ':' + item.peer.port;
+    const key = item.peer.peerKey || item.peer.ip + ':' + item.peer.port;
     seen.add(key);
     let node = swarmMap.labelNodes.get(key);
     if (!node) {
@@ -558,6 +613,8 @@ function drawWorldFrame(now) {
     const hue = 166 + (item.rank % 9) * 12;
     const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
     const activeColor = heatColor(item.peer.receiveRateBps);
+    const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
+    const streamColor = item.peer.itemId ? visual.rgb : activeColor;
 
     const start = { x: origin.x, y: origin.y };
     const screen = cameraPoint({ x: item.x, y: item.y });
@@ -569,9 +626,9 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.62 * alpha) + ')';
+      ctx.strokeStyle = 'rgba(' + streamColor + ', ' + (.62 * alpha) + ')';
       ctx.lineWidth = 2.2;
-      ctx.shadowColor = 'rgba(' + activeColor + ', .36)';
+      ctx.shadowColor = 'rgba(' + streamColor + ', .36)';
       ctx.shadowBlur = 7;
       ctx.stroke();
       ctx.shadowBlur = 0;
@@ -579,7 +636,7 @@ function drawWorldFrame(now) {
 
     const rateBps = Number(item.peer.receiveRateBps) || 0;
     if (item.peer.active && Math.round(rateBps) > 0) {
-      const speedFactor = Math.max(.55, Math.min(4.5, Math.log2(rateBps / 32768 + 1)));
+      const speedFactor = streamSpeedFactor(rateBps);
       const packetCount = Math.max(2, Math.min(8, Math.round(2 + speedFactor * 1.35)));
       for (let i = 0; i < packetCount; i += 1) {
         const travel = ((now / (1550 / speedFactor)) + i / packetCount + item.phase) % 1;
@@ -590,15 +647,14 @@ function drawWorldFrame(now) {
         ctx.beginPath();
         ctx.moveTo(tail.x, tail.y);
         ctx.lineTo(head.x, head.y);
-        ctx.strokeStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
+        ctx.strokeStyle = 'rgba(' + streamColor + ', ' + packetAlpha + ')';
         ctx.lineWidth = 5;
-        ctx.shadowColor = 'rgba(' + activeColor + ', .88)';
+        ctx.shadowColor = 'rgba(' + streamColor + ', .88)';
         ctx.shadowBlur = 15;
         ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, 3.7, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
+        drawPacketShape(ctx, visual.shape, head.x, head.y, 3.7);
+        ctx.fillStyle = 'rgba(' + streamColor + ', ' + packetAlpha + ')';
         ctx.fill();
       }
     }
@@ -645,7 +701,7 @@ function renderItems(items) {
       row = document.createElement('article');
       row.id = rowId;
       row.innerHTML =
-        '<div class="title"><div data-role="title"></div><div class="mono" data-role="size"></div></div>' +
+        '<div class="title"><div class="title-line"><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
         '<div><span data-role="status" class="chip"></span></div>' +
         '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
         '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
@@ -658,6 +714,10 @@ function renderItems(items) {
     row.className = 'item ' + statusClass;
     setText(row.querySelector('[data-role="title"]'), item.title);
     setText(row.querySelector('[data-role="size"]'), fmt(item.totalBytes));
+    const visual = itemVisual(item.id);
+    const marker = row.querySelector('[data-role="torrent-marker"]');
+    marker.className = 'torrent-marker shape-' + visual.shape;
+    marker.style.setProperty('--torrent-color', 'rgb(' + visual.rgb + ')');
 
     const chip = row.querySelector('[data-role="status"]');
     chip.className = 'chip ' + statusClass;

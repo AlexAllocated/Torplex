@@ -54,6 +54,8 @@ type Peer = {
   ip: string;
   port: string;
   state: string;
+  pid?: string;
+  itemId?: string;
   bytesReceived?: number;
 };
 
@@ -553,7 +555,24 @@ function isPublicIp(ip: string) {
   );
 }
 
+function aria2ProcessItems() {
+  const proc = Bun.spawnSync(["ps", "-eo", "pid=,args="]);
+  const processes = new Map<string, string>();
+  for (const line of proc.stdout.toString().split(/\r?\n/)) {
+    if (!line.includes("aria2c") || !line.includes("/staging/")) continue;
+    const pid = line.trim().match(/^(\d+)/)?.[1];
+    const itemId = line.match(/\/staging\/([^/\s]+)/)?.[1];
+    if (pid && itemId) processes.set(pid, itemId);
+  }
+  return processes;
+}
+
+function peerKey(peer: Pick<Peer, "ip" | "port" | "pid" | "itemId">) {
+  return `${peer.itemId || peer.pid || "unknown"}:${peer.ip}:${peer.port}`;
+}
+
 function connectedPeers(): Peer[] {
+  const processes = aria2ProcessItems();
   const proc = Bun.spawnSync(["ss", "-Htinp"]);
   const lines = proc.stdout.toString().split(/\r?\n/);
   const peers = new Map<string, Peer>();
@@ -574,14 +593,15 @@ function connectedPeers(): Peer[] {
     const remote = parseRemoteAddress(parts[4] ?? "");
     if (!remote || !isPublicIp(remote.ip)) continue;
     if (ignoredPeerIps.has(remote.ip)) continue;
-    current = { ip: remote.ip, port: remote.port, state };
-    peers.set(`${remote.ip}:${remote.port}`, current);
+    const pid = line.match(/\bpid=(\d+)/)?.[1];
+    current = { ip: remote.ip, port: remote.port, state, ...(pid ? { pid, itemId: processes.get(pid) } : {}) };
+    peers.set(peerKey(current), current);
   }
   return [...peers.values()].slice(0, 48);
 }
 
 function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
-  const previous = peerHistory.get(`${peer.ip}:${peer.port}`);
+  const previous = peerHistory.get(peerKey(peer));
   const active = peer.state === "ESTAB";
   const probing = !active && peer.state !== "";
   const previousBytes = previous?.bytesReceived;
@@ -640,9 +660,9 @@ async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
   lastPeerRefresh = Date.now();
   const nowMs = Date.now();
   const peers = connectedPeers();
-  const activeKeys = new Set(peers.map((peer) => `${peer.ip}:${peer.port}`));
+  const activeKeys = new Set(peers.map(peerKey));
   for (const peer of await Promise.all(peers.map((peer) => lookupPeer(peer)))) {
-    peerHistory.set(`${peer.ip}:${peer.port}`, markPeerActivity(peer, nowMs));
+    peerHistory.set(peerKey(peer), markPeerActivity(peer, nowMs));
   }
 
   for (const [key, peer] of peerHistory) {
