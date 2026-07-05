@@ -883,7 +883,6 @@ function page() {
       filter: none;
       mix-blend-mode: normal;
       border-radius: 2px;
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, .18);
       object-fit: cover;
     }
     .map-peer-label span {
