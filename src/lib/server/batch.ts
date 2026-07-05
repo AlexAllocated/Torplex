@@ -340,7 +340,12 @@ async function fetchExternalSource(inputUrl: URL) {
     await assertFetchableSourceUrl(url);
     const response = await fetch(url, {
       redirect: "manual",
-      headers: { "user-agent": "Torplex/1.0" },
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36 Torplex/1.0",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/x-bittorrent,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+      },
       signal: AbortSignal.timeout(15_000),
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -352,6 +357,13 @@ async function fetchExternalSource(inputUrl: URL) {
     return { url, response };
   }
   throw new Error("URL redirected too many times");
+}
+
+function sourceHttpError(response: Response) {
+  if (response.headers.get("cf-mitigated") === "challenge") {
+    return `URL returned HTTP ${response.status}: the site is presenting a Cloudflare browser challenge to this server. Open it in a browser and paste the magnet link or upload the .torrent file.`;
+  }
+  return `URL returned HTTP ${response.status}`;
 }
 
 function looksLikeTorrentResponse(url: URL, response: Response) {
@@ -386,7 +398,7 @@ async function resolveSourceUrl(sourceUrl: string) {
 
   const fetched = await fetchExternalSource(inputUrl);
   const { url, response } = fetched;
-  if (!response.ok) throw new Error(`URL returned HTTP ${response.status}`);
+  if (!response.ok) throw new Error(sourceHttpError(response));
 
   if (looksLikeTorrentResponse(url, response)) {
     const bytes = await limitedResponseBytes(response, maxTorrentBytes, "Torrent file is too large");
@@ -405,7 +417,7 @@ async function resolveSourceUrl(sourceUrl: string) {
   if (extracted.magnetUri) return { kind: "magnet" as const, magnetUri: extracted.magnetUri, sourceUrl, resolvedUrl: url.href };
 
   const torrent = await fetchExternalSource(extracted.torrentUrl);
-  if (!torrent.response.ok) throw new Error(`Torrent link returned HTTP ${torrent.response.status}`);
+  if (!torrent.response.ok) throw new Error(sourceHttpError(torrent.response).replace("URL returned", "Torrent link returned"));
   const bytes = await limitedResponseBytes(torrent.response, maxTorrentBytes, "Torrent file is too large");
   if (!bytes.length) throw new Error("Torrent file is empty");
   return {

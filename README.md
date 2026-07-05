@@ -238,3 +238,4 @@ bun run build
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.
 - **No peer map data:** make sure `ss` is installed and `aria2c` is running on the same host as the web app.
 - **Downloads do not start after upload:** make sure `run-batch.ts` is running and watching the same `BATCH_DIR` as the web app.
+- **Pasted page URL returns a Cloudflare challenge:** open the page in a browser and paste its magnet link, or download and upload the `.torrent` file. Torplex does not bypass browser challenges.
