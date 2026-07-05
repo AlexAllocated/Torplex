@@ -401,7 +401,7 @@ while (true) {
   for (const item of manifest.items) {
     if (running.has(item.id)) continue;
     const status = state.items[item.id]?.status;
-    if (status === "completed" || status === "failed" || status === "organizing") continue;
+    if (status === "completed" || status === "failed") continue;
     completionLogged = false;
     startItem(item);
   }
