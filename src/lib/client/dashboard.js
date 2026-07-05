@@ -764,7 +764,7 @@ function renderItems(items) {
       row = document.createElement('article');
       row.id = rowId;
       row.innerHTML = rowMarkup;
-    } else if (!row.querySelector('[data-role="torrent-marker"]')) {
+    } else if (item.status !== 'completed' && !row.querySelector('[data-role="torrent-marker"]')) {
       row.innerHTML = rowMarkup;
     }
     container.appendChild(row);
@@ -777,10 +777,12 @@ function renderItems(items) {
     const visual = itemVisual(item.id);
     const marker = row.querySelector('[data-role="torrent-marker"]');
     if (marker) {
-      marker.hidden = item.status === 'completed';
-      marker.className = item.status === 'completed' ? 'torrent-marker' : 'torrent-marker shape-' + visual.shape;
-      if (item.status !== 'completed') marker.style.setProperty('--torrent-color', visual.color);
-      else marker.style.removeProperty('--torrent-color');
+      if (item.status === 'completed') {
+        marker.remove();
+      } else {
+        marker.className = 'torrent-marker shape-' + visual.shape;
+        marker.style.setProperty('--torrent-color', visual.color);
+      }
     }
 
     const chip = row.querySelector('[data-role="status"]');
