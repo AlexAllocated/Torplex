@@ -783,6 +783,14 @@ function page() {
       background: #07101a;
     }
     .world-map-frame:active { cursor: grabbing; }
+    .world-map-frame .icon-button {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 3;
+      background: rgba(7, 16, 26, .72);
+      backdrop-filter: blur(10px);
+    }
     .world-map-layer {
       position: absolute;
       inset: 0;
@@ -1055,17 +1063,15 @@ function page() {
   <section class="transfer-map world-panel">
     <div class="map-title">
       <div class="label">Swarm Atlas</div>
-      <div class="map-actions">
-        <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+      <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+    </div>
+    <div class="world-shell">
+      <div class="world-map-frame">
         <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
           </svg>
         </button>
-      </div>
-    </div>
-    <div class="world-shell">
-      <div class="world-map-frame">
         <div id="worldMapLayer" class="world-map-layer">
           <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
           <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
@@ -1531,7 +1537,12 @@ function drawWorldFrame(now) {
 function renderItems(items) {
   const container = document.getElementById('items');
   const seen = new Set();
-  items.forEach((item) => {
+  const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
+  const orderedItems = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => (priority[a.item.status] ?? 1) - (priority[b.item.status] ?? 1) || a.index - b.index)
+    .map((entry) => entry.item);
+  orderedItems.forEach((item) => {
     const rowId = rowIdFor(item.id);
     seen.add(rowId);
     let row = document.getElementById(rowId);
