@@ -396,17 +396,22 @@ function drawPacketShape(ctx, shape, x, y, radius) {
 function streamSpeedFactor(bytesPerSecond) {
   const targetFastBps = 10 * 1024 * 1024;
   const t = Math.max(0, Math.min(1, (Number(bytesPerSecond) || 0) / targetFastBps));
-  return .55 + Math.pow(t, .65) * 3.5;
+  return .18 + Math.pow(t, .9) * 1.65;
 }
 
 function syncDisplayPeers(peers) {
   const now = performance.now();
-  const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer ? peer.peerKey : '', peer]));
+  const existing = new Map(swarmMap.displayPeers
+    .map((item) => [item.peerKey || item.peer?.peerKey || '', item])
+    .filter(([key]) => key));
   const next = [];
+  const nextKeys = new Set();
   peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).forEach((peer, index) => {
     peer.peerKey = (peer.itemId || peer.pid || 'unknown') + ':' + peer.ip + ':' + peer.port;
     const key = peer.peerKey;
+    nextKeys.add(key);
     const current = existing.get(key) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
+    current.peerKey = key;
     current.peer = peer;
     current.targetLat = Number(peer.lat);
     current.targetLon = Number(peer.lon);
@@ -415,8 +420,8 @@ function syncDisplayPeers(peers) {
     current.fading = false;
     next.push(current);
   });
-  existing.forEach((peer, ip) => {
-    if (ip && !next.some((item) => item.peer && item.peer.peerKey === ip)) {
+  existing.forEach((peer, key) => {
+    if (key && !nextKeys.has(key)) {
       peer.fading = true;
       next.push(peer);
     }
@@ -626,10 +631,10 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + streamColor + ', ' + (.62 * alpha) + ')';
-      ctx.lineWidth = 2.2;
-      ctx.shadowColor = 'rgba(' + streamColor + ', .36)';
-      ctx.shadowBlur = 7;
+      ctx.strokeStyle = 'rgba(' + streamColor + ', ' + (.88 * alpha) + ')';
+      ctx.lineWidth = 3.1;
+      ctx.shadowColor = 'rgba(' + streamColor + ', .58)';
+      ctx.shadowBlur = 12;
       ctx.stroke();
       ctx.shadowBlur = 0;
     }
@@ -637,9 +642,9 @@ function drawWorldFrame(now) {
     const rateBps = Number(item.peer.receiveRateBps) || 0;
     if (item.peer.active && Math.round(rateBps) > 0) {
       const speedFactor = streamSpeedFactor(rateBps);
-      const packetCount = Math.max(2, Math.min(8, Math.round(2 + speedFactor * 1.35)));
+      const packetCount = Math.max(2, Math.min(6, Math.round(1.5 + speedFactor * 1.2)));
       for (let i = 0; i < packetCount; i += 1) {
-        const travel = ((now / (1550 / speedFactor)) + i / packetCount + item.phase) % 1;
+        const travel = ((now / (3600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
         const head = quadPoint(start, control, end, t);
         const tail = quadPoint(start, control, end, Math.min(1, t + .03 + speedFactor * .006));
@@ -664,7 +669,7 @@ function drawWorldFrame(now) {
     const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
     ctx.arc(screen.x, screen.y, outerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
-      ? 'rgba(' + activeColor + ', ' + (.075 * alpha) + ')'
+      ? 'rgba(' + activeColor + ', ' + (.17 * alpha) + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.06 * alpha) + ')'
         : 'rgba(247, 198, 95, ' + (.05 * alpha) + ')';
@@ -673,7 +678,7 @@ function drawWorldFrame(now) {
     const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
     ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
-      ? 'rgba(' + activeColor + ', ' + (.95 * alpha) + ')'
+      ? 'rgba(' + activeColor + ', ' + alpha + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.88 * alpha) + ')'
         : 'rgba(247, 198, 95, ' + (.78 * alpha) + ')';
@@ -689,6 +694,12 @@ function renderItems(items) {
   const container = document.getElementById('items');
   const seen = new Set();
   const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
+  const rowMarkup =
+    '<div class="title"><div class="title-line"><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
+    '<div><span data-role="status" class="chip"></span></div>' +
+    '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
+    '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
+    '<div><div class="label">ETA</div><div data-role="eta"></div></div>';
   const orderedItems = items
     .map((item, index) => ({ item, index }))
     .sort((a, b) => (priority[a.item.status] ?? 1) - (priority[b.item.status] ?? 1) || a.index - b.index)
@@ -700,12 +711,9 @@ function renderItems(items) {
     if (!row) {
       row = document.createElement('article');
       row.id = rowId;
-      row.innerHTML =
-        '<div class="title"><div class="title-line"><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
-        '<div><span data-role="status" class="chip"></span></div>' +
-        '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
-        '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
-        '<div><div class="label">ETA</div><div data-role="eta"></div></div>';
+      row.innerHTML = rowMarkup;
+    } else if (!row.querySelector('[data-role="torrent-marker"]')) {
+      row.innerHTML = rowMarkup;
     }
     container.appendChild(row);
 
@@ -716,8 +724,12 @@ function renderItems(items) {
     setText(row.querySelector('[data-role="size"]'), fmt(item.totalBytes));
     const visual = itemVisual(item.id);
     const marker = row.querySelector('[data-role="torrent-marker"]');
-    marker.className = 'torrent-marker shape-' + visual.shape;
-    marker.style.setProperty('--torrent-color', 'rgb(' + visual.rgb + ')');
+    if (marker) {
+      marker.hidden = item.status === 'completed';
+      marker.className = item.status === 'completed' ? 'torrent-marker' : 'torrent-marker shape-' + visual.shape;
+      if (item.status !== 'completed') marker.style.setProperty('--torrent-color', 'rgb(' + visual.rgb + ')');
+      else marker.style.removeProperty('--torrent-color');
+    }
 
     const chip = row.querySelector('[data-role="status"]');
     chip.className = 'chip ' + statusClass;
