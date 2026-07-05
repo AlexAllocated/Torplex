@@ -1153,7 +1153,7 @@ function page() {
           </button>
           <div class="map-progress-widget">
             <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
-            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span><span id="mapTorrentSeeds">SD 0</span></div>
+            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span><span id="mapTorrentSeeds">SD 0 / CN 0</span></div>
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
           </div>
           <div id="worldMapLayer" class="world-map-layer">
@@ -1557,7 +1557,8 @@ function drawWorldFrame(now) {
   );
   const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   const vmPulse = pulseForSpeed(now, totalIngestBps);
-  const vmColor = '191, 255, 0';
+  const vmColor = heatColor(totalIngestBps);
+  const vmLabelColor = '191, 255, 0';
   const vmRadius = 4.5 * (1 + vmPulse.value);
   ctx.beginPath();
   ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
@@ -1571,7 +1572,7 @@ function drawWorldFrame(now) {
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(' + vmColor + ', .95)';
+  ctx.fillStyle = 'rgba(' + vmLabelColor + ', .95)';
   ctx.textAlign = 'center';
   ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
   ctx.textAlign = 'start';
@@ -1986,7 +1987,7 @@ function render(data) {
   document.getElementById('mapTorrentProgress').textContent = active ? Math.round(activePercent) + '%' : '-';
   document.getElementById('mapTorrentRate').textContent = active?.progress?.rate || '-';
   document.getElementById('mapTorrentEta').textContent = active?.progress?.eta || '-';
-  document.getElementById('mapTorrentSeeds').textContent = active ? 'SD ' + (active.progress.seeders || 0) : 'SD 0';
+  document.getElementById('mapTorrentSeeds').textContent = active ? 'SD ' + (active.progress.seeders || 0) + ' / CN ' + (active.progress.connections || 0) : 'SD 0 / CN 0';
   document.getElementById('mapTorrentFill').style.width = clamp(activePercent) + '%';
   tweenNumber('remainingMini', Math.max(0, data.totals.totalBytes - data.totals.doneBytes), fmt, 700);
   updateSpeedChart(speed);
