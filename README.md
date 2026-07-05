@@ -91,7 +91,7 @@ Open the app at:
 http://SERVER_IP:8787
 ```
 
-The dashboard is visible without login. Uploading torrents requires Google OAuth to be configured and a signed-in email present in `AUTH_ALLOWED_EMAILS`.
+By default, Torplex requires Google login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
 
 ## Configuration
 
@@ -144,12 +144,13 @@ If these commands need `sudo`, configure the service user accordingly or set the
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `APP_ORIGIN` | request origin | Public origin used to build OAuth redirect URLs. |
+| `AUTH_REQUIRED` | `true` | Require a valid Google session for the dashboard, status API, live event stream, and uploads. Set `false` only for trusted local/private installs. |
 | `GOOGLE_CLIENT_ID` | empty | Google OAuth client ID. |
 | `GOOGLE_CLIENT_SECRET` | empty | Google OAuth client secret. |
 | `AUTH_COOKIE_SECRET` | development fallback | Secret used to sign session cookies. Use a long random value. |
 | `AUTH_ALLOWED_EMAILS` | empty | Comma-separated allow-list for upload access. |
 
-Uploads are locked until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS` are set.
+When `AUTH_REQUIRED=true`, dashboard data is locked until `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS` are set.
 
 Google OAuth redirect URI:
 
@@ -230,15 +231,15 @@ bun run build
 
 ## Security Notes
 
-- The dashboard itself is viewable by anyone who can reach the web server.
-- Torrent upload APIs require a valid Google session and allow-listed email.
-- Run Torplex behind a firewall, VPN, reverse proxy, or private network if the dashboard should not be public.
+- Keep `AUTH_REQUIRED=true` for internet-reachable installs.
+- Torrent upload APIs always require a valid Google session and allow-listed email.
+- Run Torplex behind HTTPS, a firewall, VPN, reverse proxy, or private network if the dashboard is reachable outside your LAN.
 - Do not commit `.env`, `manifest.json`, torrent files, logs, or Plex tokens.
 - Set `AUTH_COOKIE_SECRET` to a strong random value before enabling Google login.
 
 ## Troubleshooting
 
-- **Upload button says Google auth not configured:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS`, then restart the web app.
+- **Dashboard says Google auth is not configured:** set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `AUTH_ALLOWED_EMAILS`, then restart the web app.
 - **Google rejects redirect URI:** use an HTTPS `APP_ORIGIN` and add `${APP_ORIGIN}/auth/callback` to the OAuth client.
 - **Plex refresh fails:** set `PLEX_TOKEN` explicitly or make sure the worker can read `PLEX_PREFERENCES_PATH`.
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.

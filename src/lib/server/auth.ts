@@ -52,11 +52,28 @@ export function authConfig() {
   return {
     configured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && allowedEmails.size),
     allowedEmails: [...allowedEmails],
+    required: authRequired(),
   };
 }
 
 export function isAllowedEmail(email: string) {
   return allowedEmails.has(email.trim().toLowerCase());
+}
+
+export function authRequired() {
+  return !["0", "false", "no", "off"].includes((process.env.AUTH_REQUIRED ?? "true").trim().toLowerCase());
+}
+
+export function dashboardAccess(cookies: Cookies) {
+  if (!authRequired()) return { ok: true as const, user: null };
+  const user = getSession(cookies);
+  if (user) return { ok: true as const, user };
+  const configured = authConfig().configured;
+  return {
+    ok: false as const,
+    status: configured ? 401 : 503,
+    error: configured ? "Sign in with Google to view Torplex" : "Google auth is not configured",
+  };
 }
 
 export function createStateCookie(cookies: Cookies, origin: string) {
