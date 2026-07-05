@@ -190,21 +190,6 @@
       "payloadName": "Star Trek - Nemesis (2002) RM4K (1080p BluRay x265 HEVC 10bit AAC 7.1 Tigole)",
       "totalBytes": 9309922276,
       "fileCount": 34
-    },
-    {
-      "id": "ghosts-2019",
-      "torrentFile": "Ghosts (2019) Season 1-5 S01-S05 + Specials (1080p AMZN WEB-DL x265 HEVC 10bit EAC3 5.1 Ghost).torrent",
-      "title": "Ghosts (2019) S01-S05 + Specials",
-      "destination": {
-        "type": "show",
-        "path": "/media/plex/TV Shows/Ghosts (2019)"
-      },
-      "organize": {
-        "strategy": "moveRoot"
-      },
-      "payloadName": "Ghosts (2019) Season 1-5 S01-S05 + Specials (1080p AMZN WEB-DL x265 HEVC 10bit EAC3 5.1 Ghost)",
-      "totalBytes": 35810884517,
-      "fileCount": 69
     }
   ]
 }
