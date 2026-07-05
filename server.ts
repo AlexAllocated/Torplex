@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, statSync } from "fs";
-import { readdir } from "fs/promises";
-import { join } from "path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { mkdir, readdir, rename, writeFile } from "fs/promises";
+import { basename, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const host = process.env.HOST ?? "0.0.0.0";
@@ -10,8 +10,16 @@ const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "20.172.155.193"
 type Item = {
   id: string;
   title: string;
+  torrentFile: string;
+  payloadName: string;
   totalBytes: number;
+  fileCount?: number;
   destination: { type: "movie" | "show"; path: string };
+  organize?:
+    | { strategy: "moveRoot"; seasonRenames?: Record<string, string>; fileRenames?: Record<string, string> }
+    | { strategy: "mergeRoot"; targetSubdir?: string }
+    | { strategy: "singleFile"; source: string; finalName: string }
+    | { strategy: "singleEpisode"; source: string; finalName: string };
 };
 
 type Manifest = {
@@ -90,6 +98,7 @@ let lastPeerRefresh = 0;
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 const peerHistoryTtlMs = 15 * 60 * 1000;
+const intakeTokenPath = join(root, ".intake-token");
 
 function readJson<T>(path: string, fallback: T): T {
   try {
@@ -108,6 +117,167 @@ function readTail(path: string, maxBytes = 160_000): string {
   } catch {
     return "";
   }
+}
+
+function textValue(value: unknown): string {
+  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+  return String(value ?? "");
+}
+
+function bdecode(bytes: Uint8Array) {
+  const decoder = new TextDecoder();
+  const parse = (offset: number): [unknown, number] => {
+    const char = String.fromCharCode(bytes[offset]);
+    if (char === "i") {
+      const end = bytes.indexOf(101, offset);
+      return [Number(decoder.decode(bytes.slice(offset + 1, end))), end + 1];
+    }
+    if (char === "l") {
+      const values: unknown[] = [];
+      let cursor = offset + 1;
+      while (bytes[cursor] !== 101) {
+        const [value, next] = parse(cursor);
+        values.push(value);
+        cursor = next;
+      }
+      return [values, cursor + 1];
+    }
+    if (char === "d") {
+      const values: Record<string, unknown> = {};
+      let cursor = offset + 1;
+      while (bytes[cursor] !== 101) {
+        const [key, keyNext] = parse(cursor);
+        const [value, valueNext] = parse(keyNext);
+        values[textValue(key)] = value;
+        cursor = valueNext;
+      }
+      return [values, cursor + 1];
+    }
+    if (/\d/.test(char)) {
+      let colon = offset;
+      while (bytes[colon] !== 58) colon += 1;
+      const length = Number(decoder.decode(bytes.slice(offset, colon)));
+      const start = colon + 1;
+      return [bytes.slice(start, start + length), start + length];
+    }
+    throw new Error(`Invalid torrent metadata at byte ${offset}`);
+  };
+  return parse(0)[0] as Record<string, unknown>;
+}
+
+function torrentMetadata(bytes: Uint8Array, filename: string) {
+  const decoded = bdecode(bytes);
+  const info = decoded.info as Record<string, unknown> | undefined;
+  if (!info) throw new Error("Torrent is missing info dictionary");
+  const payloadName = textValue(info.name || basename(filename, ".torrent"));
+  const fileEntries = Array.isArray(info.files)
+    ? info.files.map((entry) => {
+        const record = entry as Record<string, unknown>;
+        const parts = Array.isArray(record.path) ? record.path.map(textValue) : [];
+        return { path: parts.join("/"), length: Number(record.length) || 0 };
+      })
+    : [{ path: payloadName, length: Number(info.length) || 0 }];
+  const totalBytes = fileEntries.reduce((sum, entry) => sum + entry.length, 0);
+  return {
+    filename,
+    payloadName,
+    totalBytes,
+    fileCount: fileEntries.length,
+    files: fileEntries.slice(0, 40),
+    suggested: suggestManifestFields(payloadName, filename, fileEntries),
+  };
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72) || "torrent-item";
+}
+
+function cleanTitle(value: string) {
+  return value
+    .replace(/\.(?=[A-Za-z0-9])/g, " ")
+    .replace(/\b(complete|proper|repack|web-dl|webrip|bluray|brrip|x264|x265|hevc|h264|h265|aac|ddp?5?\.?1|atmos|multi|subs?|esubs|dv|hdr|dolby|vision|profile|mp4|mkv|1080p|2160p|720p|10bit|8bit)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function suggestManifestFields(payloadName: string, filename: string, files: Array<{ path: string; length: number }>) {
+  const source = cleanTitle(payloadName || filename.replace(/\.torrent$/i, ""));
+  const seasonMatch = source.match(/\bS(?:eason)?\s*0?(\d{1,2})\b/i) || filename.match(/\bS(?:eason)?\s*0?(\d{1,2})\b/i);
+  const yearMatch = source.match(/\b(19\d{2}|20\d{2})\b/);
+  const isShow = Boolean(seasonMatch || files.filter((entry) => /\.(mkv|mp4|m4v|avi)$/i.test(entry.path)).length > 2);
+  const titleBase = source
+    .replace(/\bS(?:eason)?\s*0?\d{1,2}\b/ig, "")
+    .replace(/\bCOMPLETE\b/ig, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const displayTitle = yearMatch && !titleBase.includes(yearMatch[1]) ? `${titleBase} (${yearMatch[1]})` : titleBase;
+  const season = seasonMatch ? Number(seasonMatch[1]) : 1;
+  const mediaRoot = isShow ? "TV Shows" : "Movies";
+  const title = isShow ? `${displayTitle} S${String(season).padStart(2, "0")}` : displayTitle;
+  return {
+    id: slugify(title),
+    title,
+    mediaType: isShow ? "show" : "movie",
+    destinationPath: `/media/plex/${mediaRoot}/${displayTitle || payloadName}`,
+    organizeStrategy: isShow ? "mergeRoot" : "moveRoot",
+    targetSubdir: isShow ? `Season ${season}` : "",
+  };
+}
+
+function safeTorrentFilename(name: string) {
+  const cleaned = basename(name).replace(/[^\w .()[\]{}+,&:;'!@#%=-]/g, "_").trim();
+  return cleaned.toLowerCase().endsWith(".torrent") ? cleaned : `${cleaned || "upload"}.torrent`;
+}
+
+function intakeToken() {
+  try {
+    return readFileSync(intakeTokenPath, "utf8").trim();
+  } catch {
+    const token = crypto.randomUUID().replace(/-/g, "");
+    try {
+      writeFileSync(intakeTokenPath, `${token}\n`, { mode: 0o600 });
+    } catch {
+      // If the token cannot be persisted, the in-memory value still protects this process.
+    }
+    return token;
+  }
+}
+
+function hasIntakeAccess(req: Request, url: URL) {
+  const token = intakeToken();
+  return url.searchParams.get("token") === token || req.headers.get("x-intake-token") === token;
+}
+
+async function saveManifest(manifest: Manifest) {
+  const path = join(root, "manifest.json");
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, JSON.stringify(manifest, null, 2));
+  await rename(tmp, path);
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function restartRunner() {
+  return Bun.spawnSync([
+    "bash",
+    "-lc",
+    [
+      `cd ${shellQuote(root)}`,
+      "pgrep -f '/home/alex/.bun/bin/bun run-batch.ts' | xargs -r kill",
+      "sleep 2",
+      `pgrep -f 'aria2c --dir=${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/staging' | xargs -r kill`,
+      "sleep 2",
+      "nohup /home/alex/.bun/bin/bun run-batch.ts > runner.out 2>&1 &",
+      "echo $! > runner.pid",
+    ].join("; "),
+  ]);
 }
 
 function parseAmount(value: string, unit: string): number {
@@ -402,6 +572,88 @@ async function buildStatus() {
   };
 }
 
+function formString(form: FormData, key: string, fallback = "") {
+  const value = form.get(key);
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
+function formBool(form: FormData, key: string, fallback = false) {
+  const value = form.get(key);
+  if (typeof value !== "string") return fallback;
+  return value === "1" || value === "true" || value === "on";
+}
+
+async function torrentFromForm(form: FormData) {
+  const upload = form.get("torrent");
+  if (!(upload instanceof File)) throw new Error("Missing torrent file");
+  if (!upload.name.toLowerCase().endsWith(".torrent")) throw new Error("Upload must be a .torrent file");
+  const bytes = new Uint8Array(await upload.arrayBuffer());
+  if (!bytes.length) throw new Error("Torrent file is empty");
+  return { upload, bytes, filename: safeTorrentFilename(upload.name) };
+}
+
+async function inspectTorrentUpload(req: Request) {
+  const form = await req.formData();
+  const { bytes, filename } = await torrentFromForm(form);
+  return Response.json(torrentMetadata(bytes, filename), { headers: { "cache-control": "no-store" } });
+}
+
+async function addTorrentUpload(req: Request) {
+  const form = await req.formData();
+  const { bytes, filename } = await torrentFromForm(form);
+  const metadata = torrentMetadata(bytes, filename);
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const id = slugify(formString(form, "id", metadata.suggested.id));
+  const title = formString(form, "title", metadata.suggested.title);
+  const mediaType = formString(form, "mediaType", metadata.suggested.mediaType) === "movie" ? "movie" : "show";
+  const destinationPath = formString(form, "destinationPath", metadata.suggested.destinationPath);
+  const strategyInput = formString(form, "organizeStrategy", metadata.suggested.organizeStrategy);
+  const targetSubdir = formString(form, "targetSubdir", metadata.suggested.targetSubdir);
+  const restart = formBool(form, "restart", true);
+
+  if (!id || !title || !destinationPath) throw new Error("Missing required manifest fields");
+  if (!destinationPath.startsWith("/media/plex/")) throw new Error("Destination must be under /media/plex");
+  if (manifest.items.some((item) => item.id === id)) throw new Error(`Manifest already has item id ${id}`);
+  if (manifest.items.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
+
+  const organize =
+    strategyInput === "moveRoot"
+      ? { strategy: "moveRoot" as const }
+      : { strategy: "mergeRoot" as const, ...(targetSubdir ? { targetSubdir } : {}) };
+
+  const item = {
+    id,
+    torrentFile: filename,
+    title,
+    destination: { type: mediaType, path: destinationPath },
+    organize,
+    payloadName: metadata.payloadName,
+    totalBytes: metadata.totalBytes,
+    fileCount: metadata.fileCount,
+  };
+
+  await mkdir(join(root, "torrents"), { recursive: true });
+  await writeFile(join(root, "torrents", filename), bytes);
+  manifest.items.push(item);
+  await saveManifest(manifest);
+
+  let restarted = false;
+  let restartMessage = "";
+  if (restart) {
+    const state = readJson<State>(join(root, "state.json"), {});
+    const organizing = Object.entries(state.items ?? {}).filter(([, value]) => value.status === "organizing");
+    if (organizing.length) {
+      restartMessage = "Added to manifest, but runner was not restarted because an item is organizing";
+    } else {
+      const proc = restartRunner();
+      restarted = proc.exitCode === 0;
+      restartMessage = restarted ? "Runner restarted" : proc.stderr.toString() || "Runner restart failed";
+    }
+  }
+
+  return Response.json({ ok: true, item, restarted, restartMessage }, { headers: { "cache-control": "no-store" } });
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return "";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -670,6 +922,71 @@ function page() {
       display: grid;
       grid-template-rows: auto 1fr auto;
       min-height: 250px;
+    }
+    .intake-panel {
+      display: grid;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .intake-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(160px, .55fr);
+      gap: 12px;
+    }
+    .intake-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .intake-field label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .intake-field input, .intake-field select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid rgba(150, 167, 190, .24);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: #e7edf5;
+      background: rgba(5, 10, 16, .58);
+      font: inherit;
+    }
+    .intake-field input[type="file"] {
+      padding: 7px;
+    }
+    .intake-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .primary-button {
+      min-height: 38px;
+      border: 1px solid rgba(87, 224, 194, .50);
+      border-radius: 8px;
+      padding: 8px 13px;
+      color: #d9fff6;
+      background: rgba(87, 224, 194, .14);
+      font-weight: 850;
+      cursor: pointer;
+    }
+    .primary-button:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
+    .intake-summary {
+      min-height: 40px;
+      padding: 10px 12px;
+      border: 1px solid rgba(150, 167, 190, .18);
+      border-radius: 8px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .035);
+      font-size: 12px;
+      overflow-wrap: anywhere;
     }
     canvas {
       width: 100%;
@@ -1171,6 +1488,7 @@ function page() {
     @media (max-width: 980px) {
       .dashboard { grid-template-columns: 1fr; }
       .world-shell { grid-template-columns: 1fr; }
+      .intake-grid { grid-template-columns: 1fr; }
       .item { grid-template-columns: 1fr; }
       .title div:first-child { white-space: normal; }
     }
@@ -1231,6 +1549,56 @@ function page() {
         <div class="metric"><div class="label">Updated</div><div class="value" id="updated">...</div></div>
       </div>
     </div>
+  </section>
+
+  <section class="panel intake-panel">
+    <div class="map-title">
+      <div class="label">Torrent Intake</div>
+      <div class="small" id="intakeStatus">Ready</div>
+    </div>
+    <form id="intakeForm" class="intake-panel">
+      <div class="intake-grid">
+        <div class="intake-field">
+          <label for="torrentFile">Torrent</label>
+          <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
+        </div>
+        <div class="intake-field">
+          <label for="torrentTitle">Title</label>
+          <input id="torrentTitle" name="title" autocomplete="off" />
+        </div>
+        <div class="intake-field">
+          <label for="torrentId">Id</label>
+          <input id="torrentId" name="id" autocomplete="off" />
+        </div>
+        <div class="intake-field">
+          <label for="mediaType">Type</label>
+          <select id="mediaType" name="mediaType">
+            <option value="show">Show</option>
+            <option value="movie">Movie</option>
+          </select>
+        </div>
+        <div class="intake-field">
+          <label for="destinationPath">Destination</label>
+          <input id="destinationPath" name="destinationPath" autocomplete="off" />
+        </div>
+        <div class="intake-field">
+          <label for="organizeStrategy">Organize</label>
+          <select id="organizeStrategy" name="organizeStrategy">
+            <option value="mergeRoot">Merge into folder</option>
+            <option value="moveRoot">Move payload folder</option>
+          </select>
+        </div>
+        <div class="intake-field">
+          <label for="targetSubdir">Subfolder</label>
+          <input id="targetSubdir" name="targetSubdir" autocomplete="off" />
+        </div>
+      </div>
+      <div class="intake-actions">
+        <button id="addTorrent" class="primary-button" type="submit" disabled>Add to Queue</button>
+        <label class="small"><input id="restartRunner" name="restart" type="checkbox" checked /> Restart runner</label>
+      </div>
+      <div id="torrentSummary" class="intake-summary">No torrent selected.</div>
+    </form>
   </section>
 
   <section class="transfer-map world-panel">
@@ -1320,6 +1688,12 @@ const completedSeen = new Set();
 const tweens = new Map();
 const elementTweens = new WeakMap();
 let renderedOnce = false;
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) {
+  localStorage.setItem('plexBatchIntakeToken', urlToken);
+  history.replaceState(null, '', location.pathname);
+}
+const intakeToken = localStorage.getItem('plexBatchIntakeToken') || '';
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -2137,6 +2511,91 @@ function celebrate() {
   }
 }
 
+function setIntakeStatus(message) {
+  const el = document.getElementById('intakeStatus');
+  if (el) el.textContent = message;
+}
+
+function intakeHeaders() {
+  return intakeToken ? { 'x-intake-token': intakeToken } : {};
+}
+
+function setIntakeFields(suggested) {
+  document.getElementById('torrentTitle').value = suggested.title || '';
+  document.getElementById('torrentId').value = suggested.id || '';
+  document.getElementById('mediaType').value = suggested.mediaType || 'show';
+  document.getElementById('destinationPath').value = suggested.destinationPath || '';
+  document.getElementById('organizeStrategy').value = suggested.organizeStrategy || 'mergeRoot';
+  document.getElementById('targetSubdir').value = suggested.targetSubdir || '';
+}
+
+function renderTorrentSummary(meta) {
+  const summary = document.getElementById('torrentSummary');
+  if (!summary) return;
+  const preview = (meta.files || []).slice(0, 4).map((file) => file.path).join(' | ');
+  summary.textContent = meta.payloadName + ' - ' + fmt(meta.totalBytes) + ' - ' + meta.fileCount + ' file' + (meta.fileCount === 1 ? '' : 's') + (preview ? ' - ' + preview : '');
+}
+
+function initIntakeControls() {
+  const form = document.getElementById('intakeForm');
+  const input = document.getElementById('torrentFile');
+  const submit = document.getElementById('addTorrent');
+  if (!form || !input || !submit) return;
+  if (!intakeToken) {
+    setIntakeStatus('Intake key required');
+    submit.disabled = true;
+  }
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    submit.disabled = true;
+    if (!file) {
+      document.getElementById('torrentSummary').textContent = 'No torrent selected.';
+      return;
+    }
+    if (!intakeToken) {
+      setIntakeStatus('Open with intake token');
+      return;
+    }
+    setIntakeStatus('Inspecting');
+    try {
+      const data = new FormData();
+      data.set('torrent', file);
+      const res = await fetch('/api/torrent/inspect', { method: 'POST', headers: intakeHeaders(), body: data });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || 'Inspect failed');
+      setIntakeFields(payload.suggested || {});
+      renderTorrentSummary(payload);
+      submit.disabled = false;
+      setIntakeStatus('Ready');
+    } catch (error) {
+      setIntakeStatus(error instanceof Error ? error.message : String(error));
+    }
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = input.files?.[0];
+    if (!file || !intakeToken) return;
+    submit.disabled = true;
+    setIntakeStatus('Adding');
+    try {
+      const data = new FormData(form);
+      data.set('torrent', file);
+      data.set('restart', document.getElementById('restartRunner').checked ? '1' : '0');
+      const res = await fetch('/api/torrents', { method: 'POST', headers: intakeHeaders(), body: data });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.error || 'Add failed');
+      setIntakeStatus(payload.restartMessage || 'Added');
+      document.getElementById('torrentSummary').textContent = 'Queued ' + payload.item.title + ' - ' + fmt(payload.item.totalBytes);
+      form.reset();
+      submit.disabled = true;
+      refreshFallback().catch(() => {});
+    } catch (error) {
+      setIntakeStatus(error instanceof Error ? error.message : String(error));
+      submit.disabled = false;
+    }
+  });
+}
+
 function render(data) {
   const active = activeItem(data);
   const activeCount = data.totals.activeItems || 0;
@@ -2208,6 +2667,7 @@ if ('EventSource' in window) {
 }
 initWarp();
 initMapControls();
+initIntakeControls();
 window.addEventListener('resize', () => {
   resizeWarp();
   updateSpeedChart(speedChart.target);
@@ -2235,6 +2695,22 @@ Bun.serve({
     }
     if (url.pathname === "/status.json") {
       return Response.json(await buildStatus(), { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/api/torrent/inspect" && req.method === "POST") {
+      if (!hasIntakeAccess(req, url)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+      try {
+        return await inspectTorrentUpload(req);
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
+    }
+    if (url.pathname === "/api/torrents" && req.method === "POST") {
+      if (!hasIntakeAccess(req, url)) return Response.json({ error: "Unauthorized" }, { status: 401 });
+      try {
+        return await addTorrentUpload(req);
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+      }
     }
     if (url.pathname === "/assets/BlankMap-Equirectangular.svg") {
       return new Response(Bun.file(join(import.meta.dir, "assets", "BlankMap-Equirectangular.svg")), {
