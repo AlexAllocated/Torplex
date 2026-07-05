@@ -591,13 +591,13 @@ function drawWorldFrame(now) {
         ctx.moveTo(tail.x, tail.y);
         ctx.lineTo(head.x, head.y);
         ctx.strokeStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
-        ctx.lineWidth = 3.2;
+        ctx.lineWidth = 5;
         ctx.shadowColor = 'rgba(' + activeColor + ', .88)';
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 15;
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.beginPath();
-        ctx.arc(head.x, head.y, 2.2, 0, Math.PI * 2);
+        ctx.arc(head.x, head.y, 3.7, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
         ctx.fill();
       }
