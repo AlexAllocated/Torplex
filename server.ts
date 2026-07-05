@@ -1730,8 +1730,8 @@ function drawWorldFrame(now) {
       ctx.shadowBlur = 0;
     }
 
-    if (item.peer.active) {
-      const rateBps = Number(item.peer.receiveRateBps) || 0;
+    const rateBps = Number(item.peer.receiveRateBps) || 0;
+    if (item.peer.active && Math.round(rateBps) > 0) {
       const speedFactor = Math.max(.55, Math.min(4.5, Math.log2(rateBps / 32768 + 1)));
       const packetCount = Math.max(2, Math.min(8, Math.round(2 + speedFactor * 1.35)));
       for (let i = 0; i < packetCount; i += 1) {
