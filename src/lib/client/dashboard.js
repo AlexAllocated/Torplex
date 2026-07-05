@@ -404,7 +404,7 @@ function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
 }
 
 function streamSpeedFactor(bytesPerSecond) {
-  const targetFastBps = 10 * 1024 * 1024;
+  const targetFastBps = 1 * 1024 * 1024;
   const t = Math.max(0, Math.min(1, (Number(bytesPerSecond) || 0) / targetFastBps));
   return .18 + Math.pow(t, .9) * 1.65;
 }
