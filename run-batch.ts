@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -157,7 +157,17 @@ async function organize(item: ManifestItem) {
 
   if (item.organize.strategy === "moveRoot") {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);
-    await movePath(sourceRoot(item), dest);
+    const source = sourceRoot(item);
+    if (await pathExists(source)) {
+      await movePath(source, dest);
+    } else {
+      const entries = (await readdir(staging)).filter((entry) => !entry.endsWith(".aria2"));
+      if (!entries.length) throw new Error(`No downloaded files found in ${staging}`);
+      await ensureDir(dest);
+      for (const entry of entries) {
+        await movePath(join(staging, entry), join(dest, entry));
+      }
+    }
     for (const [from, to] of Object.entries(item.organize.seasonRenames ?? {})) {
       const source = join(dest, from);
       const target = join(dest, to);
