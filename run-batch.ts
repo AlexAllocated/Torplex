@@ -30,11 +30,14 @@ type State = {
   items: Record<string, Record<string, string>>;
 };
 
-const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Manifest;
 const statePath = join(root, "state.json");
 const batchLogPath = join(root, "batch.log");
 let stateQueue: Promise<void> = Promise.resolve();
 let logQueue: Promise<void> = Promise.resolve();
+
+async function loadManifest(): Promise<Manifest> {
+  return JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Manifest;
+}
 
 function now() {
   return new Date().toISOString();
@@ -56,11 +59,15 @@ async function saveState(state: State) {
 
 async function setItemState(id: string, values: Record<string, string | null>) {
   await enqueueState(async () => {
+    const manifest = await loadManifest();
     const state = await loadState();
     state.items[id] = { ...(state.items[id] ?? {}) };
     for (const [key, value] of Object.entries(values)) {
       if (value === null) delete state.items[id][key];
       else state.items[id][key] = value;
+    }
+    if (values.status === "active" || values.status === "organizing") {
+      delete state.finishedAt;
     }
     const activeId = manifest.items.find((item) => {
       const status = state.items[item.id]?.status;
@@ -246,14 +253,51 @@ async function processItem(item: ManifestItem) {
   await appendBatch(`Completed ${item.title}`);
 }
 
-const results = await Promise.allSettled(manifest.items.map((item) => processItem(item)));
-const failed = results.filter((result) => result.status === "rejected");
-const finalState = await loadState();
-if (failed.length === 0) finalState.finishedAt = now();
-finalState.currentItemId = null;
-await saveState(finalState);
-if (failed.length) {
-  await appendBatch(`Batch failed ${now()} - ${failed.length} item(s) failed`);
-  process.exit(1);
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
-await appendBatch(`Batch completed ${now()}`);
+
+const running = new Map<string, Promise<void>>();
+let completionLogged = false;
+
+async function markBatchCompleteIfIdle(manifest: Manifest) {
+  if (running.size > 0 || manifest.items.length === 0) return;
+  const state = await loadState();
+  const statuses = manifest.items.map((item) => state.items[item.id]?.status);
+  const complete = statuses.length > 0 && statuses.every((status) => status === "completed" || status === "failed");
+  if (!complete) return;
+  if (!state.finishedAt) {
+    state.finishedAt = now();
+    state.currentItemId = null;
+    await saveState(state);
+  }
+  if (!completionLogged) {
+    await appendBatch(`Batch idle ${now()} - waiting for new uploads`);
+    completionLogged = true;
+  }
+}
+
+function startItem(item: ManifestItem) {
+  const task = processItem(item)
+    .catch(async (error) => {
+      await appendBatch(`Task error ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
+    })
+    .finally(() => {
+      running.delete(item.id);
+    });
+  running.set(item.id, task);
+}
+
+while (true) {
+  const manifest = await loadManifest();
+  const state = await loadState();
+  for (const item of manifest.items) {
+    if (running.has(item.id)) continue;
+    const status = state.items[item.id]?.status;
+    if (status === "completed" || status === "failed" || status === "organizing") continue;
+    completionLogged = false;
+    startItem(item);
+  }
+  await markBatchCompleteIfIdle(manifest);
+  await sleep(2_000);
+}
