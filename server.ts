@@ -822,7 +822,7 @@ function page() {
       transform-origin: 0 0;
       will-change: transform;
     }
-    .world-map-layer img {
+    .world-map-image {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -867,9 +867,14 @@ function page() {
       transition: opacity .24s ease;
     }
     .map-peer-label img {
+      position: static;
+      inset: auto;
       width: 18px;
       height: 13px;
       flex: 0 0 auto;
+      opacity: 1;
+      filter: none;
+      mix-blend-mode: normal;
       border-radius: 2px;
       box-shadow: 0 0 0 1px rgba(255, 255, 255, .18);
       object-fit: cover;
@@ -1194,7 +1199,7 @@ function page() {
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
           </div>
           <div id="worldMapLayer" class="world-map-layer">
-            <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
+            <img class="world-map-image" src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
             <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
             <div id="mapPeerLabels" class="map-peer-label-layer" aria-hidden="true"></div>
           </div>
