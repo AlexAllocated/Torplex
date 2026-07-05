@@ -863,7 +863,7 @@ function page() {
       font-weight: 700;
       line-height: 1.2;
       white-space: nowrap;
-      transform: translate(3px, calc(-100% - 3px));
+      transform: translate(1px, calc(-100% - 1px));
       pointer-events: auto;
       transition: opacity .24s ease, max-width .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
     }
@@ -1608,8 +1608,8 @@ function renderMapPeerLabels(width, height) {
     if (span) span.textContent = text;
     if (detail) detail.textContent = detailText;
     const estimatedWidth = Math.min(145, 12 + (flagUrl ? 21 : 0) + text.length * 5.5);
-    const x = Math.min(width - estimatedWidth - 6, Math.max(4, item.x + 3));
-    const y = Math.min(height - 4, Math.max(16, item.y - 3));
+    const x = Math.min(width - estimatedWidth - 6, Math.max(4, item.x + 1));
+    const y = Math.min(height - 4, Math.max(16, item.y - 1));
     node.style.left = x.toFixed(1) + 'px';
     node.style.top = y.toFixed(1) + 'px';
     node.style.opacity = String(Math.min(.96, item.alpha));
