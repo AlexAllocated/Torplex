@@ -1385,6 +1385,37 @@ function quadPoint(start, control, end, t) {
   };
 }
 
+function pulseForSpeed(now, bytesPerSecond, phase = 0) {
+  const speed = Math.max(.45, Math.min(4.6, Math.log2((Number(bytesPerSecond) || 0) / 65536 + 1)));
+  return {
+    speed,
+    value: .5 + Math.sin(now / (900 / speed) + phase) * .5,
+  };
+}
+
+function mixColor(a, b, t) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+function heatColor(bytesPerSecond) {
+  const value = Number(bytesPerSecond) || 0;
+  const t = Math.max(0, Math.min(1, Math.log2(value / 32768 + 1) / 8));
+  const stops = [
+    [45, 126, 255],
+    [0, 170, 0],
+    [191, 255, 0],
+    [255, 140, 0],
+    [255, 46, 46],
+  ];
+  const scaled = t * (stops.length - 1);
+  const index = Math.min(stops.length - 2, Math.floor(scaled));
+  return mixColor(stops[index], stops[index + 1], scaled - index).join(', ');
+}
+
 function syncDisplayPeers(peers) {
   const now = performance.now();
   const existing = new Map(swarmMap.displayPeers.map((peer) => [peer.peer ? peer.peer.ip + ':' + peer.peer.port : '', peer]));
@@ -1456,16 +1487,29 @@ function drawWorldFrame(now) {
     ctx.stroke();
   }
 
+  const totalIngestBps = swarmMap.displayPeers.reduce(
+    (sum, item) => sum + (item.peer?.active ? Number(item.peer.receiveRateBps) || 0 : 0),
+    0,
+  );
   const origin = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
-  ctx.fillStyle = '#bfff00';
+  const vmPulse = pulseForSpeed(now, totalIngestBps);
+  const vmColor = heatColor(totalIngestBps);
+  const vmRadius = 4.5 * (1 + vmPulse.value);
   ctx.beginPath();
-  ctx.arc(origin.x, origin.y, 4.5, 0, Math.PI * 2);
+  ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(' + vmColor + ', ' + (.06 + vmPulse.value * .10) + ')';
   ctx.fill();
+  ctx.fillStyle = 'rgb(' + vmColor + ')';
+  ctx.beginPath();
+  ctx.arc(origin.x, origin.y, vmRadius, 0, Math.PI * 2);
+  ctx.shadowColor = 'rgba(' + vmColor + ', .75)';
+  ctx.shadowBlur = 16 + vmPulse.value * 14;
+  ctx.fill();
+  ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(191, 255, 0, .95)';
-  ctx.fillText('VM', origin.x + 8, origin.y - 7);
+  ctx.fillStyle = 'rgba(' + vmColor + ', .95)';
+  ctx.fillText('VM', origin.x + vmRadius + 5, origin.y - 7);
 
-  const pulse = .55 + Math.sin(now / 360) * .45;
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
   swarmMap.displayPeers.forEach((item) => {
     const target = projectWorld(item.targetLat, item.targetLon, width, height);
@@ -1479,6 +1523,8 @@ function drawWorldFrame(now) {
     const targetAlpha = item.peer.active ? 1 : item.peer.probing ? .72 : .38;
     const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
     const hue = 166 + (item.rank % 9) * 12;
+    const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
+    const activeColor = heatColor(item.peer.receiveRateBps);
 
     const start = { x: origin.x, y: origin.y };
     const end = { x: item.x, y: item.y };
@@ -1489,7 +1535,7 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(191, 255, 0, ' + (.42 * alpha) + ')';
+      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.46 * alpha) + ')';
       ctx.lineWidth = 1.8;
       ctx.stroke();
     }
@@ -1507,36 +1553,38 @@ function drawWorldFrame(now) {
         ctx.beginPath();
         ctx.moveTo(tail.x, tail.y);
         ctx.lineTo(head.x, head.y);
-        ctx.strokeStyle = 'rgba(191, 255, 0, ' + packetAlpha + ')';
+        ctx.strokeStyle = 'rgba(' + activeColor + ', ' + packetAlpha + ')';
         ctx.lineWidth = 3.2;
-        ctx.shadowColor = 'rgba(191, 255, 0, .88)';
+        ctx.shadowColor = 'rgba(' + activeColor + ', .88)';
         ctx.shadowBlur = 12;
         ctx.stroke();
         ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.arc(head.x, head.y, 2.2, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(230, 255, 128, ' + packetAlpha + ')';
+        ctx.fillStyle = 'rgba(160, 255, 160, ' + packetAlpha + ')';
         ctx.fill();
       }
     }
 
     ctx.beginPath();
-    ctx.arc(item.x, item.y, item.peer.active ? 6 + pulse * 8 : item.peer.probing ? 5 + pulse * 4 : 4, 0, Math.PI * 2);
+    const outerRadius = item.peer.active ? 6 + (1 - peerPulse.value) * 8 : item.peer.probing ? 5 : 4;
+    ctx.arc(item.x, item.y, outerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
-      ? 'hsla(' + hue + ', 92%, 68%, ' + (.075 * alpha) + ')'
+      ? 'rgba(' + activeColor + ', ' + (.075 * alpha) + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.06 * alpha) + ')'
         : 'rgba(150, 167, 190, ' + (.05 * alpha) + ')';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(item.x, item.y, item.peer.active ? 3.6 + pulse * 1.2 : item.peer.probing ? 3.1 : 2.6, 0, Math.PI * 2);
+    const innerRadius = item.peer.active ? 3.6 + (1 - peerPulse.value) * 3.6 : item.peer.probing ? 3.1 : 2.6;
+    ctx.arc(item.x, item.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = item.peer.active
-      ? 'hsla(' + hue + ', 92%, 70%, ' + (.95 * alpha) + ')'
+      ? 'rgba(' + activeColor + ', ' + (.95 * alpha) + ')'
       : item.peer.probing
         ? 'rgba(247, 198, 95, ' + (.88 * alpha) + ')'
         : 'rgba(165, 176, 193, ' + (.80 * alpha) + ')';
-    ctx.shadowColor = item.peer.active ? 'hsla(' + hue + ', 92%, 68%, ' + (.75 * alpha) + ')' : 'transparent';
-    ctx.shadowBlur = item.peer.active ? 14 : 0;
+    ctx.shadowColor = item.peer.active ? 'rgba(' + activeColor + ', ' + (.75 * alpha) + ')' : 'transparent';
+    ctx.shadowBlur = item.peer.active ? 10 + (1 - peerPulse.value) * 10 : 0;
     ctx.fill();
     ctx.shadowBlur = 0;
 
