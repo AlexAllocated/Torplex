@@ -1153,7 +1153,7 @@ function page() {
           </button>
           <div class="map-progress-widget">
             <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
-            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span><span id="mapTorrentSeeds">SD 0 / CN 0</span></div>
+            <div class="map-progress-meta"><span id="mapTorrentProgress">0%</span><span id="mapTorrentRate">0 B/s</span><span id="mapTorrentEta">-</span><span id="mapTorrentSeeds">Streams 0</span></div>
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
           </div>
           <div id="worldMapLayer" class="world-map-layer">
@@ -1960,6 +1960,9 @@ function celebrate() {
 function render(data) {
   const active = activeItem(data);
   const activePercent = active ? active.progress.percent || 0 : data.totals.completedItems === data.totals.totalItems ? 100 : 0;
+  const activeStreams = Array.isArray(data.swarm?.peers)
+    ? data.swarm.peers.filter((peer) => peer.active && Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).length
+    : 0;
   const diskUse = Number(String(data.disk.usePercent || '0').replace('%', '')) || 0;
   const diskFree = clamp(100 - diskUse);
   const speed = parseSpeed(active?.progress?.rate);
@@ -1987,7 +1990,7 @@ function render(data) {
   document.getElementById('mapTorrentProgress').textContent = active ? Math.round(activePercent) + '%' : '-';
   document.getElementById('mapTorrentRate').textContent = active?.progress?.rate || '-';
   document.getElementById('mapTorrentEta').textContent = active?.progress?.eta || '-';
-  document.getElementById('mapTorrentSeeds').textContent = active ? 'SD ' + (active.progress.seeders || 0) + ' / CN ' + (active.progress.connections || 0) : 'SD 0 / CN 0';
+  document.getElementById('mapTorrentSeeds').textContent = 'Streams ' + activeStreams;
   document.getElementById('mapTorrentFill').style.width = clamp(activePercent) + '%';
   tweenNumber('remainingMini', Math.max(0, data.totals.totalBytes - data.totals.doneBytes), fmt, 700);
   updateSpeedChart(speed);
