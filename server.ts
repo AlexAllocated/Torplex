@@ -842,6 +842,43 @@ function page() {
       border: 0;
       background: transparent;
     }
+    .map-peer-label-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .map-peer-label {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      max-width: min(220px, 44vw);
+      padding: 2px 5px;
+      border: 1px solid rgba(150, 167, 190, .18);
+      border-radius: 5px;
+      background: rgba(5, 10, 16, .72);
+      color: rgba(231, 237, 245, .94);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+      transform: translate(8px, -14px);
+      transition: opacity .24s ease;
+    }
+    .map-peer-label img {
+      width: 18px;
+      height: 13px;
+      flex: 0 0 auto;
+      border-radius: 2px;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, .18);
+      object-fit: cover;
+    }
+    .map-peer-label span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .map-progress-widget {
       position: absolute;
       left: 50%;
@@ -1159,6 +1196,7 @@ function page() {
           <div id="worldMapLayer" class="world-map-layer">
             <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
             <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+            <div id="mapPeerLabels" class="map-peer-label-layer" aria-hidden="true"></div>
           </div>
         </div>
       </div>
@@ -1201,6 +1239,7 @@ const warp = {
 const swarmMap = {
   peers: [],
   displayPeers: [],
+  labelNodes: new Map(),
   raf: 0,
   lastFrame: 0,
   origin: { lat: 39, lon: -98 },
@@ -1322,10 +1361,10 @@ function shortTitle(title) {
     .slice(0, 3) || '...';
 }
 
-function flagForCountry(countryCode) {
-  const code = String(countryCode || '').trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return '';
-  return String.fromCodePoint(...[...code].map((char) => 127397 + char.charCodeAt(0)));
+function flagUrlForCountry(countryCode) {
+  const code = String(countryCode || '').trim().toLowerCase();
+  if (!/^[a-z]{2}$/.test(code)) return '';
+  return 'https://flagcdn.com/w20/' + code + '.png';
 }
 
 function renderSwarmMap(swarm) {
@@ -1510,6 +1549,53 @@ function syncDisplayPeers(peers) {
   swarmMap.displayPeers = next.slice(0, 40);
 }
 
+function renderMapPeerLabels(width, height) {
+  const layer = document.getElementById('mapPeerLabels');
+  if (!layer) return;
+  const visible = swarmMap.displayPeers.filter((item) => item.peer?.active && item.rank < 12 && item.alpha > .05);
+  const seen = new Set();
+  visible.forEach((item) => {
+    const key = item.peer.ip + ':' + item.peer.port;
+    seen.add(key);
+    let node = swarmMap.labelNodes.get(key);
+    if (!node) {
+      node = document.createElement('div');
+      node.className = 'map-peer-label';
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      const text = document.createElement('span');
+      node.append(img, text);
+      layer.appendChild(node);
+      swarmMap.labelNodes.set(key, node);
+    }
+    const text = item.peer.ip + ' ' + formatPeerRate(item.peer.receiveRateBps);
+    const flagUrl = flagUrlForCountry(item.peer.countryCode);
+    const img = node.querySelector('img');
+    const span = node.querySelector('span');
+    if (img) {
+      img.hidden = !flagUrl;
+      if (flagUrl && img.src !== flagUrl) {
+        img.src = flagUrl;
+        img.alt = item.peer.countryCode || '';
+      }
+    }
+    if (span) span.textContent = text;
+    const estimatedWidth = Math.min(220, 16 + (flagUrl ? 25 : 0) + text.length * 6);
+    const x = Math.min(width - estimatedWidth - 8, Math.max(6, item.x + 8));
+    const y = Math.min(height - 18, Math.max(10, item.y - 14));
+    node.style.left = x.toFixed(1) + 'px';
+    node.style.top = y.toFixed(1) + 'px';
+    node.style.opacity = String(Math.min(.96, item.alpha));
+  });
+  swarmMap.labelNodes.forEach((node, key) => {
+    if (!seen.has(key)) {
+      node.remove();
+      swarmMap.labelNodes.delete(key);
+    }
+  });
+}
+
 function drawWorldFrame(now) {
   swarmMap.raf = requestAnimationFrame(drawWorldFrame);
   const canvas = document.getElementById('worldCanvas');
@@ -1664,29 +1750,8 @@ function drawWorldFrame(now) {
     ctx.shadowBlur = item.peer.active ? 7 + (1 - peerPulse.value) * 7 : 0;
     ctx.fill();
     ctx.shadowBlur = 0;
-
-    if (item.peer.active && item.rank < 12) {
-      const flag = flagForCountry(item.peer.countryCode);
-      const label = item.peer.ip + ' ' + formatPeerRate(item.peer.receiveRateBps);
-      ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      const labelMetrics = ctx.measureText(label);
-      ctx.font = '13px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-      const flagWidth = flag ? ctx.measureText(flag).width + 4 : 0;
-      const labelWidth = flagWidth + labelMetrics.width;
-      const labelX = Math.min(width - labelWidth - 12, Math.max(6, item.x + 8));
-      const labelY = Math.min(height - 8, Math.max(12, item.y - 8));
-      ctx.fillStyle = 'rgba(5, 10, 16, ' + (.72 * alpha) + ')';
-      ctx.fillRect(labelX - 4, labelY - 11, labelWidth + 8, 15);
-      if (flag) {
-        ctx.font = '13px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
-        ctx.fillStyle = 'rgba(255, 255, 255, ' + (.95 * alpha) + ')';
-        ctx.fillText(flag, labelX, labelY + 1);
-      }
-      ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-      ctx.fillStyle = 'rgba(231, 237, 245, ' + (.92 * alpha) + ')';
-      ctx.fillText(label, labelX + flagWidth, labelY);
-    }
   });
+  renderMapPeerLabels(width, height);
 }
 
 function renderItems(items) {
