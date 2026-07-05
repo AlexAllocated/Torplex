@@ -794,6 +794,19 @@ function page() {
     .world-map-frame .exit-fullscreen-icon { display: none; }
     .world-map-frame:fullscreen .enter-fullscreen-icon { display: none; }
     .world-map-frame:fullscreen .exit-fullscreen-icon { display: block; }
+    .world-map-viewport {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+    .world-map-frame:fullscreen .world-map-viewport {
+      inset: auto;
+      left: 50%;
+      top: 50%;
+      width: min(100vw, 200vh);
+      height: min(50vw, 100vh);
+      transform: translate(-50%, -50%);
+    }
     .world-map-layer {
       position: absolute;
       inset: 0;
@@ -1070,17 +1083,19 @@ function page() {
     </div>
     <div class="world-shell">
       <div class="world-map-frame">
-        <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
-          <svg class="enter-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
-          </svg>
-          <svg class="exit-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
-          </svg>
-        </button>
-        <div id="worldMapLayer" class="world-map-layer">
-          <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
-          <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+        <div id="worldMapViewport" class="world-map-viewport">
+          <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
+            <svg class="enter-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
+            </svg>
+            <svg class="exit-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
+            </svg>
+          </button>
+          <div id="worldMapLayer" class="world-map-layer">
+            <img src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
+            <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
+          </div>
         </div>
       </div>
       <div id="peerPills" class="peer-pills"></div>
@@ -1276,10 +1291,10 @@ function renderSwarmMap(swarm) {
 }
 
 function clampMapView() {
-  const frame = document.querySelector('.world-map-frame');
-  if (!frame) return;
-  const width = frame.clientWidth;
-  const height = frame.clientHeight;
+  const viewport = document.getElementById('worldMapViewport');
+  if (!viewport) return;
+  const width = viewport.clientWidth;
+  const height = viewport.clientHeight;
   mapView.scale = Math.max(1, Math.min(6, mapView.scale));
   if (mapView.scale === 1) {
     mapView.x = 0;
@@ -1301,12 +1316,13 @@ function initMapControls() {
   if (!frame) return;
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
-    const rect = frame.getBoundingClientRect();
+    const viewport = document.getElementById('worldMapViewport');
+    const rect = (viewport ?? frame).getBoundingClientRect();
     const oldScale = mapView.scale;
     const direction = event.deltaY < 0 ? 1 : -1;
     const nextScale = Math.max(1, Math.min(6, oldScale * (direction > 0 ? 1.18 : 1 / 1.18)));
-    const px = event.clientX - rect.left;
-    const py = event.clientY - rect.top;
+    const px = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+    const py = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
     const mapX = (px - mapView.x) / oldScale;
     const mapY = (py - mapView.y) / oldScale;
     mapView.scale = nextScale;
@@ -1398,8 +1414,8 @@ function drawWorldFrame(now) {
   const canvas = document.getElementById('worldCanvas');
   if (!canvas) return;
   syncDisplayPeers(swarmMap.peers);
-  const frame = canvas.closest('.world-map-frame');
-  const rect = { width: frame?.clientWidth || canvas.clientWidth, height: frame?.clientHeight || canvas.clientHeight };
+  const viewport = document.getElementById('worldMapViewport');
+  const rect = { width: viewport?.clientWidth || canvas.clientWidth, height: viewport?.clientHeight || canvas.clientHeight };
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
   const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
