@@ -36,7 +36,15 @@ let stateQueue: Promise<void> = Promise.resolve();
 let logQueue: Promise<void> = Promise.resolve();
 
 async function loadManifest(): Promise<Manifest> {
-  return JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Manifest;
+  const manifestPath = join(root, "manifest.json");
+  try {
+    return JSON.parse(await readFile(manifestPath, "utf8")) as Manifest;
+  } catch {
+    const manifest = { createdAt: now(), items: [] };
+    await ensureDir(root);
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+    return manifest;
+  }
 }
 
 function now() {
@@ -197,6 +205,10 @@ async function scanPlex(section: "movie" | "show") {
   const proc = Bun.spawnSync(["curl", "-fsS", url]);
   if (proc.exitCode !== 0) throw new Error(`Plex scan failed for section ${key}`);
 }
+
+await ensureDir(root);
+await ensureDir(join(root, "torrents"));
+await ensureDir(join(root, "logs"));
 
 const initialState = await loadState();
 await enqueueState(async () => saveState({ ...initialState, startedAt: initialState.startedAt ?? now(), finishedAt: undefined }));

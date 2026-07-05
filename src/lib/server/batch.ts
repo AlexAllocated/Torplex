@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { mkdir, readdir, rename, writeFile } from "fs/promises";
 import { basename, join } from "path";
 
@@ -96,7 +96,6 @@ let lastPeerRefresh = 0;
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 const peerHistoryTtlMs = 15 * 60 * 1000;
-const intakeTokenPath = join(root, ".intake-token");
 
 function readJson<T>(path: string, fallback: T): T {
   try {
@@ -230,25 +229,6 @@ function suggestManifestFields(payloadName: string, filename: string, files: Arr
 function safeTorrentFilename(name: string) {
   const cleaned = basename(name).replace(/[^\w .()[\]{}+,&:;'!@#%=-]/g, "_").trim();
   return cleaned.toLowerCase().endsWith(".torrent") ? cleaned : `${cleaned || "upload"}.torrent`;
-}
-
-function intakeToken() {
-  try {
-    return readFileSync(intakeTokenPath, "utf8").trim();
-  } catch {
-    const token = crypto.randomUUID().replace(/-/g, "");
-    try {
-      writeFileSync(intakeTokenPath, `${token}\n`, { mode: 0o600 });
-    } catch {
-      // If the token cannot be persisted, the in-memory value still protects this process.
-    }
-    return token;
-  }
-}
-
-export function hasIntakeAccess(req: Request, url: URL) {
-  const token = intakeToken();
-  return url.searchParams.get("token") === token || req.headers.get("x-intake-token") === token;
 }
 
 async function saveManifest(manifest: Manifest) {

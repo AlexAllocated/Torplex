@@ -72,6 +72,20 @@
       flex-wrap: wrap;
       justify-content: flex-end;
     }
+    .auth-block {
+      display: grid;
+      grid-auto-flow: column;
+      grid-template-columns: auto auto;
+      align-items: center;
+      gap: 8px;
+    }
+    .auth-block .small {
+      grid-column: 1 / -1;
+      text-align: right;
+    }
+    .auth-block [hidden] {
+      display: none;
+    }
     .live {
       display: inline-flex;
       align-items: center;
@@ -245,12 +259,16 @@
       gap: 10px;
     }
     .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-height: 38px;
       border: 1px solid rgba(150, 167, 190, .28);
       border-radius: 8px;
       padding: 8px 13px;
       color: #e7edf5;
       background: rgba(255, 255, 255, .055);
+      text-decoration: none;
       font-weight: 850;
       cursor: pointer;
     }

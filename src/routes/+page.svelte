@@ -19,7 +19,14 @@
       <h1>Plex Batch Control</h1>
       <div class="subtitle" id="subtitle">Waiting for the first live packet...</div>
     </div>
-    <div class="header-actions"><button id="openIntake" class="primary-button" type="button">Add Torrent</button><div class="live"><span class="dot"></span><span id="connection">Connecting</span></div></div>
+    <div class="header-actions">
+      <div class="auth-block">
+        <button id="openIntake" class="primary-button" type="button">Sign in with Google</button>
+        <a id="logoutButton" class="secondary-button" href="/auth/logout" hidden>Sign out</a>
+        <div id="authStatus" class="small">Checking auth...</div>
+      </div>
+      <div class="live"><span class="dot"></span><span id="connection">Connecting</span></div>
+    </div>
   </header>
 
   <section class="dashboard">

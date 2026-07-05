@@ -53,12 +53,13 @@ const completedSeen = new Set();
 const tweens = new Map();
 const elementTweens = new WeakMap();
 let renderedOnce = false;
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) {
-  localStorage.setItem('plexBatchIntakeToken', urlToken);
-  history.replaceState(null, '', location.pathname);
-}
-const intakeToken = localStorage.getItem('plexBatchIntakeToken') || '';
+const sessionState = {
+  configured: false,
+  authenticated: false,
+  user: null,
+  loginUrl: '/auth/login',
+  logoutUrl: '/auth/logout',
+};
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -881,8 +882,43 @@ function setIntakeStatus(message) {
   if (el) el.textContent = message;
 }
 
-function intakeHeaders() {
-  return intakeToken ? { 'x-intake-token': intakeToken } : {};
+function setAuthStatus(message) {
+  const el = document.getElementById('authStatus');
+  if (el) el.textContent = message;
+}
+
+function renderSessionControls() {
+  const open = document.getElementById('openIntake');
+  const logout = document.getElementById('logoutButton');
+  if (!open) return;
+
+  open.disabled = false;
+  if (!sessionState.configured) {
+    open.textContent = 'Google auth not configured';
+    open.disabled = true;
+    setAuthStatus('Upload locked');
+  } else if (!sessionState.authenticated) {
+    open.textContent = 'Sign in with Google';
+    setAuthStatus('Upload locked');
+  } else {
+    open.textContent = 'Add Torrent';
+    setAuthStatus(sessionState.user?.email || 'Signed in');
+  }
+
+  if (logout) logout.hidden = !sessionState.authenticated;
+}
+
+async function refreshSession() {
+  try {
+    const res = await fetch('/api/session', { cache: 'no-store' });
+    const payload = await res.json();
+    Object.assign(sessionState, payload);
+  } catch {
+    sessionState.configured = false;
+    sessionState.authenticated = false;
+    sessionState.user = null;
+  }
+  renderSessionControls();
 }
 
 function setIntakeFields(suggested) {
@@ -906,6 +942,11 @@ function initDialogControls() {
   const open = document.getElementById('openIntake');
   const close = document.getElementById('closeIntake');
   open?.addEventListener('click', () => {
+    if (!sessionState.configured) return;
+    if (!sessionState.authenticated) {
+      window.location.href = sessionState.loginUrl || '/auth/login';
+      return;
+    }
     if (typeof dialog?.showModal === 'function') {
       dialog.showModal();
       document.body.classList.add('dialog-open');
@@ -920,8 +961,8 @@ function initIntakeControls() {
   const input = document.getElementById('torrentFile');
   const submit = document.getElementById('addTorrent');
   if (!form || !input || !submit) return;
-  if (!intakeToken) {
-    setIntakeStatus('Intake key required');
+  if (!sessionState.authenticated) {
+    setIntakeStatus('Sign in with Google first');
     submit.disabled = true;
   }
   input.addEventListener('change', async () => {
@@ -931,15 +972,15 @@ function initIntakeControls() {
       document.getElementById('torrentSummary').textContent = 'No torrent selected.';
       return;
     }
-    if (!intakeToken) {
-      setIntakeStatus('Open with intake token');
+    if (!sessionState.authenticated) {
+      setIntakeStatus('Sign in with Google first');
       return;
     }
     setIntakeStatus('Inspecting');
     try {
       const data = new FormData();
       data.set('torrent', file);
-      const res = await fetch('/api/torrent/inspect', { method: 'POST', headers: intakeHeaders(), body: data });
+      const res = await fetch('/api/torrent/inspect', { method: 'POST', body: data });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || 'Inspect failed');
       setIntakeFields(payload.suggested || {});
@@ -953,13 +994,13 @@ function initIntakeControls() {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const file = input.files?.[0];
-    if (!file || !intakeToken) return;
+    if (!file || !sessionState.authenticated) return;
     submit.disabled = true;
     setIntakeStatus('Adding');
     try {
       const data = new FormData(form);
       data.set('torrent', file);
-      const res = await fetch('/api/torrents', { method: 'POST', headers: intakeHeaders(), body: data });
+      const res = await fetch('/api/torrents', { method: 'POST', body: data });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload.error || 'Add failed');
       setIntakeStatus(payload.restartMessage || 'Added');
@@ -1051,6 +1092,7 @@ initWarp();
 initMapControls();
 initDialogControls();
 initIntakeControls();
+refreshSession();
 window.addEventListener('resize', () => {
   resizeWarp();
   if (document.getElementById('speedCanvas')) updateSpeedChart(speedChart.target);

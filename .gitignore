@@ -1,6 +1,8 @@
-torrents/
-staging/
-logs/
+/torrents/
+/staging/
+/logs/
+/manifest.json
+/.intake-token
 node_modules/
 .svelte-kit/
 build/
