@@ -373,8 +373,11 @@ function renderMapPeerLabels(width, height) {
   const layer = document.getElementById('mapPeerLabels');
   if (!layer) return;
   const visible = swarmMap.displayPeers
-    .filter((item) => item.peer?.active && item.rank < 16 && item.alpha > .05)
-    .sort((a, b) => (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0));
+    .filter((item) => item.peer?.active && item.alpha > .05)
+    .sort((a, b) =>
+      (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0) ||
+      (Number(a.rank) || 0) - (Number(b.rank) || 0),
+    );
   const seen = new Set();
   const placed = [];
   const overlaps = (rect) => placed.some((other) =>
@@ -388,7 +391,7 @@ function renderMapPeerLabels(width, height) {
       node = document.createElement('div');
       node.className = 'map-peer-label';
       const img = document.createElement('img');
-      img.loading = 'lazy';
+      img.loading = 'eager';
       img.decoding = 'async';
       const text = document.createElement('span');
       text.className = 'map-peer-speed';
