@@ -647,20 +647,13 @@ function drawWorldFrame(now) {
         const travel = ((now / (3600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
         const head = quadPoint(start, control, end, t);
-        const tail = quadPoint(start, control, end, Math.min(1, t + .03 + speedFactor * .006));
         const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
-        ctx.beginPath();
-        ctx.moveTo(tail.x, tail.y);
-        ctx.lineTo(head.x, head.y);
-        ctx.strokeStyle = 'rgba(' + packetColor + ', ' + packetAlpha + ')';
-        ctx.lineWidth = 5;
         ctx.shadowColor = 'rgba(' + packetColor + ', .88)';
         ctx.shadowBlur = 15;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        drawPacketShape(ctx, visual.shape, head.x, head.y, 3.7);
+        drawPacketShape(ctx, visual.shape, head.x, head.y, 5.2);
         ctx.fillStyle = 'rgba(' + packetColor + ', ' + packetAlpha + ')';
         ctx.fill();
+        ctx.shadowBlur = 0;
       }
     }
 
