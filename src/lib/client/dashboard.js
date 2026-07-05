@@ -205,8 +205,9 @@ function applyMapTransform() {
   clampMapView();
   const layer = document.getElementById('worldMapLayer');
   if (layer) layer.style.transform = '';
-  const image = document.querySelector('.world-map-image');
-  if (image) image.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+  document.querySelectorAll('.world-map-image').forEach((image) => {
+    image.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+  });
 }
 
 function cameraPoint(point) {

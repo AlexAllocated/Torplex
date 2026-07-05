@@ -152,7 +152,7 @@
             <div class="map-progress-bar"><div id="mapTorrentFill" class="map-progress-fill"></div></div>
           </div>
           <div id="worldMapLayer" class="world-map-layer">
-            <img class="world-map-image" src="/assets/BlankMap-Equirectangular.svg" alt="" aria-hidden="true" />
+            <img class="world-map-image world-map-raster" src="/assets/natural-earth-ii-10800.webp" alt="" aria-hidden="true" decoding="async" />
             <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
             <div id="mapPeerLabels" class="map-peer-label-layer" aria-hidden="true"></div>
           </div>
