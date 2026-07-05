@@ -166,7 +166,7 @@ function shortTitle(title) {
 function flagUrlForCountry(countryCode) {
   const code = String(countryCode || '').trim().toLowerCase();
   if (!/^[a-z]{2}$/.test(code)) return '';
-  return 'https://flagcdn.com/w20/' + code + '.png';
+  return 'https://flagcdn.com/w40/' + code + '.png';
 }
 
 function renderSwarmMap(swarm) {
@@ -417,20 +417,20 @@ function renderMapPeerLabels(width, height) {
       span.style.color = 'rgb(' + heatColor(item.peer.receiveRateBps) + ')';
     }
     if (detail) detail.textContent = detailText;
-    const collapsedWidth = Math.min(120, Math.max(58, 12 + (flagUrl ? 21 : 0) + text.length * 5.8));
-    const labelHeight = 18;
+    const collapsedWidth = Math.min(150, Math.max(76, 18 + (flagUrl ? 28 : 0) + text.length * 7.2));
+    const labelHeight = 24;
     const point = cameraPoint({ x: item.x, y: item.y });
     if (point.x < -24 || point.x > width + 24 || point.y < -24 || point.y > height + 24) {
       node.style.opacity = '0';
       return;
     }
     const candidates = [
-      { x: point.x + 5, y: point.y + 5, right: false, bottom: false },
-      { x: point.x + 5, y: point.y - labelHeight - 5, right: false, bottom: true },
-      { x: point.x - collapsedWidth - 5, y: point.y + 5, right: true, bottom: false },
-      { x: point.x - collapsedWidth - 5, y: point.y - labelHeight - 5, right: true, bottom: true },
-      { x: point.x + 10, y: point.y - labelHeight / 2, right: false, bottom: false },
-      { x: point.x - collapsedWidth - 10, y: point.y - labelHeight / 2, right: true, bottom: false },
+      { x: point.x + 6, y: point.y + 6, right: false, bottom: false },
+      { x: point.x + 6, y: point.y - labelHeight - 6, right: false, bottom: true },
+      { x: point.x - collapsedWidth - 6, y: point.y + 6, right: true, bottom: false },
+      { x: point.x - collapsedWidth - 6, y: point.y - labelHeight - 6, right: true, bottom: true },
+      { x: point.x + 12, y: point.y - labelHeight / 2, right: false, bottom: false },
+      { x: point.x - collapsedWidth - 12, y: point.y - labelHeight / 2, right: true, bottom: false },
     ].map((candidate) => ({
       ...candidate,
       x: Math.min(width - collapsedWidth - 4, Math.max(4, candidate.x)),
