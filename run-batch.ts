@@ -33,6 +33,8 @@ type State = {
 const manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as Manifest;
 const statePath = join(root, "state.json");
 const batchLogPath = join(root, "batch.log");
+let stateQueue: Promise<void> = Promise.resolve();
+let logQueue: Promise<void> = Promise.resolve();
 
 function now() {
   return new Date().toISOString();
@@ -53,19 +55,38 @@ async function saveState(state: State) {
 }
 
 async function setItemState(id: string, values: Record<string, string | null>) {
-  const state = await loadState();
-  state.items[id] = { ...(state.items[id] ?? {}) };
-  for (const [key, value] of Object.entries(values)) {
-    if (value === null) delete state.items[id][key];
-    else state.items[id][key] = value;
-  }
-  if (values.status === "active" || values.status === "organizing") state.currentItemId = id;
-  if (values.status === "completed" || values.status === "failed") state.currentItemId = null;
-  await saveState(state);
+  await enqueueState(async () => {
+    const state = await loadState();
+    state.items[id] = { ...(state.items[id] ?? {}) };
+    for (const [key, value] of Object.entries(values)) {
+      if (value === null) delete state.items[id][key];
+      else state.items[id][key] = value;
+    }
+    const activeId = manifest.items.find((item) => {
+      const status = state.items[item.id]?.status;
+      return status === "active" || status === "organizing";
+    })?.id;
+    state.currentItemId = activeId ?? null;
+    await saveState(state);
+  });
 }
 
 async function appendBatch(line: string) {
-  await Bun.write(batchLogPath, `${existsSync(batchLogPath) ? await readFile(batchLogPath, "utf8") : ""}${line}\n`);
+  await enqueueLog(async () => {
+    await Bun.write(batchLogPath, `${existsSync(batchLogPath) ? await readFile(batchLogPath, "utf8") : ""}${line}\n`);
+  });
+}
+
+async function enqueueState(write: () => Promise<void>) {
+  const next = stateQueue.then(write, write);
+  stateQueue = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+async function enqueueLog(write: () => Promise<void>) {
+  const next = logQueue.then(write, write);
+  logQueue = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 async function ensureDir(path: string) {
@@ -171,14 +192,14 @@ async function scanPlex(section: "movie" | "show") {
 }
 
 const initialState = await loadState();
-await saveState({ ...initialState, startedAt: initialState.startedAt ?? now() });
+await enqueueState(async () => saveState({ ...initialState, startedAt: initialState.startedAt ?? now(), finishedAt: undefined }));
 await appendBatch(`Batch started ${now()}`);
 
-for (const item of manifest.items) {
+async function processItem(item: ManifestItem) {
   const state = await loadState();
   if (state.items[item.id]?.status === "completed") {
     await appendBatch(`Skipping completed item ${item.id}`);
-    continue;
+    return;
   }
   const staging = join(root, "staging", item.id);
   const logPath = join(root, "logs", `${item.id}.log`);
@@ -208,7 +229,7 @@ for (const item of manifest.items) {
   if (exitCode !== 0) {
     await setItemState(item.id, { status: "failed", failedAt: now(), error: `aria2c exited ${exitCode}` });
     await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
-    process.exit(exitCode);
+    throw new Error(`${item.title}: aria2c exited ${exitCode}`);
   }
 
   await setItemState(item.id, { status: "organizing" });
@@ -219,14 +240,20 @@ for (const item of manifest.items) {
   } catch (error) {
     await setItemState(item.id, { status: "failed", failedAt: now(), error: error instanceof Error ? error.message : String(error) });
     await appendBatch(`FAILED ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    throw error;
   }
   await setItemState(item.id, { status: "completed", completedAt: now() });
   await appendBatch(`Completed ${item.title}`);
 }
 
+const results = await Promise.allSettled(manifest.items.map((item) => processItem(item)));
+const failed = results.filter((result) => result.status === "rejected");
 const finalState = await loadState();
-finalState.finishedAt = now();
+if (failed.length === 0) finalState.finishedAt = now();
 finalState.currentItemId = null;
 await saveState(finalState);
+if (failed.length) {
+  await appendBatch(`Batch failed ${now()} - ${failed.length} item(s) failed`);
+  process.exit(1);
+}
 await appendBatch(`Batch completed ${now()}`);
