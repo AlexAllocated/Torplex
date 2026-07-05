@@ -1607,7 +1607,6 @@ function renderMapPeerLabels(width, height) {
     }
     if (span) span.textContent = text;
     if (detail) detail.textContent = detailText;
-    node.title = country + ' - ' + item.peer.ip + ':' + item.peer.port + ' - ' + text;
     const estimatedWidth = Math.min(170, 16 + (flagUrl ? 25 : 0) + text.length * 6);
     const x = Math.min(width - estimatedWidth - 8, Math.max(6, item.x + 8));
     const y = Math.min(height - 18, Math.max(10, item.y - 14));
