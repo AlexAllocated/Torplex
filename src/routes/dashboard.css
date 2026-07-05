@@ -366,6 +366,10 @@
       font-weight: 850;
       cursor: pointer;
     }
+    .secondary-button:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
     .intake-dialog {
       width: min(980px, calc(100vw - 32px));
       max-height: calc(100vh - 48px);
@@ -399,6 +403,27 @@
     .primary-button:disabled {
       cursor: not-allowed;
       opacity: .45;
+    }
+    .danger-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border: 1px solid rgba(244, 112, 134, .48);
+      border-radius: 8px;
+      padding: 7px 10px;
+      color: #ffe2e8;
+      background: rgba(244, 112, 134, .10);
+      font-weight: 850;
+      cursor: pointer;
+    }
+    .danger-button:hover:not(:disabled) {
+      border-color: rgba(244, 112, 134, .76);
+      background: rgba(244, 112, 134, .18);
+    }
+    .danger-button:disabled {
+      cursor: not-allowed;
+      opacity: .42;
     }
     .intake-summary {
       min-height: 58px;
@@ -434,6 +459,18 @@
       display: grid;
       gap: 10px;
       margin-top: 16px;
+    }
+    .queue-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 18px;
+    }
+    .queue-action {
+      min-height: 34px;
+      padding: 7px 11px;
+      font-size: 12px;
     }
     .transfer-map {
       position: relative;
@@ -748,7 +785,7 @@
     .item {
       position: relative;
       display: grid;
-      grid-template-columns: minmax(220px, 1.5fr) minmax(110px, .55fr) minmax(190px, 1fr) minmax(78px, .35fr) minmax(78px, .35fr);
+      grid-template-columns: minmax(220px, 1.5fr) minmax(110px, .55fr) minmax(190px, 1fr) minmax(78px, .35fr) minmax(78px, .35fr) minmax(82px, auto);
       gap: 12px;
       align-items: center;
       min-height: 82px;
@@ -759,6 +796,11 @@
     .item.active { border-color: rgba(87, 224, 194, .55); background: rgba(24, 44, 43, .88); }
     .item.completed { border-color: rgba(126, 231, 135, .45); }
     .item.failed { border-color: rgba(244, 112, 134, .62); background: rgba(58, 25, 34, .88); }
+    .item-actions {
+      display: flex;
+      justify-content: flex-end;
+      min-width: 0;
+    }
     .item.active::before {
       position: absolute;
       inset: 0;

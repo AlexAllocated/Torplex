@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from "fs";
-import { mkdir, readdir, rename, writeFile } from "fs/promises";
+import { mkdir, readdir, rename, rm, writeFile } from "fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, join } from "path";
@@ -467,6 +467,13 @@ async function saveManifest(manifest: Manifest) {
   await rename(tmp, path);
 }
 
+async function saveState(state: State) {
+  const path = join(root, "state.json");
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2));
+  await rename(tmp, path);
+}
+
 function parseAmount(value: string, unit: string): number {
   return Number(value) * (byteUnits[unit] ?? 1);
 }
@@ -565,6 +572,76 @@ function aria2ProcessItems() {
     if (pid && itemId) processes.set(pid, itemId);
   }
   return processes;
+}
+
+function killAria2ForItem(itemId: string) {
+  const processes = aria2ProcessItems();
+  const pids = [...processes.entries()]
+    .filter(([, processItemId]) => processItemId === itemId)
+    .map(([pid]) => pid);
+  for (const pid of pids) {
+    Bun.spawnSync(["kill", "-TERM", pid]);
+  }
+  if (pids.length) {
+    Bun.spawnSync(["sleep", "0.4"]);
+    for (const pid of pids) {
+      const alive = Bun.spawnSync(["kill", "-0", pid]);
+      if (alive.exitCode === 0) Bun.spawnSync(["kill", "-KILL", pid]);
+    }
+  }
+  return pids;
+}
+
+async function removeItemArtifacts(item: Item) {
+  await rm(join(root, "staging", item.id), { recursive: true, force: true });
+  await rm(join(root, "logs", `${item.id}.log`), { force: true });
+  if (item.torrentFile) await rm(join(root, "torrents", item.torrentFile), { force: true });
+}
+
+export async function removeTorrentItem(id: string) {
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const item = manifest.items.find((entry) => entry.id === id);
+  if (!item) throw new Error(`No torrent item found for ${id}`);
+  const killedPids = killAria2ForItem(id);
+  manifest.items = manifest.items.filter((entry) => entry.id !== id);
+  await saveManifest(manifest);
+
+  const state = readJson<State>(join(root, "state.json"), { items: {} });
+  if (!state.items) state.items = {};
+  delete state.items[id];
+  if (state.currentItemId === id) state.currentItemId = null;
+  await saveState(state);
+  await removeItemArtifacts(item);
+
+  for (const [key, peer] of peerHistory.entries()) {
+    if (peer.itemId === id || key.startsWith(`${id}:`)) peerHistory.delete(key);
+  }
+
+  return { ok: true, item, killedPids };
+}
+
+export async function clearCompletedItems() {
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const state = readJson<State>(join(root, "state.json"), { items: {} });
+  const stateItems = state.items ?? {};
+  const completed = manifest.items.filter((item) => stateItems[item.id]?.status === "completed");
+  if (!completed.length) return { ok: true, cleared: 0, items: [] };
+
+  const completedIds = new Set(completed.map((item) => item.id));
+  manifest.items = manifest.items.filter((item) => !completedIds.has(item.id));
+  await saveManifest(manifest);
+
+  state.items = { ...stateItems };
+  for (const id of completedIds) delete state.items[id];
+  if (state.currentItemId && completedIds.has(state.currentItemId)) state.currentItemId = null;
+  await saveState(state);
+
+  for (const item of completed) {
+    await rm(join(root, "logs", `${item.id}.log`), { force: true });
+    if (item.torrentFile) await rm(join(root, "torrents", item.torrentFile), { force: true });
+  }
+
+  return { ok: true, cleared: completed.length, items: completed };
 }
 
 function peerKey(peer: Pick<Peer, "ip" | "port" | "pid" | "itemId">) {

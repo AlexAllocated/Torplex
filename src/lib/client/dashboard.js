@@ -60,6 +60,7 @@ const sessionState = {
   loginUrl: '/auth/login',
   logoutUrl: '/auth/logout',
 };
+let latestItems = [];
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -685,6 +686,7 @@ function drawWorldFrame(now) {
 
 function renderItems(items) {
   const container = document.getElementById('items');
+  latestItems = Array.isArray(items) ? items : [];
   const seen = new Set();
   const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
   const rowMarkup =
@@ -692,7 +694,8 @@ function renderItems(items) {
     '<div><span data-role="status" class="chip"></span></div>' +
     '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
     '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
-    '<div><div class="label">ETA</div><div data-role="eta"></div></div>';
+    '<div><div class="label">ETA</div><div data-role="eta"></div></div>' +
+    '<div class="item-actions"><button data-role="remove" class="danger-button" type="button">Remove</button></div>';
   const orderedItems = items
     .map((item, index) => ({ item, index }))
     .sort((a, b) => (priority[a.item.status] ?? 1) - (priority[b.item.status] ?? 1) || a.index - b.index)
@@ -738,10 +741,67 @@ function renderItems(items) {
     setText(row.querySelector('[data-role="detail"]'), progressDetailFor(item));
     setText(row.querySelector('[data-role="rate"]'), item.progress.rate || '-');
     setText(row.querySelector('[data-role="eta"]'), item.progress.eta || '-');
+    const remove = row.querySelector('[data-role="remove"]');
+    if (remove) {
+      remove.disabled = !sessionState.authenticated;
+      remove.textContent = item.status === 'completed' ? 'Clear' : 'Remove';
+      remove.onclick = () => removeTorrentItem(item);
+    }
   });
   Array.from(container.children).forEach((row) => {
     if (!seen.has(row.id)) row.remove();
   });
+  renderQueueControls();
+}
+
+function renderQueueControls() {
+  const clear = document.getElementById('clearCompleted');
+  if (!clear) return;
+  const completedCount = latestItems.filter((item) => item.status === 'completed').length;
+  clear.disabled = !sessionState.authenticated || completedCount === 0;
+  clear.textContent = completedCount ? 'Clear Completed (' + completedCount + ')' : 'Clear Completed';
+}
+
+function itemCleanupDescription(item) {
+  if (item.status === 'completed') return 'This removes the completed row from Torplex. Plex media stays in place.';
+  if (item.status === 'active' || item.status === 'organizing') return 'This stops the active download and deletes its partial data.';
+  return 'This removes the queued item and deletes any partial data.';
+}
+
+async function removeTorrentItem(item) {
+  if (!sessionState.authenticated || !item?.id) return;
+  const message = 'Remove "' + item.title + '"?\n\n' + itemCleanupDescription(item);
+  if (!window.confirm(message)) return;
+  const row = document.getElementById(rowIdFor(item.id));
+  const button = row?.querySelector('[data-role="remove"]');
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch('/api/torrents/' + encodeURIComponent(item.id), { method: 'DELETE' });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'Remove failed');
+    await refreshFallback();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+    if (button) button.disabled = !sessionState.authenticated;
+  }
+}
+
+async function clearCompletedItems() {
+  if (!sessionState.authenticated) return;
+  const completedCount = latestItems.filter((item) => item.status === 'completed').length;
+  if (!completedCount) return;
+  if (!window.confirm('Clear ' + completedCount + ' completed queue row' + (completedCount === 1 ? '' : 's') + '?\n\nPlex media stays in place.')) return;
+  const clear = document.getElementById('clearCompleted');
+  if (clear) clear.disabled = true;
+  try {
+    const res = await fetch('/api/torrents/clear-completed', { method: 'POST' });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'Clear completed failed');
+    await refreshFallback();
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+    renderQueueControls();
+  }
 }
 
 function activeItem(data) {
@@ -1013,6 +1073,7 @@ function renderSessionControls() {
   }
 
   if (logout) logout.hidden = !sessionState.authenticated;
+  renderQueueControls();
 }
 
 async function refreshSession() {
@@ -1194,6 +1255,10 @@ function initIntakeControls() {
   });
 }
 
+function initQueueControls() {
+  document.getElementById('clearCompleted')?.addEventListener('click', clearCompletedItems);
+}
+
 function render(data) {
   const active = activeItem(data);
   const activeCount = data.totals.activeItems || 0;
@@ -1270,6 +1335,7 @@ initWarp();
 initMapControls();
 initDialogControls();
 initIntakeControls();
+initQueueControls();
 refreshSession();
 window.addEventListener('resize', () => {
   resizeWarp();

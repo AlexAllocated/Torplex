@@ -162,7 +162,10 @@
   </section>
 
   <section>
-    <div class="label">Queue</div>
+    <div class="queue-head">
+      <div class="label">Queue</div>
+      <button id="clearCompleted" class="secondary-button queue-action" type="button" disabled>Clear Completed</button>
+    </div>
     <div id="items" class="items"></div>
   </section>
 </main>
