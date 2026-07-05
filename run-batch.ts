@@ -13,6 +13,7 @@ type ManifestItem = {
   destination: { type: "movie" | "show"; path: string };
   organize:
     | { strategy: "moveRoot"; seasonRenames?: Record<string, string>; fileRenames?: Record<string, string> }
+    | { strategy: "mergeRoot"; targetSubdir?: string }
     | { strategy: "singleFile"; source: string; finalName: string }
     | { strategy: "singleEpisode"; source: string; finalName: string };
 };
@@ -124,6 +125,17 @@ async function organize(item: ManifestItem) {
         await ensureDir(dirname(target));
         await rename(source, target);
       }
+    }
+  } else if (item.organize.strategy === "mergeRoot") {
+    await ensureDir(dest);
+    const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
+    await ensureDir(targetDir);
+    const source = sourceRoot(item);
+    const entries = new Bun.Glob("*").scan(source);
+    for await (const entry of entries) {
+      const target = join(targetDir, entry);
+      if (await pathExists(target)) throw new Error(`Destination already exists: ${target}`);
+      await movePath(join(source, entry), target);
     }
   } else if (item.organize.strategy === "singleFile") {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);

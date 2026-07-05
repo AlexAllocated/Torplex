@@ -190,6 +190,70 @@
       "payloadName": "Star Trek - Nemesis (2002) RM4K (1080p BluRay x265 HEVC 10bit AAC 7.1 Tigole)",
       "totalBytes": 9309922276,
       "fileCount": 34
+    },
+    {
+      "id": "ghosts-us-2021-s01",
+      "torrentFile": "Ghosts (US) (2021) Season 1 S01 (1080p BluRay x265 HEVC 10bit EAC3 5.1 Silence).torrent",
+      "title": "Ghosts (US) (2021) S01",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Ghosts (2021)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 1"
+      },
+      "payloadName": "Ghosts (US) (2021) Season 1 S01 (1080p BluRay x265 HEVC 10bit EAC3 5.1 Silence)",
+      "totalBytes": 12762969409,
+      "fileCount": 18
+    },
+    {
+      "id": "ghosts-us-2021-s02",
+      "torrentFile": "Ghosts (US) (2021) Season 2 S02 (1080p PMTP WEB-DL x265 HEVC 10bit EAC3 5.1 Silence).torrent",
+      "title": "Ghosts (US) (2021) S02",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Ghosts (2021)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 2"
+      },
+      "payloadName": "Ghosts (US) (2021) Season 2 S02 (1080p PMTP WEB-DL x265 HEVC 10bit EAC3 5.1 Silence)",
+      "totalBytes": 15451898988,
+      "fileCount": 22
+    },
+    {
+      "id": "ghosts-us-2021-s03",
+      "torrentFile": "Ghosts (US) (2021) Season 3 S03 (1080p AMZN WEB-DL x265 HEVC 10bit EAC3 5.1 Silence).torrent",
+      "title": "Ghosts (US) (2021) S03",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Ghosts (2021)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 3"
+      },
+      "payloadName": "Ghosts (US) (2021) Season 3 S03 (1080p AMZN WEB-DL x265 HEVC 10bit EAC3 5.1 Silence)",
+      "totalBytes": 7043058448,
+      "fileCount": 10
+    },
+    {
+      "id": "ghosts-us-2021-s04",
+      "torrentFile": "Ghosts (US) (2021) S04 (1080p AMZN WEB-DL x265 10bit EAC3 5.1 Silence).torrent",
+      "title": "Ghosts (US) (2021) S04",
+      "destination": {
+        "type": "show",
+        "path": "/media/plex/TV Shows/Ghosts (2021)"
+      },
+      "organize": {
+        "strategy": "mergeRoot",
+        "targetSubdir": "Season 4"
+      },
+      "payloadName": "Ghosts (US) (2021) S04 (1080p AMZN WEB-DL x265 10bit EAC3 5.1 Silence)",
+      "totalBytes": 15391454650,
+      "fileCount": 22
     }
   ]
 }
