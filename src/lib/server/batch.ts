@@ -108,6 +108,14 @@ let lastPeerRefresh = 0;
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 const peerHistoryTtlMs = 15 * 60 * 1000;
+const activeStreamIntervalMs = 500;
+const idleStreamIntervalMs = 5_000;
+const streamHeartbeatMs = 30_000;
+
+type BuildStatusOptions = {
+  includeBatchLogTail?: boolean;
+  includeLogs?: boolean;
+};
 
 function readJson<T>(path: string, fallback: T): T {
   try {
@@ -521,6 +529,19 @@ function parseProgress(log: string) {
   };
 }
 
+function completedProgress(totalBytes: number) {
+  return {
+    line: "",
+    downloadedBytes: totalBytes,
+    totalBytes,
+    percent: totalBytes ? 100 : 0,
+    rate: "",
+    eta: "",
+    connections: 0,
+    seeders: 0,
+  };
+}
+
 async function diskUsage() {
   const proc = Bun.spawnSync(["df", "-h", diskUsagePath]);
   const text = proc.stdout.toString().trim();
@@ -785,7 +806,9 @@ async function listLogs() {
   }
 }
 
-export async function buildStatus() {
+export async function buildStatus(options: BuildStatusOptions = {}) {
+  const includeBatchLogTail = options.includeBatchLogTail ?? true;
+  const includeLogs = options.includeLogs ?? true;
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: "", items: [] });
   const state = readJson<State>(join(root, "state.json"), {});
   const stateItems = state.items ?? {};
@@ -798,9 +821,11 @@ export async function buildStatus() {
 
   const items = manifest.items.map((item) => {
     const itemState = stateItems[item.id] ?? {};
-    const log = readTail(join(root, "logs", `${item.id}.log`));
-    const progress = parseProgress(log);
     const status = itemState.status ?? "pending";
+    const shouldReadProgressLog = status !== "completed" || !item.totalBytes;
+    const progress = shouldReadProgressLog
+      ? parseProgress(readTail(join(root, "logs", `${item.id}.log`)))
+      : completedProgress(item.totalBytes);
     const effectiveTotalBytes = item.totalBytes || progress.totalBytes;
     if (status === "completed") {
       completedBytes += effectiveTotalBytes;
@@ -828,7 +853,7 @@ export async function buildStatus() {
   const activeItems = items.filter((item) => item.status === "active" || item.status === "organizing");
   const activeRemainingBytes = Math.max(0, activeTotalBytes - activeBytes);
   const doneBytes = completedBytes + activeBytes;
-  const rawLog = readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "");
+  const rawLog = includeBatchLogTail ? readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "") : "";
   return {
     generatedAt: new Date().toISOString(),
     root,
@@ -851,9 +876,18 @@ export async function buildStatus() {
     disk: await diskUsage(),
     swarm: await swarmPeers({ connections: activeConnections, seeders: activeSeeders }),
     items,
-    logs: await listLogs(),
+    logs: includeLogs ? await listLogs() : [],
     batchLogTail: rawLog.split(/\r?\n/).slice(-80).join("\n"),
   };
+}
+
+function streamFingerprint(status: Awaited<ReturnType<typeof buildStatus>>) {
+  const stable = {
+    ...status,
+    generatedAt: "",
+    swarm: status.swarm ? { ...status.swarm, updatedAt: "" } : status.swarm,
+  };
+  return JSON.stringify(stable);
 }
 
 function formString(form: FormData, key: string, fallback = "") {
@@ -961,14 +995,24 @@ export async function addTorrentUpload(req: Request) {
 
 export function statusStream() {
   const encoder = new TextEncoder();
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  let lastFingerprint = "";
+  let lastHeartbeatAt = 0;
 
   const encodeEvent = (event: string, data: unknown) =>
     encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   return new ReadableStream({
     start(controller) {
+      const clearTimer = () => {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+      };
+      const schedule = (delay: number) => {
+        clearTimer();
+        if (!closed) timer = setTimeout(() => void send(), delay);
+      };
       const enqueue = (chunk: Uint8Array) => {
         if (closed) return false;
         try {
@@ -976,26 +1020,39 @@ export function statusStream() {
           return true;
         } catch {
           closed = true;
-          if (timer) clearInterval(timer);
+          clearTimer();
           return false;
         }
       };
       const send = async () => {
         if (closed) return;
         try {
-          enqueue(encodeEvent("status", await buildStatus()));
+          const status = await buildStatus({ includeBatchLogTail: false, includeLogs: false });
+          const active = (status.totals.activeItems ?? 0) > 0;
+          const fingerprint = streamFingerprint(status);
+          if (active || fingerprint !== lastFingerprint) {
+            lastFingerprint = fingerprint;
+            enqueue(encodeEvent("status", status));
+          } else {
+            const now = Date.now();
+            if (now - lastHeartbeatAt >= streamHeartbeatMs) {
+              lastHeartbeatAt = now;
+              enqueue(encoder.encode(`: idle ${new Date(now).toISOString()}\n\n`));
+            }
+          }
+          schedule(active ? activeStreamIntervalMs : idleStreamIntervalMs);
         } catch (error) {
           enqueue(encodeEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+          schedule(idleStreamIntervalMs);
         }
       };
 
       enqueue(encoder.encode("retry: 1000\n\n"));
       void send();
-      timer = setInterval(() => void send(), 500);
     },
     cancel() {
       closed = true;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
     },
   });
 }
