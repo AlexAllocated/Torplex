@@ -36,7 +36,7 @@ function cookieOptions(origin: string) {
 }
 
 export function appOrigin(url: URL) {
-  return (process.env.APP_ORIGIN || url.origin).replace(/\/$/, "");
+  return (process.env.ORIGIN || process.env.APP_ORIGIN || url.origin).replace(/\/$/, "");
 }
 
 export function authConfig() {

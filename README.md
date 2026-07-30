@@ -62,6 +62,7 @@ MEDIA_ROOT=/media/plex
 MOVIES_DIR=/media/plex/Movies
 TV_DIR="/media/plex/TV Shows"
 PLEX_URL=http://127.0.0.1:32400
+ORIGIN=http://SERVER_IP:8787
 AUTH_PASSWORD=replace-with-a-login-password
 AUTH_COOKIE_SECRET=replace-with-a-long-random-secret
 ```
@@ -144,7 +145,8 @@ If these commands need `sudo`, configure the service user accordingly or set the
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `APP_ORIGIN` | request origin | Public origin used for secure session cookies behind a reverse proxy. |
+| `ORIGIN` | inferred as HTTPS | Exact browser-facing origin used by adapter-node for request URLs, CSRF validation, and secure session cookies. For example, `http://192.168.1.10:8787`. |
+| `APP_ORIGIN` | `ORIGIN` or request origin | Legacy session-cookie origin override. Prefer `ORIGIN`, which also configures adapter-node. |
 | `AUTH_REQUIRED` | `true` | Require a valid password session for the dashboard, status API, live event stream, and uploads. Set `false` only for trusted local/private installs. |
 | `AUTH_PASSWORD` | empty | Password used to unlock Torplex. Required when `AUTH_REQUIRED=true`. |
 | `AUTH_COOKIE_SECRET` | development fallback | Secret used to sign session cookies. Use a long random value. |
@@ -238,7 +240,8 @@ bun run build
 ## Troubleshooting
 
 - **Dashboard says `AUTH_PASSWORD` is not configured:** set `AUTH_PASSWORD`, then restart the web app.
-- **Login works over HTTP but not HTTPS:** set `APP_ORIGIN` to the public HTTPS origin and restart the web app.
+- **Login returns `Cross-site POST form submissions are forbidden`:** set `ORIGIN` to the exact URL origin shown in the browser (scheme, host, and port), then restart the web app.
+- **Login works over HTTP but not HTTPS:** set `ORIGIN` to the public HTTPS origin and restart the web app.
 - **Plex refresh fails:** set `PLEX_TOKEN` explicitly or make sure the worker can read `PLEX_PREFERENCES_PATH`.
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.
 - **No peer map data:** make sure `ss` is installed and `aria2c` is running on the same host as the web app.
