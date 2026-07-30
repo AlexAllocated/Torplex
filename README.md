@@ -31,7 +31,7 @@ Torplex is intentionally simple:
 - Linux server or VM.
 - Bun 1.3 or newer.
 - `aria2c` installed and available on `PATH`.
-- `curl`, `find`, `df`, and `ss`.
+- `curl`, `find`, `df`, `ps`, and `ss`.
 - Plex Media Server running locally or reachable over HTTP.
 - A media directory writable by the user running the worker, or passwordless `sudo` for the configured ownership/mode commands.
 - Optional but recommended: an HTTPS domain, reverse proxy, or tunnel URL.
@@ -40,7 +40,7 @@ Install the OS dependencies on Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y aria2 curl iproute2
+sudo apt-get install -y aria2 curl iproute2 procps
 ```
 
 ## Quick Start
@@ -102,9 +102,14 @@ By default, Torplex requires password login for the dashboard, status API, live 
 | --- | --- | --- |
 | `HOST` | `0.0.0.0` | Host interface for the web server. |
 | `PORT` | `8787` | Port for the web server. |
+| `SHUTDOWN_TIMEOUT` | `30` | Seconds adapter-node waits before closing live connections during shutdown. Torplex recommends `3` for a supervised service. |
 | `BATCH_DIR` | `/media/plex/.downloads/torrent-batch` | Runtime state, torrent files, staging, and logs. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
 | `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Maximum simultaneous torrent jobs. Use a small value on single-disk systems. |
+| `MAX_MAP_PEERS` | `320` | Maximum aria2 connections retained for the swarm map. |
+| `MAP_ORIGIN_LABEL` | `SERVER` | Label shown above the receiving node on the swarm map. |
+| `MAP_ORIGIN_LAT`, `MAP_ORIGIN_LON` | automatic | Optional fixed receiving-node coordinates. By default Torplex geolocates its public IP. |
+| `MAP_ORIGIN_IP` | automatic | Optional public IP metadata used with fixed map coordinates. |
 
 ### Media Paths
 
@@ -214,6 +219,7 @@ bun run-batch.ts
 ```
 
 If you use systemd, create one service for each command so the dashboard can restart independently from the downloader.
+Include `iproute2` and `procps` in the web service's `PATH`; the swarm map uses `ss` and `ps` to associate live sockets with torrent jobs.
 
 ## Development
 
@@ -225,8 +231,21 @@ bun run dev
 Build check:
 
 ```bash
+bun run check
 bun run build
 ```
+
+Live browser check:
+
+```bash
+bunx playwright install chromium
+TORPLEX_E2E_URL=http://SERVER_IP:8787 \
+TORPLEX_E2E_PASSWORD=your-password \
+bun run test:e2e
+```
+
+Set `TORPLEX_E2E_REQUIRE_PEERS=1` when active downloads should also be required during the check, and
+`TORPLEX_E2E_REQUIRE_MAPPED_ORIGIN=1` when public-IP geolocation must succeed.
 
 ## Security Notes
 
@@ -244,6 +263,6 @@ bun run build
 - **Login works over HTTP but not HTTPS:** set `ORIGIN` to the public HTTPS origin and restart the web app.
 - **Plex refresh fails:** set `PLEX_TOKEN` explicitly or make sure the worker can read `PLEX_PREFERENCES_PATH`.
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.
-- **No peer map data:** make sure `ss` is installed and `aria2c` is running on the same host as the web app.
+- **No peer map data:** make sure `ss` and `ps` are installed and `aria2c` is running on the same host as the web app.
 - **Downloads do not start after upload:** make sure `run-batch.ts` is running and watching the same `BATCH_DIR` as the web app.
 - **Pasted page URL returns a Cloudflare challenge:** open the page in a browser and paste its magnet link, or download and upload the `.torrent` file. Torplex does not bypass browser challenges.

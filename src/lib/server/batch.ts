@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "fs";
 import { mkdir, readdir, rename, rm, writeFile } from "fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -12,6 +12,9 @@ const tvDir = process.env.TV_DIR ?? `${mediaRoot}/TV Shows`;
 const diskUsagePath = process.env.DISK_USAGE_PATH ?? mediaRoot;
 const maxTorrentBytes = 20 * 1024 * 1024;
 const maxHtmlBytes = 2 * 1024 * 1024;
+const configuredMaxMapPeers = Number.parseInt(process.env.MAX_MAP_PEERS ?? "320", 10);
+const maxMapPeers = Number.isFinite(configuredMaxMapPeers) && configuredMaxMapPeers > 0 ? configuredMaxMapPeers : 320;
+const mapOriginLabel = (process.env.MAP_ORIGIN_LABEL ?? "SERVER").trim() || "SERVER";
 
 type Item = {
   id: string;
@@ -77,6 +80,18 @@ type PeerGeo = Peer & {
   lookupStatus: "mapped" | "unmapped";
 };
 
+type MapOrigin = {
+  label: string;
+  ip?: string;
+  country?: string;
+  countryCode?: string;
+  region?: string;
+  city?: string;
+  lat: number;
+  lon: number;
+  lookupStatus: "mapped" | "fallback";
+};
+
 const byteUnits: Record<string, number> = {
   B: 1,
   KiB: 1024,
@@ -87,16 +102,21 @@ const byteUnits: Record<string, number> = {
 
 const peerGeoCache = new Map<string, { expiresAt: number; value: PeerGeo }>();
 const peerHistory = new Map<string, PeerGeo>();
-let peerSnapshot: {
+let mapOriginCache: { expiresAt: number; value: MapOrigin } | null = null;
+let peerGeoBlockedUntil = 0;
+type PeerSnapshot = {
   updatedAt: string;
+  origin: MapOrigin;
   peers: PeerGeo[];
   activeCount: number;
   probingCount: number;
   inactiveCount: number;
   aria2Connections: number;
   aria2Seeders: number;
-} = {
+};
+let peerSnapshot: PeerSnapshot = {
   updatedAt: new Date(0).toISOString(),
+  origin: { label: mapOriginLabel, lat: 39, lon: -98, lookupStatus: "fallback" },
   peers: [],
   activeCount: 0,
   probingCount: 0,
@@ -105,10 +125,12 @@ let peerSnapshot: {
   aria2Seeders: 0,
 };
 let lastPeerRefresh = 0;
+let peerRefreshPromise: Promise<PeerSnapshot> | null = null;
+let diskUsageCache: { expiresAt: number; value: Awaited<ReturnType<typeof readDiskUsage>> } | null = null;
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 const peerHistoryTtlMs = 15 * 60 * 1000;
-const activeStreamIntervalMs = 500;
+const activeStreamIntervalMs = 1_000;
 const idleStreamIntervalMs = 5_000;
 const streamHeartbeatMs = 30_000;
 
@@ -126,13 +148,18 @@ function readJson<T>(path: string, fallback: T): T {
 }
 
 function readTail(path: string, maxBytes = 160_000): string {
+  let fd: number | undefined;
   try {
     const stat = statSync(path);
-    const fd = Bun.file(path);
-    const start = Math.max(0, stat.size - maxBytes);
-    return readFileSync(path).subarray(start).toString("utf8");
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.allocUnsafe(length);
+    fd = openSync(path, "r");
+    const bytesRead = readSync(fd, buffer, 0, length, Math.max(0, stat.size - length));
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
     return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -428,6 +455,7 @@ async function resolveSourceUrl(sourceUrl: string) {
   const extracted = extractTorrentSourceFromHtml(html, url);
   if (!extracted) throw new Error("No magnet link or .torrent link found on that page");
   if (extracted.magnetUri) return { kind: "magnet" as const, magnetUri: extracted.magnetUri, sourceUrl, resolvedUrl: url.href };
+  if (!extracted.torrentUrl) throw new Error("No .torrent link found on that page");
 
   const torrent = await fetchExternalSource(extracted.torrentUrl);
   if (!torrent.response.ok) throw new Error(sourceHttpError(torrent.response).replace("URL returned", "Torrent link returned"));
@@ -542,7 +570,20 @@ function completedProgress(totalBytes: number) {
   };
 }
 
-async function diskUsage() {
+function pendingProgress(totalBytes: number) {
+  return {
+    line: "",
+    downloadedBytes: 0,
+    totalBytes,
+    percent: 0,
+    rate: "",
+    eta: "",
+    connections: 0,
+    seeders: 0,
+  };
+}
+
+function readDiskUsage() {
   const proc = Bun.spawnSync(["df", "-h", diskUsagePath]);
   const text = proc.stdout.toString().trim();
   const line = text.split(/\r?\n/)[1] ?? "";
@@ -555,6 +596,13 @@ async function diskUsage() {
     usePercent: parts[4] ?? "",
     mount: parts[5] ?? "",
   };
+}
+
+async function diskUsage() {
+  if (diskUsageCache && diskUsageCache.expiresAt > Date.now()) return diskUsageCache.value;
+  const value = readDiskUsage();
+  diskUsageCache = { expiresAt: Date.now() + 5_000, value };
+  return value;
 }
 
 function parseRemoteAddress(value: string): { ip: string; port: string } | null {
@@ -584,8 +632,14 @@ function isPublicIp(ip: string) {
 }
 
 function aria2ProcessItems() {
-  const proc = Bun.spawnSync(["ps", "-eo", "pid=,args="]);
   const processes = new Map<string, string>();
+  let proc;
+  try {
+    proc = Bun.spawnSync(["ps", "-eo", "pid=,args="]);
+  } catch {
+    return processes;
+  }
+  if (proc.exitCode !== 0) return processes;
   for (const line of proc.stdout.toString().split(/\r?\n/)) {
     if (!line.includes("aria2c") || !line.includes("/staging/")) continue;
     const pid = line.trim().match(/^(\d+)/)?.[1];
@@ -671,7 +725,13 @@ function peerKey(peer: Pick<Peer, "ip" | "port" | "pid" | "itemId">) {
 
 function connectedPeers(): Peer[] {
   const processes = aria2ProcessItems();
-  const proc = Bun.spawnSync(["ss", "-Htinp"]);
+  let proc;
+  try {
+    proc = Bun.spawnSync(["ss", "-Htinp"]);
+  } catch {
+    return [];
+  }
+  if (proc.exitCode !== 0) return [];
   const lines = proc.stdout.toString().split(/\r?\n/);
   const peers = new Map<string, Peer>();
   let current: Peer | null = null;
@@ -695,7 +755,7 @@ function connectedPeers(): Peer[] {
     current = { ip: remote.ip, port: remote.port, state, ...(pid ? { pid, itemId: processes.get(pid) } : {}) };
     peers.set(peerKey(current), current);
   }
-  return [...peers.values()].slice(0, 48);
+  return [...peers.values()].slice(0, maxMapPeers);
 }
 
 function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
@@ -722,44 +782,120 @@ function markPeerActivity(peer: PeerGeo, nowMs: number): PeerGeo {
   };
 }
 
-async function lookupPeer(peer: Peer): Promise<PeerGeo> {
-  const cached = peerGeoCache.get(peer.ip);
-  if (cached && cached.expiresAt > Date.now()) return { ...cached.value, ...peer };
-  try {
+function peerGeoValue(peer: Peer, data: Record<string, unknown>): PeerGeo {
+  return {
+    ...peer,
+    country: String(data.country ?? ""),
+    countryCode: String(data.countryCode ?? ""),
+    region: String(data.regionName ?? ""),
+    city: String(data.city ?? ""),
+    lat: Number(data.lat),
+    lon: Number(data.lon),
+    isp: String(data.isp ?? ""),
+    as: String(data.as ?? ""),
+    lookupStatus: "mapped",
+  };
+}
+
+async function lookupPeers(peers: Peer[]): Promise<PeerGeo[]> {
+  const nowMs = Date.now();
+  const missingIps = [...new Set(peers
+    .map((peer) => peer.ip)
+    .filter((ip) => !peerGeoCache.get(ip) || Number(peerGeoCache.get(ip)?.expiresAt) <= nowMs))];
+
+  if (missingIps.length && nowMs >= peerGeoBlockedUntil) {
     const fields = "status,country,countryCode,regionName,city,lat,lon,isp,as,query";
-    const response = await fetch(`http://ip-api.com/json/${peer.ip}?fields=${fields}`);
+    for (let offset = 0; offset < missingIps.length; offset += 100) {
+      const chunk = missingIps.slice(offset, offset + 100);
+      try {
+        const response = await fetch(`http://ip-api.com/batch?fields=${fields}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(chunk),
+          signal: AbortSignal.timeout(5_000),
+        });
+        const remaining = Number(response.headers.get("x-rl"));
+        const retrySeconds = Number(response.headers.get("x-ttl"));
+        if (remaining === 0 && Number.isFinite(retrySeconds)) {
+          peerGeoBlockedUntil = Date.now() + Math.max(1, retrySeconds) * 1000;
+        }
+        if (!response.ok) throw new Error(`Peer geolocation returned HTTP ${response.status}`);
+        const rows = (await response.json()) as Array<Record<string, unknown>>;
+        for (const data of rows) {
+          const ip = String(data.query ?? "");
+          if (!ip || data.status !== "success") continue;
+          const peer = peers.find((entry) => entry.ip === ip);
+          if (!peer) continue;
+          peerGeoCache.set(ip, { expiresAt: Date.now() + peerGeoTtlMs, value: peerGeoValue(peer, data) });
+        }
+      } catch {
+        for (const ip of chunk) {
+          if (peerGeoCache.has(ip)) continue;
+          const peer = peers.find((entry) => entry.ip === ip);
+          if (peer) {
+            peerGeoCache.set(ip, {
+              expiresAt: Date.now() + 60_000,
+              value: { ...peer, lookupStatus: "unmapped" },
+            });
+          }
+        }
+      }
+      if (Date.now() < peerGeoBlockedUntil) break;
+    }
+  }
+
+  return peers.map((peer) => {
+    const cached = peerGeoCache.get(peer.ip);
+    return cached ? { ...cached.value, ...peer } : { ...peer, lookupStatus: "unmapped" };
+  });
+}
+
+async function mapOrigin(): Promise<MapOrigin> {
+  const configuredLat = process.env.MAP_ORIGIN_LAT?.trim() ? Number(process.env.MAP_ORIGIN_LAT) : Number.NaN;
+  const configuredLon = process.env.MAP_ORIGIN_LON?.trim() ? Number(process.env.MAP_ORIGIN_LON) : Number.NaN;
+  if (Number.isFinite(configuredLat) && Number.isFinite(configuredLon)) {
+    return {
+      label: mapOriginLabel,
+      ...(process.env.MAP_ORIGIN_IP ? { ip: process.env.MAP_ORIGIN_IP } : {}),
+      lat: configuredLat,
+      lon: configuredLon,
+      lookupStatus: "mapped",
+    };
+  }
+  if (mapOriginCache && mapOriginCache.expiresAt > Date.now()) return mapOriginCache.value;
+  const fallback: MapOrigin = { label: mapOriginLabel, lat: 39, lon: -98, lookupStatus: "fallback" };
+  try {
+    const fields = "status,country,countryCode,regionName,city,lat,lon,query";
+    const response = await fetch(`http://ip-api.com/json/?fields=${fields}`, { signal: AbortSignal.timeout(5_000) });
     const data = (await response.json()) as Record<string, unknown>;
-    if (data.status === "success") {
-      const value: PeerGeo = {
-        ...peer,
+    if (response.ok && data.status === "success") {
+      const value: MapOrigin = {
+        label: mapOriginLabel,
+        ip: String(data.query ?? ""),
         country: String(data.country ?? ""),
         countryCode: String(data.countryCode ?? ""),
         region: String(data.regionName ?? ""),
         city: String(data.city ?? ""),
         lat: Number(data.lat),
         lon: Number(data.lon),
-        isp: String(data.isp ?? ""),
-        as: String(data.as ?? ""),
         lookupStatus: "mapped",
       };
-      peerGeoCache.set(peer.ip, { expiresAt: Date.now() + peerGeoTtlMs, value });
+      mapOriginCache = { expiresAt: Date.now() + peerGeoTtlMs, value };
       return value;
     }
   } catch {
-    // Keep the dashboard live even if the geo service is unavailable.
+    // A central-US fallback keeps the map usable during a geolocation outage.
   }
-  const value: PeerGeo = { ...peer, lookupStatus: "unmapped" };
-  peerGeoCache.set(peer.ip, { expiresAt: Date.now() + 5 * 60 * 1000, value });
-  return value;
+  mapOriginCache = { expiresAt: Date.now() + 60_000, value: fallback };
+  return fallback;
 }
 
-async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
-  if (Date.now() - lastPeerRefresh < peerRefreshMs) return peerSnapshot;
-  lastPeerRefresh = Date.now();
+async function refreshSwarmPeers(stats?: { connections?: number; seeders?: number }): Promise<PeerSnapshot> {
   const nowMs = Date.now();
   const peers = connectedPeers();
   const activeKeys = new Set(peers.map(peerKey));
-  for (const peer of await Promise.all(peers.map((peer) => lookupPeer(peer)))) {
+  const [locatedPeers, origin] = await Promise.all([lookupPeers(peers), mapOrigin()]);
+  for (const peer of locatedPeers) {
     peerHistory.set(peerKey(peer), markPeerActivity(peer, nowMs));
   }
 
@@ -786,16 +922,30 @@ async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
     if (aRank !== bRank) return aRank - bRank;
     return Date.parse(b.lastSeenAt ?? "") - Date.parse(a.lastSeenAt ?? "");
   });
+  const displayedPeers = history.slice(0, maxMapPeers);
+
   peerSnapshot = {
     updatedAt: new Date().toISOString(),
-    peers: history.slice(0, 80),
-    activeCount: history.filter((peer) => peer.active).length,
-    probingCount: history.filter((peer) => peer.probing).length,
-    inactiveCount: history.filter((peer) => !peer.active && !peer.probing).length,
+    origin,
+    peers: displayedPeers,
+    activeCount: displayedPeers.filter((peer) => peer.active).length,
+    probingCount: displayedPeers.filter((peer) => peer.probing).length,
+    inactiveCount: displayedPeers.filter((peer) => !peer.active && !peer.probing).length,
     aria2Connections: stats?.connections ?? 0,
     aria2Seeders: stats?.seeders ?? 0,
   };
+  lastPeerRefresh = Date.now();
   return peerSnapshot;
+}
+
+async function swarmPeers(stats?: { connections?: number; seeders?: number }) {
+  if (Date.now() - lastPeerRefresh < peerRefreshMs) return peerSnapshot;
+  if (!peerRefreshPromise) {
+    peerRefreshPromise = refreshSwarmPeers(stats).finally(() => {
+      peerRefreshPromise = null;
+    });
+  }
+  return await peerRefreshPromise;
 }
 
 async function listLogs() {
@@ -821,11 +971,15 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
 
   const items = manifest.items.map((item) => {
     const itemState = stateItems[item.id] ?? {};
-    const status = itemState.status ?? "pending";
-    const shouldReadProgressLog = status !== "completed" || !item.totalBytes;
+    const destinationExists = existsSync(item.destination.path);
+    const recordedStatus = itemState.status ?? "pending";
+    const status = recordedStatus === "completed" && !destinationExists ? "pending" : recordedStatus;
+    const shouldReadProgressLog = status === "active" || status === "organizing" || status === "failed";
     const progress = shouldReadProgressLog
       ? parseProgress(readTail(join(root, "logs", `${item.id}.log`)))
-      : completedProgress(item.totalBytes);
+      : status === "completed"
+        ? completedProgress(item.totalBytes)
+        : pendingProgress(item.totalBytes);
     const effectiveTotalBytes = item.totalBytes || progress.totalBytes;
     if (status === "completed") {
       completedBytes += effectiveTotalBytes;
@@ -845,7 +999,7 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
       failedAt: itemState.failedAt,
       error: itemState.error,
       progress,
-      destinationExists: existsSync(item.destination.path),
+      destinationExists,
     };
   });
 
@@ -882,12 +1036,30 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
 }
 
 function streamFingerprint(status: Awaited<ReturnType<typeof buildStatus>>) {
-  const stable = {
-    ...status,
-    generatedAt: "",
-    swarm: status.swarm ? { ...status.swarm, updatedAt: "" } : status.swarm,
-  };
-  return JSON.stringify(stable);
+  return JSON.stringify({
+    totals: status.totals,
+    disk: status.disk,
+    items: status.items,
+    swarmUpdatedAt: status.swarm?.updatedAt,
+  });
+}
+
+let streamStatusCache: { createdAt: number; value: Awaited<ReturnType<typeof buildStatus>> } | null = null;
+let streamStatusPromise: Promise<Awaited<ReturnType<typeof buildStatus>>> | null = null;
+
+async function buildStreamStatus() {
+  if (streamStatusCache && Date.now() - streamStatusCache.createdAt < 750) return streamStatusCache.value;
+  if (!streamStatusPromise) {
+    streamStatusPromise = buildStatus({ includeBatchLogTail: false, includeLogs: false })
+      .then((value) => {
+        streamStatusCache = { createdAt: Date.now(), value };
+        return value;
+      })
+      .finally(() => {
+        streamStatusPromise = null;
+      });
+  }
+  return await streamStatusPromise;
 }
 
 function formString(form: FormData, key: string, fallback = "") {
@@ -951,7 +1123,8 @@ export async function addTorrentUpload(req: Request) {
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const id = slugify(formString(form, "id", metadata.suggested.id));
   const title = formString(form, "title", metadata.suggested.title);
-  const mediaType = formString(form, "mediaType", metadata.suggested.mediaType) === "movie" ? "movie" : "show";
+  const mediaType: "movie" | "show" =
+    formString(form, "mediaType", metadata.suggested.mediaType) === "movie" ? "movie" : "show";
   const destinationPath = formString(form, "destinationPath", metadata.suggested.destinationPath);
   const strategyInput = formString(form, "organizeStrategy", metadata.suggested.organizeStrategy);
   const targetSubdir = formString(form, "targetSubdir", metadata.suggested.targetSubdir);
@@ -969,7 +1142,7 @@ export async function addTorrentUpload(req: Request) {
       ? { strategy: "moveRoot" as const }
       : { strategy: "mergeRoot" as const, ...(targetSubdir ? { targetSubdir } : {}) };
 
-  const item = {
+  const item: Item = {
     id,
     ...(filename ? { torrentFile: filename } : {}),
     ...(magnetUri ? { magnetUri } : {}),
@@ -993,66 +1166,88 @@ export async function addTorrentUpload(req: Request) {
   return Response.json({ ok: true, item, restartMessage: "Queued; runner will pick it up automatically" }, { headers: { "cache-control": "no-store" } });
 }
 
+type StatusSubscriber = {
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  lastFingerprint: string;
+  lastSwarmUpdatedAt: string;
+  lastHeartbeatAt: number;
+};
+
+const statusStreamEncoder = new TextEncoder();
+const statusSubscribers = new Set<StatusSubscriber>();
+let statusStreamTimer: ReturnType<typeof setTimeout> | undefined;
+let statusStreamRunning = false;
+
+function encodeStatusEvent(event: string, data: unknown) {
+  return statusStreamEncoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function removeStatusSubscriber(subscriber: StatusSubscriber) {
+  statusSubscribers.delete(subscriber);
+  if (!statusSubscribers.size && statusStreamTimer) {
+    clearTimeout(statusStreamTimer);
+    statusStreamTimer = undefined;
+  }
+}
+
+function enqueueStatus(subscriber: StatusSubscriber, chunk: Uint8Array) {
+  try {
+    subscriber.controller.enqueue(chunk);
+    return true;
+  } catch {
+    removeStatusSubscriber(subscriber);
+    return false;
+  }
+}
+
+function scheduleStatusStream(delay: number) {
+  if (statusStreamTimer) clearTimeout(statusStreamTimer);
+  statusStreamTimer = statusSubscribers.size
+    ? setTimeout(() => void pumpStatusStream(), delay)
+    : undefined;
+}
+
+async function pumpStatusStream() {
+  if (statusStreamRunning || !statusSubscribers.size) return;
+  statusStreamRunning = true;
+  let nextDelay = idleStreamIntervalMs;
+  try {
+    const status = await buildStreamStatus();
+    const active = (status.totals.activeItems ?? 0) > 0;
+    const fingerprint = streamFingerprint(status);
+    const now = Date.now();
+    nextDelay = active ? activeStreamIntervalMs : idleStreamIntervalMs;
+    for (const subscriber of [...statusSubscribers]) {
+      if (fingerprint !== subscriber.lastFingerprint) {
+        subscriber.lastFingerprint = fingerprint;
+        const includeSwarm = status.swarm.updatedAt !== subscriber.lastSwarmUpdatedAt;
+        if (includeSwarm) subscriber.lastSwarmUpdatedAt = status.swarm.updatedAt;
+        enqueueStatus(subscriber, encodeStatusEvent("status", includeSwarm ? status : { ...status, swarm: undefined }));
+      } else if (now - subscriber.lastHeartbeatAt >= streamHeartbeatMs) {
+        subscriber.lastHeartbeatAt = now;
+        enqueueStatus(subscriber, statusStreamEncoder.encode(`: idle ${new Date(now).toISOString()}\n\n`));
+      }
+    }
+  } catch (error) {
+    const event = encodeStatusEvent("error", { message: error instanceof Error ? error.message : String(error) });
+    for (const subscriber of [...statusSubscribers]) enqueueStatus(subscriber, event);
+  } finally {
+    statusStreamRunning = false;
+    scheduleStatusStream(nextDelay);
+  }
+}
+
 export function statusStream() {
-  const encoder = new TextEncoder();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let closed = false;
-  let lastFingerprint = "";
-  let lastHeartbeatAt = 0;
-
-  const encodeEvent = (event: string, data: unknown) =>
-    encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-
-  return new ReadableStream({
+  let subscriber: StatusSubscriber | undefined;
+  return new ReadableStream<Uint8Array>({
     start(controller) {
-      const clearTimer = () => {
-        if (timer) clearTimeout(timer);
-        timer = undefined;
-      };
-      const schedule = (delay: number) => {
-        clearTimer();
-        if (!closed) timer = setTimeout(() => void send(), delay);
-      };
-      const enqueue = (chunk: Uint8Array) => {
-        if (closed) return false;
-        try {
-          controller.enqueue(chunk);
-          return true;
-        } catch {
-          closed = true;
-          clearTimer();
-          return false;
-        }
-      };
-      const send = async () => {
-        if (closed) return;
-        try {
-          const status = await buildStatus({ includeBatchLogTail: false, includeLogs: false });
-          const active = (status.totals.activeItems ?? 0) > 0;
-          const fingerprint = streamFingerprint(status);
-          if (active || fingerprint !== lastFingerprint) {
-            lastFingerprint = fingerprint;
-            enqueue(encodeEvent("status", status));
-          } else {
-            const now = Date.now();
-            if (now - lastHeartbeatAt >= streamHeartbeatMs) {
-              lastHeartbeatAt = now;
-              enqueue(encoder.encode(`: idle ${new Date(now).toISOString()}\n\n`));
-            }
-          }
-          schedule(active ? activeStreamIntervalMs : idleStreamIntervalMs);
-        } catch (error) {
-          enqueue(encodeEvent("error", { message: error instanceof Error ? error.message : String(error) }));
-          schedule(idleStreamIntervalMs);
-        }
-      };
-
-      enqueue(encoder.encode("retry: 1000\n\n"));
-      void send();
+      subscriber = { controller, lastFingerprint: "", lastSwarmUpdatedAt: "", lastHeartbeatAt: 0 };
+      statusSubscribers.add(subscriber);
+      enqueueStatus(subscriber, statusStreamEncoder.encode("retry: 1000\n\n"));
+      if (statusSubscribers.size === 1) void pumpStatusStream();
     },
     cancel() {
-      closed = true;
-      if (timer) clearTimeout(timer);
+      if (subscriber) removeStatusSubscriber(subscriber);
     },
   });
 }

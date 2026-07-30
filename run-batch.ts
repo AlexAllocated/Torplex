@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
 import { dirname, extname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -115,7 +115,7 @@ async function setItemState(id: string, values: Record<string, string | null>) {
 
 async function appendBatch(line: string) {
   await enqueueLog(async () => {
-    await Bun.write(batchLogPath, `${existsSync(batchLogPath) ? await readFile(batchLogPath, "utf8") : ""}${line}\n`);
+    await appendFile(batchLogPath, `${line}\n`);
   });
 }
 
@@ -302,7 +302,7 @@ await appendBatch(`Batch started ${now()}`);
 
 async function processItem(item: ManifestItem) {
   const state = await loadState();
-  if (state.items[item.id]?.status === "completed") {
+  if (state.items[item.id]?.status === "completed" && existsSync(item.destination.path)) {
     await appendBatch(`Skipping completed item ${item.id}`);
     return;
   }
@@ -396,7 +396,13 @@ async function markBatchCompleteIfIdle(manifest: Manifest) {
 function startItem(item: ManifestItem) {
   const task = processItem(item)
     .catch(async (error) => {
-      await appendBatch(`Task error ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      const state = await loadState();
+      const status = state.items[item.id]?.status;
+      if (status !== "completed" && status !== "failed") {
+        await setItemState(item.id, { status: "failed", failedAt: now(), error: message });
+      }
+      await appendBatch(`Task error ${item.title}: ${message}`);
     })
     .finally(() => {
       running.delete(item.id);
@@ -410,7 +416,12 @@ while (true) {
   for (const item of manifest.items) {
     if (maxConcurrentDownloads > 0 && running.size >= maxConcurrentDownloads) break;
     if (running.has(item.id)) continue;
-    const status = state.items[item.id]?.status;
+    let status = state.items[item.id]?.status;
+    if (status === "completed" && !existsSync(item.destination.path)) {
+      await setItemState(item.id, { status: "pending", completedAt: null, error: "Completed destination is missing; queued again" });
+      await appendBatch(`Re-queued ${item.title}: completed destination is missing`);
+      status = "pending";
+    }
     if (status === "completed" || status === "failed") continue;
     completionLogged = false;
     startItem(item);

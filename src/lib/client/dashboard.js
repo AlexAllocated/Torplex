@@ -36,7 +36,9 @@ const swarmMap = {
   labelNodes: new Map(),
   raf: 0,
   lastFrame: 0,
-  origin: { lat: 39, lon: -98 },
+  updatedAt: '',
+  labelsDirty: true,
+  origin: { label: 'SERVER', lat: 39, lon: -98 },
 };
 const mapView = {
   scale: 1,
@@ -47,6 +49,11 @@ const mapView = {
   startY: 0,
   baseX: 0,
   baseY: 0,
+};
+const mapRaster = {
+  image: null,
+  ready: false,
+  raf: 0,
 };
 let fullscreenBusy = false;
 const completedSeen = new Set();
@@ -74,7 +81,7 @@ const colorPalette = [
   '#38bdf8',
   '#f87171',
 ];
-const vmLimeRgb = '191, 255, 0';
+const nodeLimeRgb = '191, 255, 0';
 let latestItems = [];
 
 function esc(value) {
@@ -189,7 +196,20 @@ function renderSwarmMap(swarm) {
   const routeStatus = document.getElementById('routeStatus');
   const peers = Array.isArray(swarm?.peers) ? swarm.peers : [];
   const mapped = peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon));
-  swarmMap.peers = peers;
+  const updatedAt = String(swarm?.updatedAt || '');
+  if (swarmMap.updatedAt !== updatedAt) {
+    swarmMap.updatedAt = updatedAt;
+    swarmMap.peers = peers;
+    syncDisplayPeers(peers);
+    swarmMap.labelsDirty = true;
+  }
+  if (Number.isFinite(swarm?.origin?.lat) && Number.isFinite(swarm?.origin?.lon)) {
+    swarmMap.origin = {
+      label: String(swarm.origin.label || 'SERVER'),
+      lat: Number(swarm.origin.lat),
+      lon: Number(swarm.origin.lon),
+    };
+  }
   routeStatus.textContent = peers.length
     ? 'aria2 SD:' + (swarm.aria2Seeders ?? 0) + ' CN:' + (swarm.aria2Connections ?? 0) +
       ' - active ' + (swarm.activeCount ?? 0) +
@@ -217,11 +237,52 @@ function clampMapView() {
 
 function applyMapTransform() {
   clampMapView();
+  swarmMap.labelsDirty = true;
   const layer = document.getElementById('worldMapLayer');
   if (layer) layer.style.transform = '';
-  document.querySelectorAll('.world-map-image').forEach((image) => {
-    image.style.transform = 'translate(' + mapView.x + 'px, ' + mapView.y + 'px) scale(' + mapView.scale + ')';
+  scheduleMapRaster();
+}
+
+function drawMapRaster() {
+  mapRaster.raf = 0;
+  const canvas = document.getElementById('worldMapRaster');
+  const viewport = document.getElementById('worldMapViewport');
+  const image = mapRaster.image;
+  if (!canvas || !viewport || !image || !mapRaster.ready) return;
+  const width = Math.max(1, viewport.clientWidth);
+  const height = Math.max(1, viewport.clientHeight);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const pixelWidth = Math.max(1, Math.floor(width * dpr));
+  const pixelHeight = Math.max(1, Math.floor(height * dpr));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const sourceWidth = image.naturalWidth / mapView.scale;
+  const sourceHeight = image.naturalHeight / mapView.scale;
+  const sourceX = Math.max(0, Math.min(image.naturalWidth - sourceWidth, -mapView.x / (width * mapView.scale) * image.naturalWidth));
+  const sourceY = Math.max(0, Math.min(image.naturalHeight - sourceHeight, -mapView.y / (height * mapView.scale) * image.naturalHeight));
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+}
+
+function scheduleMapRaster() {
+  if (!mapRaster.raf) mapRaster.raf = requestAnimationFrame(drawMapRaster);
+}
+
+function initMapRaster() {
+  const image = new Image();
+  image.decoding = 'async';
+  image.addEventListener('load', () => {
+    mapRaster.ready = true;
+    scheduleMapRaster();
   });
+  image.src = '/assets/natural-earth-ii-10800.webp';
+  mapRaster.image = image;
 }
 
 function cameraPoint(point) {
@@ -239,6 +300,7 @@ function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
   const fullscreenButton = document.getElementById('fullscreenMap');
   if (!frame) return;
+  initMapRaster();
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
     const viewport = document.getElementById('worldMapViewport');
@@ -380,46 +442,40 @@ function itemVisual(itemId) {
 }
 
 function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
-  ctx.save();
   const head = quadPoint(start, control, end, t);
   const tail = quadPoint(start, control, end, Math.min(1, t + .045));
-  const gradient = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
-  gradient.addColorStop(0, 'rgba(' + rgb + ', 0)');
-  gradient.addColorStop(1, 'rgba(' + rgb + ', ' + (.62 * alpha) + ')');
   ctx.beginPath();
   ctx.moveTo(tail.x, tail.y);
   ctx.lineTo(head.x, head.y);
-  ctx.strokeStyle = gradient;
-  ctx.lineWidth = 5.5;
+  ctx.strokeStyle = 'rgba(' + rgb + ', ' + (.18 * alpha) + ')';
+  ctx.lineWidth = 8;
   ctx.lineCap = 'round';
-  ctx.shadowColor = 'rgba(' + rgb + ', .56)';
-  ctx.shadowBlur = 12;
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(' + rgb + ', ' + (.62 * alpha) + ')';
+  ctx.lineWidth = 4.5;
   ctx.stroke();
   ctx.beginPath();
   ctx.arc(head.x, head.y, 4.8, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(' + rgb + ', ' + alpha + ')';
-  ctx.shadowColor = 'rgba(' + rgb + ', .88)';
-  ctx.shadowBlur = 14;
   ctx.fill();
-  ctx.restore();
 }
 
-function drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor) {
+function drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, nodeLabel) {
   ctx.beginPath();
-  ctx.arc(origin.x, origin.y, vmRadius + 5, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(' + vmColor + ', ' + (.10 + vmPulse.value * .14) + ')';
+  ctx.arc(origin.x, origin.y, nodeRadius + 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(' + nodeColor + ', ' + (.10 + nodePulse.value * .14) + ')';
   ctx.fill();
-  ctx.fillStyle = 'rgb(' + vmColor + ')';
+  ctx.fillStyle = 'rgb(' + nodeColor + ')';
   ctx.beginPath();
-  ctx.arc(origin.x, origin.y, vmRadius, 0, Math.PI * 2);
-  ctx.shadowColor = 'rgba(' + vmColor + ', .82)';
-  ctx.shadowBlur = 18 + vmPulse.value * 16;
+  ctx.arc(origin.x, origin.y, nodeRadius, 0, Math.PI * 2);
+  ctx.shadowColor = 'rgba(' + nodeColor + ', .82)';
+  ctx.shadowBlur = 18 + nodePulse.value * 16;
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(' + vmLimeRgb + ', .95)';
+  ctx.fillStyle = 'rgba(' + nodeLimeRgb + ', .95)';
   ctx.textAlign = 'center';
-  ctx.fillText('VM', origin.x, origin.y - vmRadius - 7);
+  ctx.fillText(nodeLabel, origin.x, origin.y - nodeRadius - 7);
   ctx.textAlign = 'start';
 }
 
@@ -436,7 +492,7 @@ function syncDisplayPeers(peers) {
     .filter(([key]) => key));
   const next = [];
   const nextKeys = new Set();
-  peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).forEach((peer, index) => {
+  peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).forEach((peer, index) => {
     peer.peerKey = (peer.itemId || peer.pid || 'unknown') + ':' + peer.ip + ':' + peer.port;
     const key = peer.peerKey;
     nextKeys.add(key);
@@ -456,14 +512,14 @@ function syncDisplayPeers(peers) {
       next.push(peer);
     }
   });
-  swarmMap.displayPeers = next.slice(0, 40);
+  swarmMap.displayPeers = next;
 }
 
 function renderMapPeerLabels(width, height) {
   const layer = document.getElementById('mapPeerLabels');
   if (!layer) return;
   const visible = swarmMap.displayPeers
-    .filter((item) => item.peer?.active && item.alpha > .05)
+    .filter((item) => item.peer?.active && !item.fading)
     .sort((a, b) =>
       (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0) ||
       (Number(a.rank) || 0) - (Number(b.rank) || 0),
@@ -553,7 +609,7 @@ function renderMapPeerLabels(width, height) {
     node.classList.toggle('edge-bottom', choice.bottom);
     node.style.left = choice.x.toFixed(1) + 'px';
     node.style.top = choice.y.toFixed(1) + 'px';
-    node.style.opacity = String(Math.min(.96, item.alpha));
+    node.style.opacity = '.96';
   });
   swarmMap.labelNodes.forEach((node, key) => {
     if (!seen.has(key)) {
@@ -561,13 +617,15 @@ function renderMapPeerLabels(width, height) {
       swarmMap.labelNodes.delete(key);
     }
   });
+  swarmMap.labelsDirty = false;
 }
 
 function drawWorldFrame(now) {
   swarmMap.raf = requestAnimationFrame(drawWorldFrame);
   const canvas = document.getElementById('worldCanvas');
   if (!canvas) return;
-  syncDisplayPeers(swarmMap.peers);
+  const frameInterval = swarmMap.displayPeers.length > 160 ? 1000 / 30 : 1000 / 60;
+  if (swarmMap.lastFrame && now - swarmMap.lastFrame < frameInterval) return;
   const viewport = document.getElementById('worldMapViewport');
   const rect = { width: viewport?.clientWidth || canvas.clientWidth, height: viewport?.clientHeight || canvas.clientHeight };
   const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -616,9 +674,9 @@ function drawWorldFrame(now) {
   );
   const originWorld = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   const origin = cameraPoint(originWorld);
-  const vmPulse = pulseForSpeed(now, totalIngestBps);
-  const vmColor = vmLimeRgb;
-  const vmRadius = 4.5 * (1 + vmPulse.value);
+  const nodePulse = pulseForSpeed(now, totalIngestBps);
+  const nodeColor = nodeLimeRgb;
+  const nodeRadius = 4.5 * (1 + nodePulse.value);
 
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
   swarmMap.displayPeers.forEach((item) => {
@@ -646,12 +704,12 @@ function drawWorldFrame(now) {
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
       ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.88 * alpha) + ')';
-      ctx.lineWidth = 3.1;
-      ctx.shadowColor = 'rgba(' + activeColor + ', .58)';
-      ctx.shadowBlur = 12;
+      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.17 * alpha) + ')';
+      ctx.lineWidth = 7;
       ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.88 * alpha) + ')';
+      ctx.lineWidth = 2.7;
+      ctx.stroke();
     }
 
     const rateBps = Number(item.peer.receiveRateBps) || 0;
@@ -676,13 +734,10 @@ function drawWorldFrame(now) {
     const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
     ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? 1 : .68) * alpha) + ')';
-    ctx.shadowColor = item.peer.active ? 'rgba(' + activeColor + ', ' + (.75 * alpha) + ')' : 'transparent';
-    ctx.shadowBlur = item.peer.active ? 7 + (1 - peerPulse.value) * 7 : 0;
     ctx.fill();
-    ctx.shadowBlur = 0;
   });
-  drawVmNode(ctx, origin, vmRadius, vmPulse, vmColor);
-  renderMapPeerLabels(width, height);
+  drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
+  if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
 }
 
 function renderItems(items) {
@@ -876,10 +931,11 @@ function drawWarpFrame(now) {
   warp.raf = requestAnimationFrame(drawWarpFrame);
   const canvas = document.getElementById('warpCanvas');
   if (!canvas) return;
+  if (warp.lastFrame && now - warp.lastFrame < 1000 / 30) return;
   const ctx = canvas.getContext('2d');
   const dt = warp.lastFrame ? Math.min(80, now - warp.lastFrame) : 16;
   warp.lastFrame = now;
-  const targetSpeed = Math.min(1, speedChart.current / 75);
+  const targetSpeed = Math.min(1, speedChart.target / 75);
   warp.speed += (targetSpeed - warp.speed) * (1 - Math.exp(-dt / 520));
   const centerX = warp.width * (.50 + Math.sin(now / 6200) * .015);
   const centerY = warp.height * (.36 + Math.cos(now / 7400) * .018);
@@ -929,6 +985,7 @@ function drawWarpFrame(now) {
 function updateSpeedChart(value) {
   const now = performance.now();
   speedChart.target = Number.isFinite(value) ? value : 0;
+  if (!document.getElementById('speedCanvas')) return;
   if (!speedChart.samples.length || now - speedChart.lastSampleAt >= 450) {
     speedChart.samples.push({ time: now, value: speedChart.target });
     speedChart.lastSampleAt = now;
@@ -1276,9 +1333,9 @@ function render(data) {
   const activeRateBytes = data.totals.activeRateBytesPerSecond || 0;
   const activeRateLabel = formatPeerRate(activeRateBytes);
   const activeTitle = activeCount > 1 ? activeCount + ' active downloads' : active ? active.title : 'Queue idle';
-  const activeStreams = Array.isArray(data.swarm?.peers)
-    ? data.swarm.peers.filter((peer) => peer.active && Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).slice(0, 32).length
-    : 0;
+  const streamPeers = Array.isArray(data.swarm?.peers) ? data.swarm.peers : swarmMap.peers;
+  const activeStreams = streamPeers
+    .filter((peer) => peer.active && Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).length;
   const diskUse = Number(String(data.disk.usePercent || '0').replace('%', '')) || 0;
   const diskFree = clamp(100 - diskUse);
   const speed = activeRateBytes / 1024 / 1024;
@@ -1322,7 +1379,7 @@ function render(data) {
   renderedOnce = true;
 
   renderItems(data.items);
-  renderSwarmMap(data.swarm);
+  if (data.swarm) renderSwarmMap(data.swarm);
   const log = document.getElementById('log');
   if (log) log.textContent = data.batchLogTail || '';
 }
