@@ -11,6 +11,8 @@ const plexShowSectionId = process.env.PLEX_SHOW_SECTION_ID ?? "2";
 const mediaChown = process.env.MEDIA_CHOWN ?? "";
 const mediaDirMode = process.env.MEDIA_DIR_MODE ?? "775";
 const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
+const configuredConcurrency = Number.parseInt(process.env.MAX_CONCURRENT_DOWNLOADS ?? "0", 10);
+const maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0 ? configuredConcurrency : 0;
 
 type ManifestItem = {
   id: string;
@@ -168,6 +170,7 @@ async function collectFileStats(path: string) {
 }
 
 async function runCommand(args: string[], logPath: string) {
+  await writeFile(logPath, "");
   const logFile = Bun.file(logPath);
   const writer = logFile.writer();
   const proc = Bun.spawn(args, {
@@ -399,6 +402,7 @@ while (true) {
   const manifest = await loadManifest();
   const state = await loadState();
   for (const item of manifest.items) {
+    if (maxConcurrentDownloads > 0 && running.size >= maxConcurrentDownloads) break;
     if (running.has(item.id)) continue;
     const status = state.items[item.id]?.status;
     if (status === "completed" || status === "failed") continue;

@@ -103,6 +103,7 @@ By default, Torplex requires password login for the dashboard, status API, live 
 | `PORT` | `8787` | Port for the web server. |
 | `BATCH_DIR` | `/media/plex/.downloads/torrent-batch` | Runtime state, torrent files, staging, and logs. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
+| `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Maximum simultaneous torrent jobs. Use a small value on single-disk systems. |
 
 ### Media Paths
 
@@ -173,7 +174,7 @@ The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents
 
 For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 
-The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`.
+The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` to cap parallel jobs; the default of `0` preserves unlimited parallel processing.
 
 When a download finishes, the worker:
 
