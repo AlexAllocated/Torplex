@@ -183,6 +183,10 @@ When a download finishes, the worker:
 3. Refreshes the matching Plex section.
 4. Marks the item completed in `state.json`.
 
+If the media is organized successfully but Plex cannot refresh its section,
+Torplex records a scan warning and still marks the item completed. This avoids
+retrying a download whose staging files have already moved into the library.
+
 ## Running as Services
 
 For a VM or home server, run the web app and worker as separate services.

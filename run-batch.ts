@@ -353,13 +353,19 @@ async function processItem(item: ManifestItem) {
   await appendBatch(`Organizing ${item.title}`);
   try {
     await organize(item);
-    await scanPlex(item.destination.type);
   } catch (error) {
     await setItemState(item.id, { status: "failed", failedAt: now(), error: error instanceof Error ? error.message : String(error) });
     await appendBatch(`FAILED ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
-  await setItemState(item.id, { status: "completed", completedAt: now() });
+  try {
+    await scanPlex(item.destination.type);
+  } catch (error) {
+    const warning = error instanceof Error ? error.message : String(error);
+    await setItemState(item.id, { plexScanWarning: warning });
+    await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
+  }
+  await setItemState(item.id, { status: "completed", completedAt: now(), error: null, failedAt: null });
   await appendBatch(`Completed ${item.title}`);
 }
 
