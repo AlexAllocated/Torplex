@@ -267,7 +267,9 @@ function drawMapRaster() {
   ctx.clearRect(0, 0, width, height);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  ctx.filter = 'invert(1) hue-rotate(145deg) saturate(.7) brightness(1.08) contrast(1.08)';
   ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+  ctx.filter = 'none';
 }
 
 function scheduleMapRaster() {
@@ -624,7 +626,7 @@ function drawWorldFrame(now) {
   swarmMap.raf = requestAnimationFrame(drawWorldFrame);
   const canvas = document.getElementById('worldCanvas');
   if (!canvas) return;
-  const frameInterval = swarmMap.displayPeers.length > 160 ? 1000 / 30 : 1000 / 60;
+  const frameInterval = 1000 / 30;
   if (swarmMap.lastFrame && now - swarmMap.lastFrame < frameInterval) return;
   const viewport = document.getElementById('worldMapViewport');
   const rect = { width: viewport?.clientWidth || canvas.clientWidth, height: viewport?.clientHeight || canvas.clientHeight };
@@ -918,7 +920,7 @@ function resizeWarp() {
 function initWarp() {
   resizeWarp();
   if (!warp.stars.length) {
-    for (let i = 0; i < 180; i += 1) {
+    for (let i = 0; i < 120; i += 1) {
       const star = {};
       resetWarpStar(star, true);
       warp.stars.push(star);
@@ -931,7 +933,7 @@ function drawWarpFrame(now) {
   warp.raf = requestAnimationFrame(drawWarpFrame);
   const canvas = document.getElementById('warpCanvas');
   if (!canvas) return;
-  if (warp.lastFrame && now - warp.lastFrame < 1000 / 30) return;
+  if (warp.lastFrame && now - warp.lastFrame < 1000 / 24) return;
   const ctx = canvas.getContext('2d');
   const dt = warp.lastFrame ? Math.min(80, now - warp.lastFrame) : 16;
   warp.lastFrame = now;

@@ -40,7 +40,6 @@
         linear-gradient(rgba(255, 255, 255, .045) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255, 255, 255, .045) 1px, transparent 1px);
       background-size: 54px 54px;
-      animation: drift 18s linear infinite;
       mask-image: linear-gradient(to bottom, black, transparent 86%);
       pointer-events: none;
     }
@@ -52,7 +51,6 @@
       height: 100vh;
       opacity: .48;
       pointer-events: none;
-      mix-blend-mode: screen;
     }
     main { position: relative; z-index: 1; max-width: 1220px; margin: 0 auto; padding: 24px; }
     header {
@@ -124,7 +122,12 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: 0 16px 42px rgba(0, 0, 0, .24);
+    }
+    .panel, .gauge, .terminal {
       backdrop-filter: blur(14px);
+    }
+    .item {
+      background: rgba(19, 25, 35, .96);
     }
     .panel { padding: 16px; }
     .gauge {
@@ -205,16 +208,18 @@
       border-radius: inherit;
       background: linear-gradient(90deg, var(--teal), var(--amber), var(--rose));
       transition: width .9s cubic-bezier(.22, 1, .36, 1);
-      will-change: width;
     }
+    .hero-fill, .item.active .item-fill, .item.organizing .item-fill { will-change: width; }
     .hero-fill::after, .item-fill::after {
       position: absolute;
       inset: 0;
       content: "";
       background-image: linear-gradient(115deg, rgba(255, 255, 255, .24) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .24) 50%, rgba(255, 255, 255, .24) 75%, transparent 75%, transparent);
       background-size: 24px 24px;
-      animation: runway 1.1s linear infinite;
       opacity: .48;
+    }
+    .hero-fill::after, .item.active .item-fill::after, .item.organizing .item-fill::after {
+      animation: runway 1.1s linear infinite;
     }
     .speed-card { display: none; }
     .intake-panel {
@@ -647,8 +652,6 @@
       width: 100%;
       height: 100%;
       opacity: .56;
-      filter: invert(1) hue-rotate(145deg) saturate(.7) brightness(1.08) contrast(1.08);
-      mix-blend-mode: screen;
     }
     #worldCanvas {
       position: absolute;
