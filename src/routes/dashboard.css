@@ -798,6 +798,8 @@
       min-height: 82px;
       padding: 13px;
       overflow: hidden;
+      content-visibility: auto;
+      contain-intrinsic-block-size: 82px;
       transition: background-color .35s ease, border-color .35s ease, transform .35s ease;
     }
     .item.active { border-color: rgba(87, 224, 194, .55); background: rgba(24, 44, 43, .88); }

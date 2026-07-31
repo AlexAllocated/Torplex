@@ -24,11 +24,12 @@ const warp = {
   stars: [],
   raf: 0,
   lastFrame: 0,
+  scrollingUntil: 0,
   speed: 0,
   batchProgress: 0,
   width: 0,
   height: 0,
-  dpr: 1,
+  pixelRatio: 1,
 };
 const swarmMap = {
   peers: [],
@@ -910,17 +911,18 @@ function resetWarpStar(star, fresh) {
 function resizeWarp() {
   const canvas = document.getElementById('warpCanvas');
   if (!canvas) return;
-  warp.dpr = Math.min(2, window.devicePixelRatio || 1);
+  warp.pixelRatio = Math.min(.75, window.devicePixelRatio || 1);
   warp.width = window.innerWidth;
   warp.height = window.innerHeight;
-  canvas.width = Math.floor(warp.width * warp.dpr);
-  canvas.height = Math.floor(warp.height * warp.dpr);
+  canvas.width = Math.floor(warp.width * warp.pixelRatio);
+  canvas.height = Math.floor(warp.height * warp.pixelRatio);
+  warp.lastFrame = 0;
 }
 
 function initWarp() {
   resizeWarp();
   if (!warp.stars.length) {
-    for (let i = 0; i < 120; i += 1) {
+    for (let i = 0; i < 90; i += 1) {
       const star = {};
       resetWarpStar(star, true);
       warp.stars.push(star);
@@ -932,8 +934,9 @@ function initWarp() {
 function drawWarpFrame(now) {
   warp.raf = requestAnimationFrame(drawWarpFrame);
   const canvas = document.getElementById('warpCanvas');
-  if (!canvas) return;
-  if (warp.lastFrame && now - warp.lastFrame < 1000 / 24) return;
+  if (!canvas || document.hidden || now < warp.scrollingUntil) return;
+  const frameInterval = window.scrollY > warp.height * .65 ? 1000 / 12 : 1000 / 20;
+  if (warp.lastFrame && now - warp.lastFrame < frameInterval) return;
   const ctx = canvas.getContext('2d');
   const dt = warp.lastFrame ? Math.min(80, now - warp.lastFrame) : 16;
   warp.lastFrame = now;
@@ -945,16 +948,9 @@ function drawWarpFrame(now) {
   const pace = (.00009 + warp.speed * .0011) * dt;
   const streak = 1.8 + warp.speed * 20;
 
-  ctx.setTransform(warp.dpr, 0, 0, warp.dpr, 0, 0);
+  ctx.setTransform(warp.pixelRatio, 0, 0, warp.pixelRatio, 0, 0);
   ctx.clearRect(0, 0, warp.width, warp.height);
-  ctx.globalCompositeOperation = 'lighter';
-
-  const glow = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, Math.max(warp.width, warp.height) * .62);
-  glow.addColorStop(0, 'hsla(' + hue + ', 80%, 58%, ' + (.08 + warp.speed * .08) + ')');
-  glow.addColorStop(.42, 'hsla(' + (hue + 35) + ', 80%, 45%, .035)');
-  glow.addColorStop(1, 'hsla(' + hue + ', 80%, 45%, 0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, warp.width, warp.height);
+  const paths = [new Path2D(), new Path2D(), new Path2D()];
 
   warp.stars.forEach((star) => {
     const oldZ = star.z;
@@ -972,16 +968,15 @@ function drawWarpFrame(now) {
       return;
     }
 
-    const alpha = Math.min(.88, (.10 + (1 - star.z) * .52 + warp.speed * .24) * (.72 + Math.sin(now / 420 + star.twinkle) * .18));
-    ctx.lineWidth = star.size * (.7 + warp.speed * .7);
-    ctx.strokeStyle = 'hsla(' + hue + ', 92%, 72%, ' + alpha + ')';
-    ctx.beginPath();
-    ctx.moveTo(oldX, oldY);
-    ctx.lineTo(x + (x - oldX) * streak, y + (y - oldY) * streak);
-    ctx.stroke();
+    const bucket = Math.max(0, Math.min(2, Math.floor((star.size - .45) / .46)));
+    paths[bucket].moveTo(oldX, oldY);
+    paths[bucket].lineTo(x + (x - oldX) * streak, y + (y - oldY) * streak);
   });
-
-  ctx.globalCompositeOperation = 'source-over';
+  paths.forEach((path, index) => {
+    ctx.lineWidth = (.75 + index * .46) * (.72 + warp.speed * .62);
+    ctx.strokeStyle = 'hsla(' + hue + ', 92%, 72%, ' + (.28 + index * .16 + warp.speed * .12) + ')';
+    ctx.stroke(path);
+  });
 }
 
 function updateSpeedChart(value) {
@@ -1406,6 +1401,9 @@ initDialogControls();
 initIntakeControls();
 initQueueControls();
 refreshSession();
+window.addEventListener('scroll', () => {
+  warp.scrollingUntil = performance.now() + 140;
+}, { passive: true });
 window.addEventListener('resize', () => {
   resizeWarp();
   if (document.getElementById('speedCanvas')) updateSpeedChart(speedChart.target);

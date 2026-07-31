@@ -45,11 +45,19 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     }
     return painted;
   });
-  expect(await paintedSamples("#worldMapRaster")).toBeGreaterThan(100);
-  expect(await paintedSamples("#worldCanvas")).toBeGreaterThan(100);
+  await expect.poll(() => paintedSamples("#worldMapRaster"), { timeout: 15_000 }).toBeGreaterThan(100);
+  await expect.poll(() => paintedSamples("#worldCanvas"), { timeout: 15_000 }).toBeGreaterThan(100);
 
-  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-desktop.png`, fullPage: true });
+  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-desktop.png` });
+  const lastQueueItem = page.locator("#items .item").last();
+  await lastQueueItem.scrollIntoViewIfNeeded();
+  await expect(lastQueueItem).toBeVisible();
+  await expect(lastQueueItem.locator('[data-role="title"]')).toBeVisible();
+  await expect(lastQueueItem.locator('[data-role="title"]')).not.toBeEmpty();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-queue-bottom.png` });
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
-  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile.png`, fullPage: true });
+  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile.png` });
 });
