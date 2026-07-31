@@ -298,8 +298,24 @@ await ensureDir(join(root, "torrents"));
 await ensureDir(join(root, "logs"));
 
 const initialState = await loadState();
-await enqueueState(async () => saveState({ ...initialState, startedAt: initialState.startedAt ?? now(), finishedAt: undefined }));
+const interruptedItemIds = Object.entries(initialState.items)
+  .filter(([, itemState]) => itemState.status === "active" || itemState.status === "organizing")
+  .map(([id]) => id);
+for (const id of interruptedItemIds) {
+  initialState.items[id] = { ...initialState.items[id], status: "pending" };
+}
+await enqueueState(async () =>
+  saveState({
+    ...initialState,
+    startedAt: initialState.startedAt ?? now(),
+    finishedAt: undefined,
+    currentItemId: null,
+  }),
+);
 await appendBatch(`Batch started ${now()}`);
+if (interruptedItemIds.length > 0) {
+  await appendBatch(`Recovered ${interruptedItemIds.length} interrupted item(s) to pending`);
+}
 
 async function processItem(item: ManifestItem) {
   const state = await loadState();
