@@ -13,6 +13,7 @@ const mediaDirMode = process.env.MEDIA_DIR_MODE ?? "775";
 const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
 const configuredConcurrency = Number.parseInt(process.env.MAX_CONCURRENT_DOWNLOADS ?? "0", 10);
 const maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0 ? configuredConcurrency : 0;
+const checkIntegrity = /^(1|true|yes)$/i.test(process.env.ARIA2_CHECK_INTEGRITY ?? "");
 
 type ManifestItem = {
   id: string;
@@ -320,6 +321,7 @@ async function processItem(item: ManifestItem) {
       "aria2c",
       `--dir=${staging}`,
       "--continue=true",
+      ...(checkIntegrity ? ["--check-integrity=true"] : []),
       "--file-allocation=none",
       "--seed-time=0",
       "--seed-ratio=0.0",
