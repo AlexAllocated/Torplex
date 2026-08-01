@@ -185,7 +185,7 @@ For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent
 
 The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` to cap parallel jobs; the default of `0` preserves unlimited parallel processing. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
 
-Pending rows can be reordered from the dashboard. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
+Pending rows can be reordered from the dashboard with animated position changes. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 
 When a download finishes, the worker:
 

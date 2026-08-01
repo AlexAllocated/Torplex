@@ -105,6 +105,17 @@ test("pending rows can be reprioritized across multiple positions", async ({ pag
   test.skip(originalPendingIds.length < 3, "At least three pending items are required");
 
   try {
+    await page.evaluate(() => {
+      const nativeAnimate = Element.prototype.animate;
+      (window as Window & { __queueReflowAnimations?: number }).__queueReflowAnimations = 0;
+      Element.prototype.animate = function (...args) {
+        if (this instanceof HTMLElement && this.classList.contains("item")) {
+          const target = window as Window & { __queueReflowAnimations?: number };
+          target.__queueReflowAnimations = (target.__queueReflowAnimations ?? 0) + 1;
+        }
+        return Reflect.apply(nativeAnimate, this, args);
+      };
+    });
     const pendingRows = page.locator("#items .item.pending");
     const targetIndex = Math.min(3, originalPendingIds.length - 1);
     await pendingRows.first().scrollIntoViewIfNeeded();
@@ -115,6 +126,7 @@ test("pending rows can be reprioritized across multiple positions", async ({ pag
       targetPosition: { x: 80, y: 70 },
     });
     expect((await reordered).ok()).toBe(true);
+    expect(await page.evaluate(() => (window as Window & { __queueReflowAnimations?: number }).__queueReflowAnimations ?? 0)).toBeGreaterThan(0);
     const expectedPendingIds = [...originalPendingIds];
     expectedPendingIds.splice(targetIndex, 0, expectedPendingIds.shift()!);
     await expect.poll(async () => page.evaluate(async () => {

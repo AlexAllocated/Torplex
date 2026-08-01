@@ -86,6 +86,7 @@ const nodeLimeRgb = '191, 255, 0';
 let latestItems = [];
 let queueDragId = '';
 let queueOrderSaving = false;
+const queueReflowAnimations = new WeakMap();
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -159,6 +160,34 @@ function tweenElementNumber(el, target, formatter, duration) {
 
 function setText(el, value) {
   if (el && el.textContent !== String(value)) el.textContent = String(value);
+}
+
+function moveQueueRow(container, dragged, insertionPoint) {
+  if (dragged.nextElementSibling === insertionPoint || (!insertionPoint && dragged === container.lastElementChild)) return;
+  const rows = Array.from(container.querySelectorAll('.item'));
+  const before = new Map(rows.map((row) => [row, row.getBoundingClientRect()]));
+  rows.forEach((row) => {
+    const animation = queueReflowAnimations.get(row);
+    if (animation) animation.cancel();
+  });
+  container.insertBefore(dragged, insertionPoint);
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  rows.forEach((row) => {
+    if (row === dragged || !row.isConnected) return;
+    const previous = before.get(row);
+    const current = row.getBoundingClientRect();
+    const deltaY = previous ? previous.top - current.top : 0;
+    if (Math.abs(deltaY) < .5) return;
+    const animation = row.animate(
+      [{ transform: `translateY(${deltaY}px)` }, { transform: 'translateY(0)' }],
+      { duration: 220, easing: 'cubic-bezier(.22, 1, .36, 1)' },
+    );
+    queueReflowAnimations.set(row, animation);
+    animation.finished.finally(() => {
+      if (queueReflowAnimations.get(row) === animation) queueReflowAnimations.delete(row);
+    }).catch(() => {});
+  });
 }
 
 function statusClassFor(status) {
@@ -1390,7 +1419,7 @@ function initQueueControls() {
       return event.clientY < bounds.top + bounds.height / 2;
     });
     const queueBoundary = container.querySelector('.item.failed, .item.completed');
-    container.insertBefore(dragged, beforeRow || queueBoundary);
+    moveQueueRow(container, dragged, beforeRow || queueBoundary);
   });
   container?.addEventListener('drop', (event) => {
     if (!queueDragId || queueOrderSaving) return;
