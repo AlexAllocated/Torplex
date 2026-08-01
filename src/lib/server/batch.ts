@@ -647,8 +647,7 @@ function parseProgress(log: string) {
   const lines = clean.split(/[\r\n]+/).filter(Boolean);
   const progressLines = lines.filter((line) => line.includes("[#") && line.includes("/") && line.includes("("));
   const line = progressLines.at(-1) ?? "";
-  const checksumLine = [...lines].reverse().find((entry) => entry.includes("[Checksum:#")) ?? "";
-  const checksum = checksumLine.match(
+  const checksum = line.match(
     /\[Checksum:#\w+\s+([0-9.]+)(B|KiB|MiB|GiB|TiB)\/([0-9.]+)(B|KiB|MiB|GiB|TiB)\((\d+)%\)\]/,
   );
   const verification = checksum
