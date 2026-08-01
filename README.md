@@ -171,6 +171,10 @@ Torplex can run the same Python search-plugin contract used by qBittorrent's Nov
 | `TORPLEX_SEARCH_CONCURRENCY` | `2` | Simultaneous title searches, clamped to 1-4. |
 | `TORPLEX_SEARCH_METADATA_TIMEOUT_SECONDS` | `45` | Inactivity timeout for each Find with AI metadata preflight, clamped to 15-120 seconds. |
 | `TORPLEX_SEARCH_METADATA_CONCURRENCY` | `3` | Simultaneous metadata preflights across requested titles, clamped to 1-6. |
+| `TORPLEX_SEARCH_METADATA_CANDIDATE_LIMIT` | `24` | Initial provider-diverse manifest candidates per title, clamped to 4-40. |
+| `TORPLEX_SEARCH_METADATA_MAX_CANDIDATES` | `200` | Maximum candidates considered while adaptively extending a title search, clamped to the initial limit through 400. |
+| `TORPLEX_SEARCH_VERIFIED_CANDIDATE_TARGET` | `4` | Number of usable manifests to collect per title before model selection, clamped to 1-8. |
+| `TORPLEX_SEARCH_METADATA_BUDGET_SECONDS` | `180` | Per-title adaptive manifest-discovery budget before Torplex reports no usable source, clamped to 30-600 seconds. |
 | `TORPLEX_METADATA_TIMEOUT_SECONDS` | `60` | Inactivity timeout for manual magnet inspection, clamped to 15-300 seconds. |
 
 On a typical qBittorrent desktop install, Nova lives under a qBittorrent application-data directory such as `~/.local/share/qBittorrent/nova3/`. A server deployment should copy an audited Nova directory to a service-readable location and point `TORPLEX_NOVA_SCRIPT` at its `nova2.py`. Configure only plugin names that exist in that directory's `engines/` folder.
@@ -180,8 +184,8 @@ Nova plugins are executable third-party Python, not passive provider definitions
 The **Find with AI** flow works in two review stages:
 
 1. The model resolves the prompt into exact canonical works. Nova searches each work using the configured provider allowlist.
-2. The model may select only opaque candidate IDs actually returned by Nova. It cannot invent a source URL. It chooses one primary result and up to three independently suitable fallbacks for each title.
-3. Before showing the proposal, Torplex retrieves the primary candidate's torrent metadata. A stale source is removed and the next model-approved fallback is tried until a file manifest is verified. Accepted magnets reuse the cached metadata during intake.
+2. Torplex interleaves results from different providers and retrieves torrent manifests before model selection. Provider-reported seed and leech counts are treated as untrusted hints. If the initial candidate wave is stale, Torplex keeps expanding the search for up to the configured per-title budget.
+3. The model sees only candidates whose file manifests were actually retrieved. It may select one opaque candidate ID and up to three independently suitable verified fallbacks for each title, but it cannot invent a source URL. Accepted magnets reuse the cached metadata during intake.
 4. Each accepted result runs Smart Setup with a client-side concurrency limit of two. If a previously unverified fallback is later needed, Torplex advances through the remaining reviewed sources. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
 5. A transactional bulk request validates the complete batch before writing torrent descriptors or the queue manifest.
 

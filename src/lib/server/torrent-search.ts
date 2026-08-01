@@ -4,7 +4,10 @@ import { spawn } from "node:child_process";
 import { preflightTorrentSource } from "$lib/server/batch";
 
 const defaultModel = "gpt-5.6-terra";
-const defaultResultLimit = 12;
+const defaultMetadataCandidateLimit = 24;
+const defaultMetadataMaxCandidates = 200;
+const defaultVerifiedCandidateTarget = 4;
+const defaultMetadataSearchBudgetSeconds = 180;
 const maxWorks = 40;
 const maxNovaOutputBytes = 6 * 1024 * 1024;
 
@@ -31,6 +34,13 @@ export type SearchCandidate = {
   publishedAt: number;
 };
 
+type TorrentPreflightMetadata = {
+  payloadName: string;
+  totalBytes: number;
+  fileCount: number;
+  sampleFiles: string[];
+};
+
 export type SearchProposal = {
   summary: string;
   works: SearchWork[];
@@ -42,12 +52,7 @@ export type SearchProposal = {
     work: SearchWork;
     candidate: SearchCandidate;
     alternatives: SearchCandidate[];
-    metadata: {
-      payloadName: string;
-      totalBytes: number;
-      fileCount: number;
-      sampleFiles: string[];
-    };
+    metadata: TorrentPreflightMetadata;
   }>;
   missing: Array<{ workId: string; reason: string; work: SearchWork }>;
   providers: string[];
@@ -138,6 +143,28 @@ function searchConfig() {
   const concurrency = Number.parseInt(process.env.TORPLEX_SEARCH_CONCURRENCY || "2", 10);
   const metadataTimeout = Number.parseInt(process.env.TORPLEX_SEARCH_METADATA_TIMEOUT_SECONDS || "45", 10);
   const metadataConcurrency = Number.parseInt(process.env.TORPLEX_SEARCH_METADATA_CONCURRENCY || "3", 10);
+  const metadataCandidateLimit = Number.parseInt(
+    process.env.TORPLEX_SEARCH_METADATA_CANDIDATE_LIMIT || String(defaultMetadataCandidateLimit),
+    10,
+  );
+  const metadataMaxCandidates = Number.parseInt(
+    process.env.TORPLEX_SEARCH_METADATA_MAX_CANDIDATES || String(defaultMetadataMaxCandidates),
+    10,
+  );
+  const verifiedCandidateTarget = Number.parseInt(
+    process.env.TORPLEX_SEARCH_VERIFIED_CANDIDATE_TARGET || String(defaultVerifiedCandidateTarget),
+    10,
+  );
+  const metadataSearchBudgetSeconds = Number.parseInt(
+    process.env.TORPLEX_SEARCH_METADATA_BUDGET_SECONDS || String(defaultMetadataSearchBudgetSeconds),
+    10,
+  );
+  const normalizedCandidateLimit = Number.isFinite(metadataCandidateLimit)
+    ? Math.min(40, Math.max(4, metadataCandidateLimit))
+    : defaultMetadataCandidateLimit;
+  const normalizedMaxCandidates = Number.isFinite(metadataMaxCandidates)
+    ? Math.min(400, Math.max(normalizedCandidateLimit, metadataMaxCandidates))
+    : defaultMetadataMaxCandidates;
   return {
     available: Boolean(script && existsSync(script) && plugins.length && process.env.OPENAI_API_KEY),
     script,
@@ -147,6 +174,14 @@ function searchConfig() {
     concurrency: Number.isFinite(concurrency) ? Math.min(4, Math.max(1, concurrency)) : 2,
     metadataTimeoutSeconds: Number.isFinite(metadataTimeout) ? Math.min(120, Math.max(15, metadataTimeout)) : 45,
     metadataConcurrency: Number.isFinite(metadataConcurrency) ? Math.min(6, Math.max(1, metadataConcurrency)) : 3,
+    metadataCandidateLimit: normalizedCandidateLimit,
+    metadataMaxCandidates: normalizedMaxCandidates,
+    verifiedCandidateTarget: Number.isFinite(verifiedCandidateTarget)
+      ? Math.min(8, Math.max(1, verifiedCandidateTarget))
+      : defaultVerifiedCandidateTarget,
+    metadataSearchBudgetSeconds: Number.isFinite(metadataSearchBudgetSeconds)
+      ? Math.min(600, Math.max(30, metadataSearchBudgetSeconds))
+      : defaultMetadataSearchBudgetSeconds,
     model: process.env.TORPLEX_AI_MODEL || defaultModel,
   };
 }
@@ -342,6 +377,28 @@ function candidateScore(work: SearchWork, candidate: SearchCandidate) {
   return matchedWords * 10 + yearScore + seedScore + badRelease;
 }
 
+function providerDiverseShortlist(ranked: SearchCandidate[], limit: number) {
+  const buckets = new Map<string, SearchCandidate[]>();
+  for (const candidate of ranked) {
+    const bucket = buckets.get(candidate.provider) || [];
+    bucket.push(candidate);
+    buckets.set(candidate.provider, bucket);
+  }
+  const shortlisted: SearchCandidate[] = [];
+  for (let depth = 0; shortlisted.length < limit; depth += 1) {
+    let added = false;
+    for (const bucket of buckets.values()) {
+      const candidate = bucket[depth];
+      if (!candidate) continue;
+      shortlisted.push(candidate);
+      added = true;
+      if (shortlisted.length >= limit) break;
+    }
+    if (!added) break;
+  }
+  return shortlisted;
+}
+
 async function mapWithConcurrency<T, R>(values: T[], concurrency: number, callback: (value: T, index: number) => Promise<R>) {
   const output = new Array<R>(values.length);
   let next = 0;
@@ -353,6 +410,102 @@ async function mapWithConcurrency<T, R>(values: T[], concurrency: number, callba
   });
   await Promise.all(workers);
   return output;
+}
+
+async function preflightCandidateGroups(
+  works: SearchWork[],
+  candidateGroups: SearchCandidate[][],
+  config: ReturnType<typeof searchConfig>,
+  onProgress: Progress,
+) {
+  const workMap = new Map(works.map((work) => [work.id, work]));
+  const verified = new Map<string, TorrentPreflightMetadata>();
+  const verifiedCounts = new Map<string, number>();
+  const attempts = new Map<string, number>();
+  const extensionAnnounced = new Set<string>();
+  const startedAt = new Map<string, number>();
+  const exhausted = new Set<string>();
+  const schedule: SearchCandidate[] = [];
+  const maxDepth = Math.max(0, ...candidateGroups.map((group) => group.length));
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    for (const group of candidateGroups) {
+      if (group[depth]) schedule.push(group[depth]);
+    }
+  }
+
+  let cursor = 0;
+  while (cursor < schedule.length) {
+    const batch: Array<{ candidate: SearchCandidate; timeoutSeconds: number }> = [];
+    while (cursor < schedule.length && batch.length < config.metadataConcurrency) {
+      const candidate = schedule[cursor++];
+      if ((verifiedCounts.get(candidate.workId) || 0) >= config.verifiedCandidateTarget) continue;
+      const workStartedAt = startedAt.get(candidate.workId) || Date.now();
+      startedAt.set(candidate.workId, workStartedAt);
+      const elapsedSeconds = (Date.now() - workStartedAt) / 1000;
+      const remainingSeconds = config.metadataSearchBudgetSeconds - elapsedSeconds;
+      if (remainingSeconds <= 0) {
+        exhausted.add(candidate.workId);
+        continue;
+      }
+      const attempt = (attempts.get(candidate.workId) || 0) + 1;
+      attempts.set(candidate.workId, attempt);
+      if (
+        attempt > config.metadataCandidateLimit
+        && !verifiedCounts.has(candidate.workId)
+        && !extensionAnnounced.has(candidate.workId)
+      ) {
+        const work = workMap.get(candidate.workId);
+        extensionAnnounced.add(candidate.workId);
+        onProgress(`${work?.title || candidate.name}: initial sources were stale; extending manifest search`);
+      }
+      batch.push({
+        candidate,
+        timeoutSeconds: Math.max(1, Math.min(config.metadataTimeoutSeconds, Math.ceil(remainingSeconds))),
+      });
+    }
+    if (!batch.length) continue;
+    const results = await mapWithConcurrency(batch, config.metadataConcurrency, async ({ candidate, timeoutSeconds }) => {
+      const work = workMap.get(candidate.workId);
+      onProgress(`Checking ${work?.title || candidate.name}: ${candidate.provider}`);
+      try {
+        const metadata = await preflightTorrentSource(candidate.sourceUrl, {
+          metadataTimeoutSeconds: timeoutSeconds,
+        });
+        return { candidate, metadata, error: "" };
+      } catch (error) {
+        return {
+          candidate,
+          metadata: null,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+    for (const result of results) {
+      const work = workMap.get(result.candidate.workId);
+      if (result.metadata) {
+        verified.set(result.candidate.id, result.metadata);
+        verifiedCounts.set(result.candidate.workId, (verifiedCounts.get(result.candidate.workId) || 0) + 1);
+        onProgress(`${work?.title || result.candidate.name}: verified ${result.candidate.provider} manifest (${result.metadata.fileCount} files)`);
+      } else {
+        const reason = result.error.includes("No connected peer supplied")
+          ? "no live peer supplied metadata"
+          : result.error;
+        onProgress(`${work?.title || result.candidate.name}: rejected ${result.candidate.provider} source - ${reason}`);
+      }
+    }
+  }
+  for (const work of works) {
+    if (verifiedCounts.has(work.id)) continue;
+    const tried = attempts.get(work.id) || 0;
+    const elapsedSeconds = startedAt.has(work.id)
+      ? Math.min(config.metadataSearchBudgetSeconds, Math.ceil((Date.now() - startedAt.get(work.id)!) / 1000))
+      : 0;
+    const reason = exhausted.has(work.id)
+      ? `${elapsedSeconds}s search budget reached`
+      : "all returned sources exhausted";
+    onProgress(`${work.title}: no usable manifest after ${tried} candidate${tried === 1 ? "" : "s"} (${reason})`);
+  }
+  return verified;
 }
 
 export async function createTorrentSearchProposal(prompt: string, onProgress: Progress = () => {}) {
@@ -369,8 +522,11 @@ export async function createTorrentSearchProposal(prompt: string, onProgress: Pr
     try {
       const found = await runNova(work);
       const ranked = found.sort((left, right) => candidateScore(work, right) - candidateScore(work, left));
-      onProgress(`${work.title}: ${found.length} result${found.length === 1 ? "" : "s"}, ${Math.min(defaultResultLimit, found.length)} shortlisted`);
-      return ranked.slice(0, defaultResultLimit);
+      const shortlisted = providerDiverseShortlist(ranked, config.metadataMaxCandidates);
+      const providers = new Set(shortlisted.map((candidate) => candidate.provider)).size;
+      const initial = Math.min(config.metadataCandidateLimit, shortlisted.length);
+      onProgress(`${work.title}: ${found.length} result${found.length === 1 ? "" : "s"}; checking ${initial} initial candidates across ${providers} provider${providers === 1 ? "" : "s"}, with ${Math.max(0, shortlisted.length - initial)} adaptive fallbacks`);
+      return shortlisted;
     } catch (error) {
       onProgress(`${work.title}: search provider error - ${error instanceof Error ? error.message : String(error)}`);
       return [];
@@ -378,7 +534,10 @@ export async function createTorrentSearchProposal(prompt: string, onProgress: Pr
   });
   const candidates = candidateGroups.flat();
   if (!candidates.length) throw new Error("The configured search providers returned no candidates");
-  onProgress(`Comparing ${candidates.length} shortlisted releases`);
+  onProgress(`Retrieving manifests before model selection; reported seed counts are treated as untrusted`);
+  const verifiedMetadata = await preflightCandidateGroups(outline.works, candidateGroups, config, onProgress);
+  const verifiedCandidates = candidates.filter((candidate) => verifiedMetadata.has(candidate.id));
+  onProgress(`${verifiedCandidates.length} candidate manifest${verifiedCandidates.length === 1 ? "" : "s"} verified; comparing usable releases`);
   const decision = await structuredResponse(
     "torplex_search_selection",
     selectionSchema,
@@ -388,11 +547,14 @@ Choose at most one primary supplied candidate for each requested work and rank u
     {
       request: normalizedPrompt,
       works: outline.works,
-      candidates: candidates.map(({ sourceUrl: _sourceUrl, descriptionUrl: _descriptionUrl, ...candidate }) => candidate),
+      candidates: verifiedCandidates.map(({ sourceUrl: _sourceUrl, descriptionUrl: _descriptionUrl, ...candidate }) => ({
+        ...candidate,
+        manifest: verifiedMetadata.get(candidate.id),
+      })),
     },
   );
   const workMap = new Map(outline.works.map((work) => [work.id, work]));
-  const candidateMap = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const candidateMap = new Map(verifiedCandidates.map((candidate) => [candidate.id, candidate]));
   const proposedWorkIds = new Set<string>();
   const rawSelections = Array.isArray(decision.selections) ? decision.selections : [];
   const selections: SearchProposal["selections"] = [];
@@ -415,94 +577,34 @@ Choose at most one primary supplied candidate for each requested work and rank u
     selections.push({
       workId,
       candidateId,
-      reason: String(item.reason || "Selected from the returned candidates"),
+      reason: `${String(item.reason || "Selected from the returned candidates")} Torrent metadata was verified before model selection.`,
       confidence: item.confidence === "high" || item.confidence === "low" ? item.confidence : "medium",
       work,
       candidate,
       alternatives,
-      metadata: { payloadName: "", totalBytes: 0, fileCount: 0, sampleFiles: [] },
+      metadata: verifiedMetadata.get(candidateId)!,
     });
   }
-  onProgress(`Verifying metadata for ${selections.length} proposed release${selections.length === 1 ? "" : "s"}`);
-  const verifiedByWork = new Map<string, { candidate: SearchCandidate; metadata: SearchProposal["selections"][number]["metadata"] }>();
-  const failedByWork = new Map<string, Set<string>>();
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const pending = selections.flatMap((selection) => {
-      if (verifiedByWork.has(selection.workId)) return [];
-      const candidate = [selection.candidate, ...selection.alternatives][attempt];
-      return candidate ? [{ selection, candidate, attempt }] : [];
-    });
-    if (!pending.length) break;
-    const results = await mapWithConcurrency(pending, config.metadataConcurrency, async ({ selection, candidate, attempt: candidateAttempt }) => {
-      onProgress(`Checking ${selection.work.title}: ${candidateAttempt ? `fallback ${candidateAttempt}` : "primary source"}`);
-      try {
-        const metadata = await preflightTorrentSource(candidate.sourceUrl, {
-          metadataTimeoutSeconds: config.metadataTimeoutSeconds,
-        });
-        return { selection, candidate, metadata, error: "" };
-      } catch (error) {
-        return {
-          selection,
-          candidate,
-          metadata: null,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
-    for (const result of results) {
-      if (result.metadata) {
-        verifiedByWork.set(result.selection.workId, { candidate: result.candidate, metadata: result.metadata });
-        onProgress(`${result.selection.work.title}: metadata verified (${result.metadata.fileCount} files)`);
-      } else {
-        const failed = failedByWork.get(result.selection.workId) || new Set<string>();
-        failed.add(result.candidate.id);
-        failedByWork.set(result.selection.workId, failed);
-        const reason = result.error.includes("No connected peer supplied")
-          ? "no peer supplied metadata"
-          : result.error;
-        onProgress(`${result.selection.work.title}: ${reason}; trying another candidate`);
-      }
-    }
-  }
-  const verifiedSelections = selections.flatMap((selection) => {
-    const verified = verifiedByWork.get(selection.workId);
-    if (!verified) return [];
-    const failed = failedByWork.get(selection.workId) || new Set<string>();
-    const ordered = [selection.candidate, ...selection.alternatives];
-    const promoted = verified.candidate.id !== selection.candidate.id;
-    return [{
-      ...selection,
-      candidateId: verified.candidate.id,
-      candidate: verified.candidate,
-      alternatives: ordered
-        .filter((candidate) => candidate.id !== verified.candidate.id && !failed.has(candidate.id))
-        .slice(0, 3),
-      reason: promoted
-        ? `${selection.reason} The original source did not provide metadata, so Torplex promoted a verified fallback.`
-        : `${selection.reason} Torrent metadata was verified before review.`,
-      metadata: verified.metadata,
-    }];
-  });
-  const selectedWorkIds = new Set(verifiedSelections.map((selection) => selection.workId));
+  const selectedWorkIds = new Set(selections.map((selection) => selection.workId));
   const missingReasons = new Map<string, string>();
   for (const entry of Array.isArray(decision.missing) ? decision.missing : []) {
     const item = entry as Record<string, unknown>;
     const workId = String(item.workId || "");
     if (workMap.has(workId)) missingReasons.set(workId, String(item.reason || "No safe match was selected"));
   }
-  for (const selection of selections) {
-    if (!verifiedByWork.has(selection.workId)) {
-      missingReasons.set(selection.workId, "None of the model-approved candidates supplied a usable torrent file manifest");
+  for (const [index, work] of outline.works.entries()) {
+    if (!candidateGroups[index]?.some((candidate) => verifiedMetadata.has(candidate.id))) {
+      missingReasons.set(work.id, "No shortlisted source supplied a usable torrent file manifest");
     }
   }
   const missing = outline.works
     .filter((work) => !selectedWorkIds.has(work.id))
     .map((work) => ({ workId: work.id, reason: missingReasons.get(work.id) || "No sufficiently reliable candidate was returned", work }));
-  onProgress(`Prepared ${verifiedSelections.length} verified proposal${verifiedSelections.length === 1 ? "" : "s"} for review`);
+  onProgress(`Prepared ${selections.length} verified proposal${selections.length === 1 ? "" : "s"} for review`);
   return {
     summary: String(decision.summary || outline.summary || "Search proposal ready"),
     works: outline.works,
-    selections: verifiedSelections,
+    selections,
     missing,
     providers: config.plugins,
     model: config.model,
