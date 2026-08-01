@@ -19,30 +19,31 @@ test("torrent intake supports reviewed file selection and Smart Setup", async ({
   await page.setViewportSize({ width: 1440, height: 1000 });
   await unlock(page);
 
-  await page.locator("#additionalInstructions").evaluate((element) => {
-    (element as HTMLTextAreaElement).value =
-      "Download only Avatar: The Last Airbender animated series and The Legend of Korra. Include all episodes and matching English captions. Exclude the 2010 live-action movie and unrelated extras.";
-  });
+  const item = page.locator(".bulk-intake-item").first();
+  await item.getByLabel("Smart Setup instructions Optional").fill(
+    "Download only Avatar: The Last Airbender animated series and The Legend of Korra. Include all episodes and matching English captions. Exclude the 2010 live-action movie and unrelated extras.",
+  );
   const inspected = page.waitForResponse((response) => response.url().endsWith("/api/torrent/inspect") && response.ok());
   const planned = page.waitForResponse((response) => response.url().endsWith("/api/torrent/plan"));
-  await page.locator("#torrentFile").setInputFiles(torrentPath!);
+  await item.getByLabel("Torrent file").setInputFiles(torrentPath!);
   await inspected;
-  await expect(page.locator("#torrentFileTree input[data-role='file-selection']")).toHaveCount(259);
-  await expect(page.locator("#selectionSummary")).toContainText("259 of 259 files selected");
-  await expect(page.getByRole("button", { name: "Add selected content" })).toBeDisabled();
+  await item.getByText("Files, Smart Setup, and advanced organization").click();
+  await expect(item.locator(".bulk-file-tree input[type='checkbox']")).toHaveCount(259);
+  await expect(item.locator(".bulk-item-title")).toContainText("259 of 259 files");
+  await expect(page.getByRole("button", { name: "Add 0 selected items" })).toBeDisabled();
 
   expect((await planned).ok()).toBe(true);
 
-  await expect(page.locator("#smartSetupStatus")).toContainText("plan applied", { timeout: 150_000 });
-  await expect(page.getByRole("button", { name: "Add selected content" })).toBeDisabled();
+  await expect(item.locator(".status-pill")).toContainText("plan ready", { timeout: 150_000 });
+  await expect(page.getByRole("button", { name: "Add 1 selected item" })).toBeDisabled();
   await page.getByLabel(/I confirm that I have the rights/).check();
-  await expect(page.getByRole("button", { name: "Add selected content" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Add 1 selected item" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Run Smart Setup again" })).toBeEnabled();
-  await expect(page.locator("#selectionSummary")).toContainText("226 of 259 files selected");
-  await expect(page.locator("#organizeStrategy")).toHaveValue("routeDirectories");
-  await expect(page.locator("#routeRows .route-row")).toHaveCount(7);
-  await expect(page.locator("#smartPlanReview")).toContainText("HIGH confidence");
-  await page.locator("#routeEditor").scrollIntoViewIfNeeded();
+  await expect(item.locator(".bulk-item-title")).toContainText("226 of 259 files");
+  await expect(item.getByLabel("Organizer")).toHaveValue("routeDirectories");
+  await expect(item.locator(".route-row")).toHaveCount(7);
+  await expect(item.locator(".smart-plan-review")).toContainText("Confidence: high");
+  await item.locator(".route-editor").scrollIntoViewIfNeeded();
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-intake-smart-plan.png", fullPage: false });
 });
 
@@ -54,13 +55,15 @@ test("magnet metadata automatically starts Smart Setup before rights confirmatio
   await unlock(page);
   const inspected = page.waitForResponse((response) => response.url().endsWith("/api/torrent/inspect"));
   const planned = page.waitForResponse((response) => response.url().endsWith("/api/torrent/plan"));
-  await page.locator("#sourceUrl").fill(magnetUri!);
+  const item = page.locator(".bulk-intake-item").first();
+  await item.getByLabel("Magnet or link").fill(magnetUri!);
   expect((await inspected).ok()).toBe(true);
-  await page.locator("#sourceUrl").press("Tab");
+  await item.getByLabel("Magnet or link").press("Tab");
   expect((await planned).ok()).toBe(true);
 
-  await expect(page.locator("#torrentFileTree input[data-role='file-selection']")).not.toHaveCount(0);
-  await expect(page.locator("#smartSetupStatus")).toContainText("plan applied", { timeout: 150_000 });
-  await expect(page.getByRole("button", { name: "Add selected content" })).toBeDisabled();
+  await item.getByText("Files, Smart Setup, and advanced organization").click();
+  await expect(item.locator(".bulk-file-tree input[type='checkbox']")).not.toHaveCount(0);
+  await expect(item.locator(".status-pill")).toContainText("plan ready", { timeout: 150_000 });
+  await expect(page.getByRole("button", { name: "Add 1 selected item" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Run Smart Setup again" })).toBeEnabled();
 });

@@ -1382,11 +1382,12 @@ export function planTorrentUpload(req: Request) {
   });
 }
 
-export async function addTorrentUpload(req: Request) {
-  const form = await req.formData();
-  if (!formBool(form, "rightsConfirmed")) {
-    throw new Error("Confirm that you have the rights to download this content");
-  }
+type PreparedTorrentItem = {
+  item: Item;
+  torrentWrite?: { filename: string; bytes: Uint8Array };
+};
+
+async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promise<PreparedTorrentItem> {
   const source = await intakeSourceFromForm(form);
   const { metadata, filename, magnetUri } = await metadataForSource(source);
   const selection = selectedFileIndexes(form, metadata.files);
@@ -1395,7 +1396,6 @@ export async function addTorrentUpload(req: Request) {
   if (riskyFiles.length) {
     throw new Error(`Selected content contains ${riskyFiles.length} executable or script file(s). Torplex will not queue risky payloads.`);
   }
-  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const id = slugify(formString(form, "id", metadata.suggested.id));
   const title = formString(form, "title", metadata.suggested.title);
   const mediaType: "movie" | "show" =
@@ -1410,9 +1410,9 @@ export async function addTorrentUpload(req: Request) {
   if (!allowedRoots.some((root) => destinationPath === root || destinationPath.startsWith(`${root}/`))) {
     throw new Error(`Destination must be under ${moviesDir} or ${tvDir}`);
   }
-  if (manifest.items.some((item) => item.id === id)) throw new Error(`Manifest already has item id ${id}`);
-  if (filename && manifest.items.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
-  if (magnetUri && manifest.items.some((item) => item.magnetUri === magnetUri)) throw new Error("Manifest already has this magnet link");
+  if (manifestItems.some((item) => item.id === id)) throw new Error(`Manifest already has item id ${id}`);
+  if (filename && manifestItems.some((item) => item.torrentFile === filename)) throw new Error(`Manifest already uses ${filename}`);
+  if (magnetUri && manifestItems.some((item) => item.magnetUri === magnetUri)) throw new Error("Manifest already has this magnet link");
 
   const organize =
     strategyInput === "routeDirectories"
@@ -1444,15 +1444,117 @@ export async function addTorrentUpload(req: Request) {
     },
   };
 
-  if (source.kind !== "magnet") {
-    await mkdir(join(root, "torrents"), { recursive: true });
-    await writeFile(join(root, "torrents", filename), source.bytes);
+  return {
+    item,
+    ...(source.kind !== "magnet" ? { torrentWrite: { filename, bytes: source.bytes } } : {}),
+  };
+}
+
+function assertUniquePreparedItems(prepared: PreparedTorrentItem[]) {
+  const ids = new Set<string>();
+  const filenames = new Set<string>();
+  const magnets = new Set<string>();
+  for (const { item, torrentWrite } of prepared) {
+    if (ids.has(item.id)) throw new Error(`Batch contains duplicate queue id ${item.id}`);
+    ids.add(item.id);
+    if (torrentWrite) {
+      if (filenames.has(torrentWrite.filename)) throw new Error(`Batch contains duplicate torrent file ${torrentWrite.filename}`);
+      filenames.add(torrentWrite.filename);
+    }
+    if (item.magnetUri) {
+      if (magnets.has(item.magnetUri)) throw new Error("Batch contains the same magnet link more than once");
+      magnets.add(item.magnetUri);
+    }
   }
-  manifest.items.push(item);
-  await saveManifest(manifest);
+}
 
+async function persistPreparedItems(manifest: Manifest, prepared: PreparedTorrentItem[]) {
+  const torrentDir = join(root, "torrents");
+  const writes = prepared.flatMap(({ torrentWrite }) => torrentWrite ? [torrentWrite] : []);
+  if (writes.length) await mkdir(torrentDir, { recursive: true });
+  for (const write of writes) {
+    const destination = join(torrentDir, write.filename);
+    if (existsSync(destination)) throw new Error(`Torrent descriptor already exists: ${write.filename}`);
+  }
+  const written: string[] = [];
+  try {
+    for (const write of writes) {
+      const destination = join(torrentDir, write.filename);
+      await writeFile(destination, write.bytes, { flag: "wx" });
+      written.push(destination);
+    }
+    manifest.items.push(...prepared.map(({ item }) => item));
+    await saveManifest(manifest);
+  } catch (error) {
+    await Promise.all(written.map((path) => rm(path, { force: true })));
+    throw error;
+  }
+}
 
-  return Response.json({ ok: true, item, restartMessage: "Queued; runner will pick it up automatically" }, { headers: { "cache-control": "no-store" } });
+export async function addTorrentUpload(req: Request) {
+  const form = await req.formData();
+  if (!formBool(form, "rightsConfirmed")) {
+    throw new Error("Confirm that you have the rights to download this content");
+  }
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const prepared = await prepareTorrentItem(form, manifest.items);
+  await persistPreparedItems(manifest, [prepared]);
+  return Response.json({ ok: true, item: prepared.item, restartMessage: "Queued; runner will pick it up automatically" }, { headers: { "cache-control": "no-store" } });
+}
+
+type BulkIntakeEntry = {
+  clientId: string;
+  sourceUrl?: string;
+  fields?: Record<string, unknown>;
+};
+
+function bulkEntryForm(entry: BulkIntakeEntry, upload: FormDataEntryValue | null) {
+  const form = new FormData();
+  if (entry.sourceUrl) form.set("sourceUrl", entry.sourceUrl);
+  if (upload instanceof File && upload.name) form.set("torrent", upload);
+  for (const [key, value] of Object.entries(entry.fields || {})) {
+    if (typeof value === "boolean") {
+      if (value) form.set(key, "on");
+    } else if (typeof value === "string" || typeof value === "number") {
+      form.set(key, String(value));
+    } else if (Array.isArray(value) || (value && typeof value === "object")) {
+      form.set(key, JSON.stringify(value));
+    }
+  }
+  return form;
+}
+
+export async function addTorrentBatch(req: Request) {
+  const form = await req.formData();
+  if (!formBool(form, "rightsConfirmed")) {
+    throw new Error("Confirm that you have the rights to download every item in this batch");
+  }
+  const rawItems = formString(form, "items");
+  let entries: BulkIntakeEntry[];
+  try {
+    entries = JSON.parse(rawItems) as BulkIntakeEntry[];
+  } catch {
+    throw new Error("Bulk intake data is invalid");
+  }
+  if (!Array.isArray(entries) || !entries.length || entries.length > 40) {
+    throw new Error("A batch must contain between 1 and 40 items");
+  }
+  if (entries.some((entry) => !entry || typeof entry.clientId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(entry.clientId))) {
+    throw new Error("Bulk intake item identifiers are invalid");
+  }
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const prepared = await Promise.all(entries.map((entry) => {
+    const upload = form.get(`torrent:${entry.clientId}`);
+    if (!entry.sourceUrl && !(upload instanceof File && upload.name)) throw new Error("Every batch item needs a source");
+    return prepareTorrentItem(bulkEntryForm(entry, upload), manifest.items);
+  }));
+  assertUniquePreparedItems(prepared);
+  await persistPreparedItems(manifest, prepared);
+  return Response.json({
+    ok: true,
+    items: prepared.map(({ item }) => item),
+    restartMessage: `Queued ${prepared.length} item${prepared.length === 1 ? "" : "s"}; runner will pick them up automatically`,
+  }, { headers: { "cache-control": "no-store" } });
 }
 
 type StatusSubscriber = {

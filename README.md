@@ -2,15 +2,16 @@
 
 Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a torrent upload dialog, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
 
-Torplex does not search for torrents or provide media. It only manages `.torrent` files you upload, magnet links, direct `.torrent` URLs, or pages that contain an extractable magnet or `.torrent` link. Use it only with media you have the legal right to download and store.
+Torplex does not provide media. It manages `.torrent` files, magnet links, direct `.torrent` URLs, and pages containing an extractable torrent source. An optional search integration can query administrator-installed qBittorrent Nova plugins and use an OpenAI model to build a reviewable multi-title proposal. Use every intake path only with media you have the legal right to download and store.
 
 ## What It Does
 
 - Serves a real-time dashboard over server-sent events.
-- Lets an authenticated user upload `.torrent` files, paste magnet links, paste direct `.torrent` URLs, or paste pages that contain an extractable torrent source.
+- Lets an authenticated user build a batch from `.torrent` uploads, magnet links, direct `.torrent` URLs, or pages containing an extractable torrent source.
+- Optionally turns a natural-language collection request into a reviewable list using explicitly configured qBittorrent Nova search plugins.
 - Inspects complete torrent metadata and lets the user select individual files or folders before downloading.
 - Optionally runs a constrained OpenAI Smart Setup plan automatically after source inspection to fill the same visible selection, routing, and verification controls available manually.
-- Requires an explicit rights attestation for every newly queued torrent.
+- Requires a rights attestation before a provider search and a separate attestation before any reviewed batch is queued.
 - Rejects executable and script payloads and requires a clean ClamAV scan before downloaded files leave staging; there is no UI or API bypass.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
@@ -35,6 +36,7 @@ Torplex is intentionally simple:
 - Linux server or VM.
 - Bun 1.3 or newer.
 - `aria2c` installed and available on `PATH`.
+- Python 3 when the optional qBittorrent Nova search integration is enabled.
 - `curl`, `find`, `df`, `ps`, and `ss`.
 - Plex Media Server running locally or reachable over HTTP.
 - A media directory writable by the user running the worker, or passwordless `sudo` for the configured ownership/mode commands.
@@ -155,6 +157,31 @@ The dialog also accepts per-torrent **Additional instructions**. Those instructi
 Smart Setup runs once automatically when source inspection succeeds. It sends the torrent filename, payload name, file paths, file sizes, automatic suggestions, configured media roots, and any additional instructions to the OpenAI API. It does not send media bytes. The model returns a draft that fills the same visible controls a user can edit manually; the button remains available for an intentional rerun. Torplex validates all selected indexes and destinations server-side before queueing.
 
 Smart Setup only prepares a reviewable plan and does not require an attestation. Queue submission remains disabled until the user confirms that they have the rights or authorization needed for the selected content, and Torplex records that attestation timestamp in the queue manifest. This feature is not a substitute for determining whether a download is permitted in the user's jurisdiction or under applicable service terms.
+
+### Optional Nova search
+
+Torplex can run the same Python search-plugin contract used by qBittorrent's Nova engine. See qBittorrent's [search-plugin repository](https://github.com/qbittorrent/search-plugins) and [plugin installation warning](https://github.com/qbittorrent/search-plugins/wiki/Install-search-plugins) before enabling it. Search is disabled unless all of the following are configured:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TORPLEX_NOVA_SCRIPT` | empty | Absolute path to qBittorrent's `nova3/nova2.py`. |
+| `TORPLEX_PYTHON` | `python3` | Python 3 executable used to launch Nova in isolated mode. |
+| `TORPLEX_SEARCH_PLUGINS` | empty | Comma-separated allowlist of installed Nova plugin module names. |
+| `TORPLEX_SEARCH_TIMEOUT_MS` | `30000` | Per-title provider timeout, clamped to 5-120 seconds. |
+| `TORPLEX_SEARCH_CONCURRENCY` | `2` | Simultaneous title searches, clamped to 1-4. |
+
+On a typical qBittorrent desktop install, Nova lives under a qBittorrent application-data directory such as `~/.local/share/qBittorrent/nova3/`. A server deployment should copy an audited Nova directory to a service-readable location and point `TORPLEX_NOVA_SCRIPT` at its `nova2.py`. Configure only plugin names that exist in that directory's `engines/` folder.
+
+Nova plugins are executable third-party Python, not passive provider definitions. Torplex deliberately does not download, install, or update them. Review their source and provenance before placing them on the server. The Nova child receives a minimal environment without Torplex's OpenAI key, login password, cookie secret, or Plex token, but it still runs with the web service user's filesystem and network permissions.
+
+The **Find with AI** flow works in two review stages:
+
+1. The model resolves the prompt into exact canonical works. Nova searches each work using the configured provider allowlist.
+2. The model may select only opaque candidate IDs actually returned by Nova. It cannot invent a source URL. The user reviews this proposal before Torplex creates intake items.
+3. Each accepted result independently retrieves metadata and runs Smart Setup with a client-side concurrency limit of two. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
+4. A transactional bulk request validates the complete batch before writing torrent descriptors or the queue manifest.
+
+Search requires its own rights acknowledgement and never queues or downloads media. Final execution uses the separate batch rights acknowledgement and the same server-side path, payload, malware, and duplicate validation used by manual intake.
 
 ### Post-download checks
 

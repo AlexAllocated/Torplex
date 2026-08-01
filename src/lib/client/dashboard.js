@@ -1997,9 +1997,9 @@ if ('EventSource' in window) {
 initWarp();
 initMapControls();
 initDialogControls();
-initIntakeControls();
 initQueueControls();
 refreshSession();
+window.addEventListener('torplex:refresh', () => refreshFallback().catch(() => {}));
 window.addEventListener('scroll', () => {
   warp.scrollingUntil = performance.now() + 140;
 }, { passive: true });
