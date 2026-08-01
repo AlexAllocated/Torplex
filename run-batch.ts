@@ -352,6 +352,13 @@ async function processItem(item: ManifestItem) {
     logPath,
   );
   if (exitCode !== 0) {
+    const preemptPath = join(root, "control", "preempt", item.id);
+    if (await pathExists(preemptPath)) {
+      await rm(preemptPath, { force: true });
+      await setItemState(item.id, { status: "pending", startedAt: null, failedAt: null, error: null });
+      await appendBatch(`Paused ${item.title}: queue priority changed`);
+      return;
+    }
     await setItemState(item.id, { status: "failed", failedAt: now(), error: `aria2c exited ${exitCode}` });
     await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
     throw new Error(`${item.title}: aria2c exited ${exitCode}`);

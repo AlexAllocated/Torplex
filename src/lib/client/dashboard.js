@@ -751,7 +751,8 @@ function renderItems(items) {
   const seen = new Set();
   const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
   const rowMarkup =
-    '<div class="title"><div class="title-line"><button data-role="drag-handle" class="drag-handle" type="button" aria-label="Drag to reprioritize" title="Drag to reprioritize"><span aria-hidden="true"></span></button><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
+    '<button data-role="drag-handle" class="drag-handle" type="button" aria-label="Drag to reprioritize" title="Drag to reprioritize"><span aria-hidden="true"></span></button>' +
+    '<div class="title"><span data-role="torrent-marker" class="torrent-marker"></span><div class="title-copy"><span data-role="title"></span><div class="mono" data-role="size"></div></div></div>' +
     '<div><span data-role="status" class="chip"></span></div>' +
     '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
     '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
@@ -783,7 +784,7 @@ function renderItems(items) {
 
     const progress = item.status === 'completed' ? 100 : clamp(item.progress.percent);
     const statusClass = statusClassFor(item.status);
-    row.className = 'item ' + statusClass + (queueDragId === item.id ? ' is-dragging' : '');
+    row.className = 'item ' + statusClass + (item.status === 'pending' ? ' reorderable' : '') + (queueDragId === item.id ? ' is-dragging' : '');
     row.dataset.itemId = item.id;
     setText(row.querySelector('[data-role="title"]'), item.title);
     setText(row.querySelector('[data-role="size"]'), fmt(item.totalBytes));
@@ -901,10 +902,11 @@ async function clearCompletedItems() {
   }
 }
 
-async function persistPendingOrder() {
+async function persistQueueOrder() {
   if (!queueDragId || queueOrderSaving) return;
   const container = document.getElementById('items');
-  const ids = Array.from(container.querySelectorAll('.item.pending[data-item-id]')).map((row) => row.dataset.itemId);
+  const ids = Array.from(container.querySelectorAll('.item.active[data-item-id], .item.organizing[data-item-id], .item.pending[data-item-id]'))
+    .map((row) => row.dataset.itemId);
   queueOrderSaving = true;
   queueDragId = '';
   container.classList.remove('is-reordering');
@@ -1377,19 +1379,23 @@ function initQueueControls() {
   const container = document.getElementById('items');
   container?.addEventListener('dragover', (event) => {
     if (!queueDragId || queueOrderSaving) return;
-    const target = event.target instanceof Element ? event.target.closest('.item.pending[data-item-id]') : null;
-    const dragged = document.querySelector(`.item[data-item-id="${CSS.escape(queueDragId)}"]`);
-    if (!target || !dragged || target === dragged || !container.contains(target)) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-    const bounds = target.getBoundingClientRect();
-    const before = event.clientY < bounds.top + bounds.height / 2;
-    container.insertBefore(dragged, before ? target : target.nextSibling);
+    const dragged = container.querySelector(`.item[data-item-id="${CSS.escape(queueDragId)}"]`);
+    if (!dragged) return;
+    const queueRows = Array.from(container.querySelectorAll('.item.active, .item.organizing, .item.pending'))
+      .filter((row) => row !== dragged);
+    const beforeRow = queueRows.find((row) => {
+      const bounds = row.getBoundingClientRect();
+      return event.clientY < bounds.top + bounds.height / 2;
+    });
+    const queueBoundary = container.querySelector('.item.failed, .item.completed');
+    container.insertBefore(dragged, beforeRow || queueBoundary);
   });
   container?.addEventListener('drop', (event) => {
     if (!queueDragId || queueOrderSaving) return;
     event.preventDefault();
-    persistPendingOrder().catch(() => {});
+    persistQueueOrder().catch(() => {});
   });
 }
 

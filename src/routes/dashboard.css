@@ -802,6 +802,7 @@
       contain-intrinsic-block-size: 82px;
       transition: background-color .35s ease, border-color .35s ease, transform .35s ease;
     }
+    .item.reorderable { padding-left: 49px; }
     .item.active { border-color: rgba(87, 224, 194, .55); background: rgba(24, 44, 43, .88); }
     .item.completed { border-color: rgba(126, 231, 135, .45); }
     .item.failed { border-color: rgba(244, 112, 134, .62); background: rgba(58, 25, 34, .88); }
@@ -819,37 +820,45 @@
       animation: scan 2.6s ease-in-out infinite;
       pointer-events: none;
     }
-    .title { min-width: 0; font-weight: 800; }
-    .title-line {
+    .title {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 8px;
+      min-width: 0;
+      font-weight: 800;
+    }
+    .title-copy {
+      display: flex;
+      flex-direction: column;
       min-width: 0;
     }
     .drag-handle {
-      display: inline-grid;
+      position: absolute;
+      inset: 0 auto 0 0;
+      z-index: 1;
+      display: grid;
       place-items: center;
-      width: 24px;
-      height: 30px;
-      flex: 0 0 auto;
+      width: 36px;
+      height: 100%;
       padding: 0;
       border: 0;
-      border-radius: 6px;
+      border-right: 1px solid rgba(130, 145, 165, .14);
+      border-radius: 0;
       color: #8291a5;
-      background: transparent;
+      background: rgba(0, 0, 0, .08);
       cursor: grab;
       transition: color .18s ease, background-color .18s ease;
     }
     .drag-handle[hidden] { display: none; }
     .drag-handle:hover {
       color: #d9fff6;
-      background: rgba(87, 224, 194, .10);
+      background: rgba(87, 224, 194, .12);
     }
     .drag-handle:active { cursor: grabbing; }
     .drag-handle:disabled { cursor: default; opacity: .42; }
     .drag-handle span {
       width: 12px;
-      height: 19px;
+      height: 31px;
       background-image: radial-gradient(circle, currentColor 1.25px, transparent 1.5px);
       background-position: 0 0;
       background-size: 6px 6px;
@@ -864,7 +873,7 @@
       opacity: .58;
       transform: scale(.992);
     }
-    .title-line [data-role="title"] {
+    .title-copy [data-role="title"] {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -971,7 +980,7 @@
       .destination-field { grid-column: auto; }
       .inspect-button { width: 100%; }
       .item { grid-template-columns: 1fr; }
-      .title-line [data-role="title"] { white-space: normal; }
+      .title-copy [data-role="title"] { white-space: normal; }
     }
     @media (max-width: 720px) {
       main { padding: 16px; }

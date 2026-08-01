@@ -30,11 +30,6 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     expect(status.swarm.peers.some((peer: { lookupStatus?: string }) => peer.lookupStatus === "mapped")).toBe(true);
   }
   expect(status.swarm.activeCount + status.swarm.probingCount + status.swarm.inactiveCount).toBe(status.swarm.peers.length);
-  expect(status.items
-    .filter((item: { status?: string }) => item.status === "pending")
-    .every((item: { progress?: { downloadedBytes?: number; rate?: string } }) =>
-      item.progress?.downloadedBytes === 0 && item.progress?.rate === "",
-    )).toBe(true);
   const pendingCount = status.items.filter((item: { status?: string }) => item.status === "pending").length;
   await expect(page.locator('.item.pending [data-role="drag-handle"]')).toHaveCount(pendingCount);
   if (pendingCount) await expect(page.locator('.item.pending [data-role="drag-handle"]').first()).toHaveAttribute("draggable", "true");
@@ -57,7 +52,23 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   const firstPendingItem = page.locator("#items .item.pending").first();
   if (pendingCount) {
     await firstPendingItem.scrollIntoViewIfNeeded();
-    await expect(firstPendingItem.locator('[data-role="drag-handle"]')).toBeVisible();
+    const handle = firstPendingItem.locator('[data-role="drag-handle"]');
+    await expect(handle).toBeVisible();
+    const geometry = await firstPendingItem.evaluate((row) => {
+      const rowRect = row.getBoundingClientRect();
+      const handleRect = row.querySelector('[data-role="drag-handle"]')!.getBoundingClientRect();
+      const titleRect = row.querySelector('[data-role="title"]')!.getBoundingClientRect();
+      const sizeRect = row.querySelector('[data-role="size"]')!.getBoundingClientRect();
+      return {
+        handleTop: handleRect.top - rowRect.top,
+        handleBottom: rowRect.bottom - handleRect.bottom,
+        titleLeft: titleRect.left,
+        sizeLeft: sizeRect.left,
+      };
+    });
+    expect(Math.abs(geometry.handleTop)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.handleBottom)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.titleLeft - geometry.sizeLeft)).toBeLessThan(1);
     await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-queue-pending.png` });
   }
   const lastQueueItem = page.locator("#items .item").last();
@@ -73,7 +84,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile.png` });
 });
 
-test("pending rows can be reprioritized by dragging", async ({ page }) => {
+test("pending rows can be reprioritized across multiple positions", async ({ page }) => {
   test.skip(!baseUrl || !password || !testReorder, "Live reorder test is opt-in");
 
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -83,24 +94,33 @@ test("pending rows can be reprioritized by dragging", async ({ page }) => {
 
   const originalIds = await page.evaluate(async () => {
     const status = await (await fetch("/api/status")).json();
+    return status.items
+      .filter((item: { status?: string }) => item.status === "active" || item.status === "organizing" || item.status === "pending")
+      .map((item: { id: string }) => item.id);
+  });
+  const originalPendingIds = await page.evaluate(async () => {
+    const status = await (await fetch("/api/status")).json();
     return status.items.filter((item: { status?: string }) => item.status === "pending").map((item: { id: string }) => item.id);
   });
-  test.skip(originalIds.length < 2, "At least two pending items are required");
+  test.skip(originalPendingIds.length < 3, "At least three pending items are required");
 
   try {
     const pendingRows = page.locator("#items .item.pending");
+    const targetIndex = Math.min(3, originalPendingIds.length - 1);
     await pendingRows.first().scrollIntoViewIfNeeded();
     const reordered = page.waitForResponse((response) =>
       response.url().endsWith("/api/torrents/reorder") && response.request().method() === "POST",
     );
-    await pendingRows.first().locator('[data-role="drag-handle"]').dragTo(pendingRows.nth(1), {
+    await pendingRows.first().locator('[data-role="drag-handle"]').dragTo(pendingRows.nth(targetIndex), {
       targetPosition: { x: 80, y: 70 },
     });
     expect((await reordered).ok()).toBe(true);
+    const expectedPendingIds = [...originalPendingIds];
+    expectedPendingIds.splice(targetIndex, 0, expectedPendingIds.shift()!);
     await expect.poll(async () => page.evaluate(async () => {
       const status = await (await fetch("/api/status")).json();
-      return status.items.filter((item: { status?: string }) => item.status === "pending").slice(0, 2).map((item: { id: string }) => item.id);
-    })).toEqual([originalIds[1], originalIds[0]]);
+      return status.items.filter((item: { status?: string }) => item.status === "pending").map((item: { id: string }) => item.id);
+    })).toEqual(expectedPendingIds);
   } finally {
     await page.evaluate(async (ids) => {
       await fetch("/api/torrents/reorder", {

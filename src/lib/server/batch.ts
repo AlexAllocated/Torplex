@@ -719,7 +719,7 @@ export async function clearCompletedItems() {
   return { ok: true, cleared: completed.length, items: completed };
 }
 
-export async function reorderPendingItems(ids: unknown) {
+export async function reorderQueueItems(ids: unknown) {
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !id.trim())) {
     throw new Error("Queue order must be an array of item ids");
   }
@@ -730,22 +730,54 @@ export async function reorderPendingItems(ids: unknown) {
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const state = readJson<State>(join(root, "state.json"), { items: {} });
   const stateItems = state.items ?? {};
-  const pendingItems = manifest.items.filter((item) => (stateItems[item.id]?.status ?? "pending") === "pending");
-  const pendingIds = pendingItems.map((item) => item.id);
+  const queueItems = manifest.items.filter((item) => {
+    const status = stateItems[item.id]?.status ?? "pending";
+    return status === "active" || status === "organizing" || status === "pending";
+  });
+  const queueIds = queueItems.map((item) => item.id);
   const requestedSet = new Set(requestedIds);
 
-  if (requestedIds.length !== pendingIds.length || pendingIds.some((id) => !requestedSet.has(id))) {
-    throw new Error("The pending queue changed; refresh and try again");
+  if (requestedIds.length !== queueIds.length || queueIds.some((id) => !requestedSet.has(id))) {
+    throw new Error("The queue changed; refresh and try again");
   }
 
-  const pendingById = new Map(pendingItems.map((item) => [item.id, item]));
-  const reordered = requestedIds.map((id) => pendingById.get(id)!);
-  const pendingSet = new Set(pendingIds);
-  let pendingIndex = 0;
-  manifest.items = manifest.items.map((item) => (pendingSet.has(item.id) ? reordered[pendingIndex++] : item));
-  await saveManifest(manifest);
+  const runningItems = queueItems.filter((item) => {
+    const status = stateItems[item.id]?.status;
+    return status === "active" || status === "organizing";
+  });
+  const desiredRunningIds = new Set(requestedIds.slice(0, runningItems.length));
+  const preemptedItems = runningItems.filter((item) => !desiredRunningIds.has(item.id));
+  if (preemptedItems.some((item) => stateItems[item.id]?.status === "organizing")) {
+    throw new Error("An item is being organized; wait for it to finish before changing the active priority");
+  }
 
-  return { ok: true, ids: requestedIds };
+  const processItems = aria2ProcessItems();
+  for (const item of preemptedItems) {
+    if (![...processItems.values()].includes(item.id)) {
+      throw new Error(`The active process for ${item.title} changed; refresh and try again`);
+    }
+  }
+
+  const queueById = new Map(queueItems.map((item) => [item.id, item]));
+  const reordered = requestedIds.map((id) => queueById.get(id)!);
+  const queueSet = new Set(queueIds);
+  let queueIndex = 0;
+  manifest.items = manifest.items.map((item) => (queueSet.has(item.id) ? reordered[queueIndex++] : item));
+
+  const preemptDir = join(root, "control", "preempt");
+  if (preemptedItems.length) {
+    await mkdir(preemptDir, { recursive: true });
+    for (const item of preemptedItems) await writeFile(join(preemptDir, item.id), new Date().toISOString());
+  }
+  try {
+    await saveManifest(manifest);
+  } catch (error) {
+    for (const item of preemptedItems) await rm(join(preemptDir, item.id), { force: true });
+    throw error;
+  }
+  for (const item of preemptedItems) killAria2ForItem(item.id);
+
+  return { ok: true, ids: requestedIds, preemptedIds: preemptedItems.map((item) => item.id) };
 }
 
 function peerKey(peer: Pick<Peer, "ip" | "port" | "pid" | "itemId">) {
@@ -1003,7 +1035,8 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
     const destinationExists = existsSync(item.destination.path);
     const recordedStatus = itemState.status ?? "pending";
     const status = recordedStatus === "completed" && !destinationExists ? "pending" : recordedStatus;
-    const shouldReadProgressLog = status === "active" || status === "organizing" || status === "failed";
+    const hasPartialDownload = status === "pending" && existsSync(join(root, "staging", item.id));
+    const shouldReadProgressLog = status === "active" || status === "organizing" || status === "failed" || hasPartialDownload;
     const progress = shouldReadProgressLog
       ? parseProgress(readTail(join(root, "logs", `${item.id}.log`)))
       : status === "completed"

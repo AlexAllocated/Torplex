@@ -11,7 +11,7 @@ Torplex does not search for torrents or provide media. It only manages `.torrent
 - Inspects torrent metadata and suggests Plex destination paths.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
-- Persists drag-and-drop priority changes for pending queue items.
+- Persists drag-and-drop queue priority changes and safely pauses the active transfer when another item is promoted above it.
 - Uses `aria2c` with seeding disabled by default.
 - Moves completed downloads into Movies or TV directories.
 - Refreshes Plex library sections after organizing media.
@@ -184,6 +184,8 @@ The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents
 For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 
 The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` to cap parallel jobs; the default of `0` preserves unlimited parallel processing. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
+
+Pending rows can be reordered from the dashboard. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 
 When a download finishes, the worker:
 
