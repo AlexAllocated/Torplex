@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
-import { dirname, extname, join } from "path";
+import { basename, dirname, extname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
@@ -221,7 +221,13 @@ async function organize(item: ManifestItem) {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);
     const source = sourceRoot(item);
     if (await pathExists(source)) {
-      await movePath(source, dest);
+      const sourceStat = await stat(source);
+      if (sourceStat.isFile()) {
+        await ensureDir(dest);
+        await movePath(source, join(dest, basename(source)));
+      } else {
+        await movePath(source, dest);
+      }
     } else {
       const entries = (await readdir(staging)).filter((entry) => !entry.endsWith(".aria2"));
       if (!entries.length) throw new Error(`No downloaded files found in ${staging}`);
