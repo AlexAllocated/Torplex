@@ -11,6 +11,7 @@ Torplex does not search for torrents or provide media. It only manages `.torrent
 - Inspects torrent metadata and suggests Plex destination paths.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
+- Persists drag-and-drop priority changes for pending queue items.
 - Uses `aria2c` with seeding disabled by default.
 - Moves completed downloads into Movies or TV directories.
 - Refreshes Plex library sections after organizing media.

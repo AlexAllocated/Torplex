@@ -826,6 +826,44 @@
       gap: 8px;
       min-width: 0;
     }
+    .drag-handle {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 30px;
+      flex: 0 0 auto;
+      padding: 0;
+      border: 0;
+      border-radius: 6px;
+      color: #8291a5;
+      background: transparent;
+      cursor: grab;
+      transition: color .18s ease, background-color .18s ease;
+    }
+    .drag-handle[hidden] { display: none; }
+    .drag-handle:hover {
+      color: #d9fff6;
+      background: rgba(87, 224, 194, .10);
+    }
+    .drag-handle:active { cursor: grabbing; }
+    .drag-handle:disabled { cursor: default; opacity: .42; }
+    .drag-handle span {
+      width: 12px;
+      height: 19px;
+      background-image: radial-gradient(circle, currentColor 1.25px, transparent 1.5px);
+      background-position: 0 0;
+      background-size: 6px 6px;
+      pointer-events: none;
+    }
+    .items.is-reordering .item.pending { transition-duration: .16s; }
+    .item.is-dragging {
+      z-index: 2;
+      border-color: rgba(191, 255, 0, .72);
+      background: rgba(25, 42, 40, .94);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .34);
+      opacity: .58;
+      transform: scale(.992);
+    }
     .title-line [data-role="title"] {
       overflow: hidden;
       text-overflow: ellipsis;

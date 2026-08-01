@@ -719,6 +719,35 @@ export async function clearCompletedItems() {
   return { ok: true, cleared: completed.length, items: completed };
 }
 
+export async function reorderPendingItems(ids: unknown) {
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string" || !id.trim())) {
+    throw new Error("Queue order must be an array of item ids");
+  }
+
+  const requestedIds = ids.map((id) => id.trim());
+  if (new Set(requestedIds).size !== requestedIds.length) throw new Error("Queue order contains duplicate item ids");
+
+  const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
+  const state = readJson<State>(join(root, "state.json"), { items: {} });
+  const stateItems = state.items ?? {};
+  const pendingItems = manifest.items.filter((item) => (stateItems[item.id]?.status ?? "pending") === "pending");
+  const pendingIds = pendingItems.map((item) => item.id);
+  const requestedSet = new Set(requestedIds);
+
+  if (requestedIds.length !== pendingIds.length || pendingIds.some((id) => !requestedSet.has(id))) {
+    throw new Error("The pending queue changed; refresh and try again");
+  }
+
+  const pendingById = new Map(pendingItems.map((item) => [item.id, item]));
+  const reordered = requestedIds.map((id) => pendingById.get(id)!);
+  const pendingSet = new Set(pendingIds);
+  let pendingIndex = 0;
+  manifest.items = manifest.items.map((item) => (pendingSet.has(item.id) ? reordered[pendingIndex++] : item));
+  await saveManifest(manifest);
+
+  return { ok: true, ids: requestedIds };
+}
+
 function peerKey(peer: Pick<Peer, "ip" | "port" | "pid" | "itemId">) {
   return `${peer.itemId || peer.pid || "unknown"}:${peer.ip}:${peer.port}`;
 }

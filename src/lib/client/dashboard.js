@@ -84,6 +84,8 @@ const colorPalette = [
 ];
 const nodeLimeRgb = '191, 255, 0';
 let latestItems = [];
+let queueDragId = '';
+let queueOrderSaving = false;
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -749,7 +751,7 @@ function renderItems(items) {
   const seen = new Set();
   const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
   const rowMarkup =
-    '<div class="title"><div class="title-line"><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
+    '<div class="title"><div class="title-line"><button data-role="drag-handle" class="drag-handle" type="button" aria-label="Drag to reprioritize" title="Drag to reprioritize"><span aria-hidden="true"></span></button><span data-role="torrent-marker" class="torrent-marker"></span><span data-role="title"></span></div><div class="mono" data-role="size"></div></div>' +
     '<div><span data-role="status" class="chip"></span></div>' +
     '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
     '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
@@ -777,11 +779,12 @@ function renderItems(items) {
     } else if (item.status !== 'completed' && !row.querySelector('[data-role="torrent-marker"]')) {
       row.innerHTML = rowMarkup;
     }
-    container.appendChild(row);
+    if ((!queueDragId && !queueOrderSaving) || !row.isConnected) container.appendChild(row);
 
     const progress = item.status === 'completed' ? 100 : clamp(item.progress.percent);
     const statusClass = statusClassFor(item.status);
-    row.className = 'item ' + statusClass;
+    row.className = 'item ' + statusClass + (queueDragId === item.id ? ' is-dragging' : '');
+    row.dataset.itemId = item.id;
     setText(row.querySelector('[data-role="title"]'), item.title);
     setText(row.querySelector('[data-role="size"]'), fmt(item.totalBytes));
     const visual = itemVisual(item.id);
@@ -814,6 +817,32 @@ function renderItems(items) {
       remove.disabled = !sessionState.authenticated;
       remove.textContent = item.status === 'completed' ? 'Clear' : 'Remove';
       remove.onclick = () => removeTorrentItem(item);
+    }
+    const dragHandle = row.querySelector('[data-role="drag-handle"]');
+    if (dragHandle) {
+      const canReorder = item.status === 'pending' && sessionState.authenticated && !queueOrderSaving;
+      dragHandle.hidden = item.status !== 'pending';
+      dragHandle.disabled = !canReorder;
+      dragHandle.draggable = canReorder;
+      dragHandle.ondragstart = (event) => {
+        if (!canReorder || !event.dataTransfer) {
+          event.preventDefault();
+          return;
+        }
+        queueDragId = item.id;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', item.id);
+        event.dataTransfer.setDragImage(row, 22, Math.min(40, row.offsetHeight / 2));
+        row.classList.add('is-dragging');
+        container.classList.add('is-reordering');
+      };
+      dragHandle.ondragend = () => {
+        if (!queueOrderSaving) {
+          queueDragId = '';
+          container.classList.remove('is-reordering');
+          renderItems(latestItems);
+        }
+      };
     }
   });
   Array.from(container.children).forEach((row) => {
@@ -869,6 +898,30 @@ async function clearCompletedItems() {
   } catch (error) {
     window.alert(error instanceof Error ? error.message : String(error));
     renderQueueControls();
+  }
+}
+
+async function persistPendingOrder() {
+  if (!queueDragId || queueOrderSaving) return;
+  const container = document.getElementById('items');
+  const ids = Array.from(container.querySelectorAll('.item.pending[data-item-id]')).map((row) => row.dataset.itemId);
+  queueOrderSaving = true;
+  queueDragId = '';
+  container.classList.remove('is-reordering');
+  container.querySelectorAll('.is-dragging').forEach((row) => row.classList.remove('is-dragging'));
+  try {
+    const res = await fetch('/api/torrents/reorder', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || 'Reorder failed');
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : String(error));
+  } finally {
+    queueOrderSaving = false;
+    await refreshFallback();
   }
 }
 
@@ -1321,6 +1374,23 @@ function initIntakeControls() {
 
 function initQueueControls() {
   document.getElementById('clearCompleted')?.addEventListener('click', clearCompletedItems);
+  const container = document.getElementById('items');
+  container?.addEventListener('dragover', (event) => {
+    if (!queueDragId || queueOrderSaving) return;
+    const target = event.target instanceof Element ? event.target.closest('.item.pending[data-item-id]') : null;
+    const dragged = document.querySelector(`.item[data-item-id="${CSS.escape(queueDragId)}"]`);
+    if (!target || !dragged || target === dragged || !container.contains(target)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const bounds = target.getBoundingClientRect();
+    const before = event.clientY < bounds.top + bounds.height / 2;
+    container.insertBefore(dragged, before ? target : target.nextSibling);
+  });
+  container?.addEventListener('drop', (event) => {
+    if (!queueDragId || queueOrderSaving) return;
+    event.preventDefault();
+    persistPendingOrder().catch(() => {});
+  });
 }
 
 function render(data) {
