@@ -644,16 +644,28 @@ function formatEtaSeconds(seconds: number): string {
 
 function parseProgress(log: string) {
   const clean = log.replace(/\x1b\[[0-9;]*[mK]/g, "");
-  const lines = clean.split(/\r?\n/).filter(Boolean);
+  const lines = clean.split(/[\r\n]+/).filter(Boolean);
   const progressLines = lines.filter((line) => line.includes("[#") && line.includes("/") && line.includes("("));
   const line = progressLines.at(-1) ?? "";
+  const checksumLine = [...lines].reverse().find((entry) => entry.includes("[Checksum:#")) ?? "";
+  const checksum = checksumLine.match(
+    /\[Checksum:#\w+\s+([0-9.]+)(B|KiB|MiB|GiB|TiB)\/([0-9.]+)(B|KiB|MiB|GiB|TiB)\((\d+)%\)\]/,
+  );
+  const verification = checksum
+    ? {
+        phase: "verifying",
+        verificationBytes: parseAmount(checksum[1], checksum[2]),
+        verificationTotalBytes: parseAmount(checksum[3], checksum[4]),
+        verificationPercent: Number(checksum[5]),
+      }
+    : { phase: "downloading", verificationBytes: 0, verificationTotalBytes: 0, verificationPercent: 0 };
   const match = line.match(
     /\[#\w+\s+([0-9.]+)(B|KiB|MiB|GiB|TiB)\/([0-9.]+)(B|KiB|MiB|GiB|TiB)\((\d+)%\)/,
   );
   const connections = Number(line.match(/\bCN:(\d+)/)?.[1] ?? 0);
   const seeders = Number(line.match(/\bSD:(\d+)/)?.[1] ?? 0);
   if (!match) {
-    return { line, downloadedBytes: 0, totalBytes: 0, percent: 0, rate: "", eta: "", connections, seeders };
+    return { line, downloadedBytes: 0, totalBytes: 0, percent: 0, rate: "", eta: "", connections, seeders, ...verification };
   }
   const rate = line.match(/\bDL:([^\s\]]+)/)?.[1] ?? "";
   const eta = line.match(/\bETA:([^\]\s]+)/)?.[1] ?? "";
@@ -666,6 +678,7 @@ function parseProgress(log: string) {
     eta,
     connections,
     seeders,
+    ...verification,
   };
 }
 
@@ -679,6 +692,10 @@ function completedProgress(totalBytes: number) {
     eta: "",
     connections: 0,
     seeders: 0,
+    phase: "completed",
+    verificationBytes: 0,
+    verificationTotalBytes: 0,
+    verificationPercent: 0,
   };
 }
 
@@ -692,6 +709,10 @@ function pendingProgress(totalBytes: number) {
     eta: "",
     connections: 0,
     seeders: 0,
+    phase: "pending",
+    verificationBytes: 0,
+    verificationTotalBytes: 0,
+    verificationPercent: 0,
   };
 }
 

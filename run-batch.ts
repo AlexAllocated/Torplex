@@ -227,14 +227,22 @@ type ProbeStream = {
   tags?: { language?: string; title?: string; filename?: string; mimetype?: string };
 };
 
-function probeMedia(path: string) {
-  const result = Bun.spawnSync([
+async function captureCommand(args: string[]) {
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+  const stdout = proc.stdout ? new Response(proc.stdout).text() : Promise.resolve("");
+  const stderr = proc.stderr ? new Response(proc.stderr).text() : Promise.resolve("");
+  const [exitCode, output, error] = await Promise.all([proc.exited, stdout, stderr]);
+  return { exitCode, stdout: output, stderr: error };
+}
+
+async function probeMedia(path: string) {
+  const result = await captureCommand([
     "ffprobe", "-v", "error", "-show_entries",
     "format=duration:stream=index,codec_type,codec_name:stream_tags=language,title,filename,mimetype",
     "-of", "json", path,
   ]);
   if (result.exitCode !== 0) throw new Error(`ffprobe could not read ${basename(path)}`);
-  const payload = JSON.parse(result.stdout.toString()) as { streams?: ProbeStream[]; format?: { duration?: string } };
+  const payload = JSON.parse(result.stdout) as { streams?: ProbeStream[]; format?: { duration?: string } };
   const streams = payload.streams ?? [];
   if (!streams.some((stream) => stream.codec_type === "video")) throw new Error(`${basename(path)} has no video stream`);
   const duration = Number(payload.format?.duration);
@@ -276,7 +284,7 @@ async function verifyMediaStreams(item: ManifestItem, path: string, logPath: str
   await setItemState(item.id, { mediaVerification: "running" });
   const videos = await selectedVideoFiles(item, path);
   if (!videos.length) throw new Error(`No video files were downloaded for ${item.title}`);
-  for (const video of videos) probeMedia(video);
+  for (const video of videos) await probeMedia(video);
   await appendFile(logPath, `\n--- Media verification ---\nVerified ${videos.length} readable video container(s) with ffprobe.\n`);
   await setItemState(item.id, { mediaVerification: "passed" });
   await appendBatch(`Verified ${videos.length} media file(s) for ${item.title}`);
@@ -399,7 +407,7 @@ async function fetchExactEnglishSubtitle(video: string) {
   const destination = join(dirname(video), `${basename(video, extname(video))}.en.srt`);
   const temporary = `${destination}.torplex-part`;
   await writeFile(temporary, bytes);
-  const scan = Bun.spawnSync(["clamdscan", "--fdpass", "--infected", "--no-summary", temporary]);
+  const scan = await captureCommand(["clamdscan", "--fdpass", "--infected", "--no-summary", temporary]);
   if (scan.exitCode !== 0) {
     await rm(temporary, { force: true });
     throw new Error(`Downloaded subtitle failed its malware scan (exit ${scan.exitCode})`);
@@ -421,7 +429,7 @@ async function ensureEnglishSubtitles(item: ManifestItem, destinations: string[]
   const warnings: string[] = [];
   for (const video of videos) {
     try {
-      const streams = probeMedia(video);
+      const streams = await probeMedia(video);
       if (streams.some(hasEnglishLanguage)) continue;
       if (await normalizeMatchingEnglishSidecar(video)) {
         normalized += 1;
@@ -582,8 +590,8 @@ function stopAria2ForItem(itemId: string) {
 async function scanForMalware(item: ManifestItem, staging: string, logPath: string) {
   await setItemState(item.id, { securityScan: "running" });
   await appendBatch(`Scanning ${item.title} for malware`);
-  const proc = Bun.spawnSync(["clamdscan", "--fdpass", "--multiscan", "--infected", "--no-summary", staging]);
-  const output = `${proc.stdout.toString()}${proc.stderr.toString()}`.trim();
+  const proc = await captureCommand(["clamdscan", "--fdpass", "--multiscan", "--infected", "--no-summary", staging]);
+  const output = `${proc.stdout}${proc.stderr}`.trim();
   if (output) await appendFile(logPath, `\n--- ClamAV malware scan ---\n${output}\n`);
   if (proc.exitCode === 1) {
     await setItemState(item.id, { securityScan: "infected" });
