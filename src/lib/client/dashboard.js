@@ -1417,6 +1417,7 @@ function initIntakeControls() {
   const postDownloadSetup = document.getElementById('postDownloadSetup');
   if (!form || !input || !sourceInput || !inspect || !submit || !selectedInput || !rightsConfirmed) return;
   let inspectTimer = 0;
+  let inspectProgressTimer = 0;
   let inspectNonce = 0;
   let inspectedTorrent = null;
   let selectedFiles = new Set();
@@ -1553,6 +1554,8 @@ function initIntakeControls() {
     }
   };
   const resetInspection = () => {
+    window.clearInterval(inspectProgressTimer);
+    inspectProgressTimer = 0;
     smartSetupAbortController?.abort();
     smartSetupAbortController = null;
     smartSetupRunning = false;
@@ -1725,6 +1728,27 @@ function initIntakeControls() {
     setIntakeStatus('Inspecting');
     setIntakeMode('busy');
     inspect.disabled = true;
+    const summary = document.getElementById('torrentSummary');
+    const retrievingMagnet = sourceUrl.toLowerCase().startsWith('magnet:');
+    const inspectStartedAt = Date.now();
+    if (summary) {
+      summary.textContent = retrievingMagnet
+        ? 'Retrieving the torrent file list from trackers and peers...'
+        : 'Reading torrent metadata...';
+    }
+    if (retrievingMagnet) {
+      setIntakeStatus('Fetching metadata - 0s');
+      inspectProgressTimer = window.setInterval(() => {
+        if (nonce !== inspectNonce) return;
+        const elapsed = Math.floor((Date.now() - inspectStartedAt) / 1000);
+        setIntakeStatus(`Fetching metadata - ${elapsed}s`);
+        if (summary) {
+          summary.textContent = elapsed < 30
+            ? 'Contacting trackers and peers for the torrent file list...'
+            : `Still waiting for a peer to provide metadata. No media is being downloaded. (${elapsed}s)`;
+        }
+      }, 1000);
+    }
     try {
       const data = new FormData();
       if (sourceUrl) data.set('sourceUrl', sourceUrl);
@@ -1757,9 +1781,16 @@ function initIntakeControls() {
       maybeRunSmartSetup();
     } catch (error) {
       if (nonce !== inspectNonce) return;
-      setIntakeStatus(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setIntakeStatus(message);
+      if (summary) summary.textContent = message;
       setIntakeMode('error');
       updateInspectAvailability();
+    } finally {
+      if (nonce === inspectNonce) {
+        window.clearInterval(inspectProgressTimer);
+        inspectProgressTimer = 0;
+      }
     }
   };
   const scheduleInspect = (delay = 450) => {

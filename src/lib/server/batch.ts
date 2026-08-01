@@ -529,7 +529,7 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
 
   const resolution = (async () => {
     await mkdir(metadataDir, { recursive: true });
-    const output = await new Promise<string>((resolve, reject) => {
+    await new Promise<string>((resolve, reject) => {
       const child = spawn("aria2c", [
         `--dir=${metadataDir}`,
         "--bt-metadata-only=true",
@@ -538,12 +538,14 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
         "--seed-ratio=0",
         "--max-upload-limit=1K",
         "--bt-enable-lpd=false",
+        "--enable-dht=true",
+        "--enable-peer-exchange=true",
         "--file-allocation=none",
         "--summary-interval=0",
         "--console-log-level=warn",
         "--connect-timeout=15",
         "--timeout=15",
-        "--bt-stop-timeout=60",
+        "--bt-stop-timeout=150",
         `--dht-file-path=${join(metadataDir, "dht.dat")}`,
         `--dht-file-path6=${join(metadataDir, "dht6.dat")}`,
         uri,
@@ -554,7 +556,7 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
       };
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
-      const timeout = setTimeout(() => child.kill("SIGTERM"), 120_000);
+      const timeout = setTimeout(() => child.kill("SIGTERM"), 180_000);
       child.once("error", (error) => {
         clearTimeout(timeout);
         reject(error);
@@ -567,7 +569,9 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
     });
     if (!existsSync(torrentPath)) {
       const resolvedFilename = (await readdir(metadataDir)).find((entry) => entry.toLowerCase().endsWith(".torrent"));
-      if (!resolvedFilename) throw new Error(`aria2c completed without saving torrent metadata${output ? `: ${output.trim().split("\n").at(-1)}` : ""}`);
+      if (!resolvedFilename) {
+        throw new Error("No connected peer supplied this magnet's file list. The torrent may be inactive; retry later or upload its .torrent file.");
+      }
       await rename(join(metadataDir, resolvedFilename), torrentPath);
     }
     const bytes = new Uint8Array(readFileSync(torrentPath));
