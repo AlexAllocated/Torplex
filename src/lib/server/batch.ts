@@ -618,6 +618,19 @@ function parseRateBytesPerSecond(rate: string): number {
   return match ? parseAmount(match[1], match[2]) : 0;
 }
 
+function formatRateBytesPerSecond(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytesPerSecond;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)}${units[unit]}`;
+}
+
 function formatEtaSeconds(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return "";
   const rounded = Math.max(1, Math.round(seconds));
@@ -1155,7 +1168,6 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
     } else if (status === "active" || status === "organizing") {
       activeBytes += Math.min(progress.downloadedBytes, effectiveTotalBytes || progress.downloadedBytes);
       activeTotalBytes += effectiveTotalBytes;
-      activeRateBytesPerSecond += parseRateBytesPerSecond(progress.rate);
       activeConnections += progress.connections;
       activeSeeders += progress.seeders;
     }
@@ -1173,7 +1185,26 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
   });
 
   const totalBytes = items.reduce((sum, item) => sum + (item.totalBytes || item.progress.totalBytes), 0);
-  const activeItems = items.filter((item) => item.status === "active" || item.status === "organizing");
+  const swarm = await swarmPeers({ connections: activeConnections, seeders: activeSeeders });
+  const socketRateByItem = new Map<string, number>();
+  for (const peer of swarm.peers) {
+    if (!peer.active || !peer.itemId) continue;
+    socketRateByItem.set(peer.itemId, (socketRateByItem.get(peer.itemId) || 0) + Math.max(0, peer.receiveRateBps || 0));
+  }
+  const enrichedItems = items.map((item) => {
+    const parsedRate = parseRateBytesPerSecond(item.progress.rate);
+    const effectiveRate = Math.max(parsedRate, socketRateByItem.get(item.id) || 0);
+    if (item.status === "active" || item.status === "organizing") activeRateBytesPerSecond += effectiveRate;
+    return {
+      ...item,
+      progress: {
+        ...item.progress,
+        rate: effectiveRate > parsedRate ? formatRateBytesPerSecond(effectiveRate) : item.progress.rate,
+        rateBytesPerSecond: effectiveRate,
+      },
+    };
+  });
+  const activeItems = enrichedItems.filter((item) => item.status === "active" || item.status === "organizing");
   const activeRemainingBytes = Math.max(0, activeTotalBytes - activeBytes);
   const doneBytes = completedBytes + activeBytes;
   const rawLog = includeBatchLogTail ? readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "") : "";
@@ -1197,8 +1228,8 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
       activeSeeders,
     },
     disk: await diskUsage(),
-    swarm: await swarmPeers({ connections: activeConnections, seeders: activeSeeders }),
-    items,
+    swarm,
+    items: enrichedItems,
     logs: includeLogs ? await listLogs() : [],
     batchLogTail: rawLog.split(/\r?\n/).slice(-80).join("\n"),
   };
