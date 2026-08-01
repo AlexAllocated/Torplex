@@ -3,6 +3,7 @@ import { mkdir, readdir, rename, rm, writeFile } from "fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, join } from "path";
+import { createSmartIntakePlan, smartIntakeConfig } from "$lib/server/smart-intake";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
@@ -25,10 +26,21 @@ type Item = {
   payloadName: string;
   totalBytes: number;
   fileCount?: number;
+  selectFiles?: number[];
+  rightsAttestedAt?: string;
+  postDownload?: {
+    verifyStreams: boolean;
+    scanForMalware: boolean;
+    ensureEnglishSubtitles: boolean;
+    verifyCanonicalMetadata: boolean;
+    verifyArtwork: boolean;
+    refreshPlex: boolean;
+  };
   destination: { type: "movie" | "show"; path: string };
   organize?:
     | { strategy: "moveRoot"; seasonRenames?: Record<string, string>; fileRenames?: Record<string, string> }
     | { strategy: "mergeRoot"; targetSubdir?: string }
+    | { strategy: "routeDirectories"; routes: Array<{ sourcePath: string; destinationPath: string }> }
     | { strategy: "singleFile"; source: string; finalName: string }
     | { strategy: "singleEpisode"; source: string; finalName: string };
 };
@@ -214,20 +226,21 @@ function torrentMetadata(bytes: Uint8Array, filename: string) {
   const info = decoded.info as Record<string, unknown> | undefined;
   if (!info) throw new Error("Torrent is missing info dictionary");
   const payloadName = textValue(info.name || basename(filename, ".torrent"));
-  const fileEntries = Array.isArray(info.files)
+  const fileEntries = (Array.isArray(info.files)
     ? info.files.map((entry) => {
         const record = entry as Record<string, unknown>;
         const parts = Array.isArray(record.path) ? record.path.map(textValue) : [];
         return { path: parts.join("/"), length: Number(record.length) || 0 };
       })
-    : [{ path: payloadName, length: Number(info.length) || 0 }];
+    : [{ path: payloadName, length: Number(info.length) || 0 }])
+    .map((entry, index) => ({ ...entry, index: index + 1 }));
   const totalBytes = fileEntries.reduce((sum, entry) => sum + entry.length, 0);
   return {
     filename,
     payloadName,
     totalBytes,
     fileCount: fileEntries.length,
-    files: fileEntries.slice(0, 40),
+    files: fileEntries,
     suggested: suggestManifestFields(payloadName, filename, fileEntries),
   };
 }
@@ -1129,6 +1142,65 @@ function formString(form: FormData, key: string, fallback = "") {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+function selectedFileIndexes(form: FormData, files: Array<{ index: number; length: number }>) {
+  const raw = formString(form, "selectedFiles");
+  if (!raw) return { indexes: [] as number[], totalBytes: files.reduce((sum, file) => sum + file.length, 0) };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Selected torrent files are invalid");
+  }
+  if (!Array.isArray(parsed)) throw new Error("Selected torrent files are invalid");
+  const indexes = [...new Set(parsed.map(Number))].sort((left, right) => left - right);
+  if (!indexes.length) throw new Error("Select at least one torrent file");
+  const available = new Map(files.map((file) => [file.index, file.length]));
+  if (indexes.some((index) => !Number.isInteger(index) || !available.has(index))) {
+    throw new Error("Selected torrent files do not match this torrent");
+  }
+  return {
+    indexes,
+    totalBytes: indexes.reduce((sum, index) => sum + (available.get(index) ?? 0), 0),
+  };
+}
+
+const riskyTorrentFilePattern = /\.(?:exe|dll|com|scr|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|msp|reg|lnk|desktop|appimage|apk|jar|dmg|pkg|deb|rpm|sh|bash|zsh|fish|py|pl|rb)$/i;
+
+function organizationRoutes(form: FormData, files: Array<{ index: number; path: string }>, selectedIndexes: number[]) {
+  const raw = formString(form, "organizationRoutes");
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Organization routes are invalid");
+  }
+  if (!Array.isArray(parsed) || parsed.length > 100) throw new Error("Organization routes are invalid");
+  if (!parsed.length) return [];
+  const selected = new Set(selectedIndexes.length ? selectedIndexes : files.map((file) => file.index));
+  const allowedRoots = [moviesDir, tvDir].map((path) => path.replace(/\/$/, ""));
+  const routes = parsed.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("Organization routes are invalid");
+    const record = entry as Record<string, unknown>;
+    const sourcePath = String(record.sourcePath || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+    const destinationPath = String(record.destinationPath || "").trim().replace(/\/$/, "");
+    if (!sourcePath || sourcePath.startsWith("/") || sourcePath.split("/").some((part) => !part || part === "..")) {
+      throw new Error(`Unsafe organization source: ${sourcePath || "(empty)"}`);
+    }
+    if (!allowedRoots.some((root) => destinationPath === root || destinationPath.startsWith(`${root}/`))) {
+      throw new Error(`Organization destination must be under ${moviesDir} or ${tvDir}`);
+    }
+    return { sourcePath, destinationPath };
+  });
+  const unmatched = files.filter((file) => {
+    if (!selected.has(file.index)) return false;
+    return routes.filter((route) => file.path === route.sourcePath || file.path.startsWith(`${route.sourcePath}/`)).length !== 1;
+  });
+  if (unmatched.length) throw new Error(`Organization routes must assign exactly one destination to ${unmatched.length} selected file(s)`);
+  return routes;
+}
+
 function formBool(form: FormData, key: string, fallback = false) {
   const value = form.get(key);
   if (typeof value !== "string") return fallback;
@@ -1173,15 +1245,67 @@ export async function inspectTorrentUpload(req: Request) {
         sourceUrl: "sourceUrl" in source ? source.sourceUrl : "",
         resolvedUrl: "resolvedUrl" in source ? source.resolvedUrl : "",
       },
+      smartSetup: smartIntakeConfig(),
     },
     { headers: { "cache-control": "no-store" } },
   );
 }
 
+export function planTorrentUpload(req: Request) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (value: Record<string, unknown>) => controller.enqueue(encoder.encode(`${JSON.stringify(value)}\n`));
+      void (async () => {
+        try {
+          send({ type: "progress", message: "Reading torrent metadata and user instructions" });
+          const form = await req.formData();
+          if (!formBool(form, "rightsConfirmed")) {
+            throw new Error("Confirm the rights statement before using Smart Setup");
+          }
+          const source = await intakeSourceFromForm(form);
+          const { metadata, filename } = metadataForSource(source);
+          send({ type: "progress", message: `Prepared ${metadata.files.length} file records for planning` });
+          const result = await createSmartIntakePlan({
+            filename,
+            payloadName: metadata.payloadName,
+            files: metadata.files,
+            suggested: metadata.suggested,
+            additionalInstructions: formString(form, "additionalInstructions"),
+            moviesDir,
+            tvDir,
+          }, (message) => send({ type: "progress", message }));
+          send({ type: "result", ...result });
+        } catch (error) {
+          send({ type: "error", error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
 export async function addTorrentUpload(req: Request) {
   const form = await req.formData();
+  if (!formBool(form, "rightsConfirmed")) {
+    throw new Error("Confirm that you have the rights to download this content");
+  }
   const source = await intakeSourceFromForm(form);
   const { metadata, filename, magnetUri } = metadataForSource(source);
+  const selection = selectedFileIndexes(form, metadata.files);
+  const selectedSet = new Set(selection.indexes.length ? selection.indexes : metadata.files.map((file) => file.index));
+  const riskyFiles = metadata.files.filter((file) => selectedSet.has(file.index) && riskyTorrentFilePattern.test(file.path));
+  if (riskyFiles.length) {
+    throw new Error(`Selected content contains ${riskyFiles.length} executable or script file(s). Torplex will not queue risky payloads.`);
+  }
   const manifest = readJson<Manifest>(join(root, "manifest.json"), { createdAt: new Date().toISOString(), items: [] });
   const id = slugify(formString(form, "id", metadata.suggested.id));
   const title = formString(form, "title", metadata.suggested.title);
@@ -1190,6 +1314,8 @@ export async function addTorrentUpload(req: Request) {
   const destinationPath = formString(form, "destinationPath", metadata.suggested.destinationPath);
   const strategyInput = formString(form, "organizeStrategy", metadata.suggested.organizeStrategy);
   const targetSubdir = formString(form, "targetSubdir", metadata.suggested.targetSubdir);
+  const routes = organizationRoutes(form, metadata.files, selection.indexes);
+  if (strategyInput === "routeDirectories" && !routes.length) throw new Error("Add at least one folder route");
   if (!id || !title || !destinationPath) throw new Error("Missing required manifest fields");
   const allowedRoots = [moviesDir, tvDir].map((path) => path.replace(/\/$/, ""));
   if (!allowedRoots.some((root) => destinationPath === root || destinationPath.startsWith(`${root}/`))) {
@@ -1200,7 +1326,9 @@ export async function addTorrentUpload(req: Request) {
   if (magnetUri && manifest.items.some((item) => item.magnetUri === magnetUri)) throw new Error("Manifest already has this magnet link");
 
   const organize =
-    strategyInput === "moveRoot"
+    strategyInput === "routeDirectories"
+      ? { strategy: "routeDirectories" as const, routes }
+      : strategyInput === "moveRoot"
       ? { strategy: "moveRoot" as const }
       : { strategy: "mergeRoot" as const, ...(targetSubdir ? { targetSubdir } : {}) };
 
@@ -1213,8 +1341,18 @@ export async function addTorrentUpload(req: Request) {
     destination: { type: mediaType, path: destinationPath },
     organize,
     payloadName: metadata.payloadName,
-    totalBytes: metadata.totalBytes,
-    fileCount: metadata.fileCount,
+    totalBytes: selection.totalBytes,
+    fileCount: selection.indexes.length || metadata.fileCount,
+    ...(selection.indexes.length && selection.indexes.length < metadata.fileCount ? { selectFiles: selection.indexes } : {}),
+    rightsAttestedAt: new Date().toISOString(),
+    postDownload: {
+      verifyStreams: formBool(form, "verifyStreams"),
+      scanForMalware: true,
+      ensureEnglishSubtitles: formBool(form, "ensureEnglishSubtitles"),
+      verifyCanonicalMetadata: formBool(form, "verifyCanonicalMetadata"),
+      verifyArtwork: formBool(form, "verifyArtwork"),
+      refreshPlex: formBool(form, "refreshPlex"),
+    },
   };
 
   if (source.kind !== "magnet") {

@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
+import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
 import { basename, dirname, extname, join } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -13,7 +13,24 @@ const mediaDirMode = process.env.MEDIA_DIR_MODE ?? "775";
 const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
 const configuredConcurrency = Number.parseInt(process.env.MAX_CONCURRENT_DOWNLOADS ?? "0", 10);
 const maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0 ? configuredConcurrency : 0;
+const adaptiveConcurrency = /^(1|true|yes)$/i.test(process.env.ADAPTIVE_CONCURRENCY ?? "false");
+const adaptiveMinConcurrency = Math.max(1, Number.parseInt(process.env.ADAPTIVE_MIN_CONCURRENCY ?? "1", 10) || 1);
+const adaptiveMaxConcurrency = Math.max(
+  adaptiveMinConcurrency,
+  Number.parseInt(process.env.ADAPTIVE_MAX_CONCURRENCY ?? String(maxConcurrentDownloads || 4), 10) || 4,
+);
+const diskWriteBudgetBytes = Math.max(1, Number.parseFloat(process.env.DISK_WRITE_BUDGET_MIB ?? "35") || 35) * 1024 * 1024;
+const adaptiveIngressThreshold = Math.min(1, Math.max(0.1, Number.parseFloat(process.env.ADAPTIVE_INGRESS_THRESHOLD ?? "0.75") || 0.75));
+const adaptiveDiskBusyThreshold = Math.min(100, Math.max(1, Number.parseFloat(process.env.ADAPTIVE_DISK_BUSY_PERCENT ?? "80") || 80));
+const adaptiveSettleMs = Math.max(10, Number.parseInt(process.env.ADAPTIVE_SETTLE_SECONDS ?? "30", 10) || 30) * 1000;
 const checkIntegrity = /^(1|true|yes)$/i.test(process.env.ARIA2_CHECK_INTEGRITY ?? "");
+const videoExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm"]);
+const subtitleExtensions = new Set([".srt", ".ass", ".ssa", ".vtt", ".sub"]);
+const riskyAttachmentPattern = /\.(?:exe|dll|com|scr|bat|cmd|ps1|vbs|js|wsf|hta|msi|reg|lnk|desktop|appimage|apk|jar|dmg|pkg|deb|rpm|sh|py|pl|rb)$/i;
+const openSubtitlesApiKey = (process.env.OPENSUBTITLES_API_KEY ?? "").trim();
+const openSubtitlesUserAgent = (process.env.OPENSUBTITLES_USER_AGENT ?? "Torplex v1").trim() || "Torplex v1";
+let openSubtitlesToken = (process.env.OPENSUBTITLES_TOKEN ?? "").trim();
+let openSubtitlesBaseUrl = "https://api.opensubtitles.com/api/v1";
 
 type ManifestItem = {
   id: string;
@@ -23,10 +40,21 @@ type ManifestItem = {
   payloadName: string;
   totalBytes: number;
   fileCount?: number;
+  selectFiles?: number[];
+  rightsAttestedAt?: string;
+  postDownload?: {
+    verifyStreams: boolean;
+    scanForMalware: boolean;
+    ensureEnglishSubtitles: boolean;
+    verifyCanonicalMetadata: boolean;
+    verifyArtwork: boolean;
+    refreshPlex: boolean;
+  };
   destination: { type: "movie" | "show"; path: string };
   organize:
     | { strategy: "moveRoot"; seasonRenames?: Record<string, string>; fileRenames?: Record<string, string> }
     | { strategy: "mergeRoot"; targetSubdir?: string }
+    | { strategy: "routeDirectories"; routes: Array<{ sourcePath: string; destinationPath: string }> }
     | { strategy: "singleFile"; source: string; finalName: string }
     | { strategy: "singleEpisode"; source: string; finalName: string };
 };
@@ -149,8 +177,6 @@ async function collectFileStats(path: string) {
   let totalBytes = 0;
   let fileCount = 0;
   let videoCount = 0;
-  const videoExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov"]);
-
   async function visit(current: string) {
     const currentStat = await stat(current);
     if (currentStat.isFile()) {
@@ -168,6 +194,302 @@ async function collectFileStats(path: string) {
 
   if (await pathExists(path)) await visit(path);
   return { totalBytes, fileCount, videoCount };
+}
+
+async function collectFiles(path: string, filter: (file: string) => boolean) {
+  const files: string[] = [];
+  async function visit(current: string) {
+    const details = await stat(current);
+    if (details.isFile()) {
+      if (filter(current)) files.push(current);
+      return;
+    }
+    if (!details.isDirectory()) return;
+    for (const entry of await readdir(current)) {
+      if (!entry.endsWith(".aria2")) await visit(join(current, entry));
+    }
+  }
+  if (await pathExists(path)) await visit(path);
+  return files;
+}
+
+type ProbeStream = {
+  codec_type?: string;
+  codec_name?: string;
+  tags?: { language?: string; title?: string; filename?: string; mimetype?: string };
+};
+
+function probeMedia(path: string) {
+  const result = Bun.spawnSync([
+    "ffprobe", "-v", "error", "-show_entries",
+    "format=duration:stream=index,codec_type,codec_name:stream_tags=language,title,filename,mimetype",
+    "-of", "json", path,
+  ]);
+  if (result.exitCode !== 0) throw new Error(`ffprobe could not read ${basename(path)}`);
+  const payload = JSON.parse(result.stdout.toString()) as { streams?: ProbeStream[]; format?: { duration?: string } };
+  const streams = payload.streams ?? [];
+  if (!streams.some((stream) => stream.codec_type === "video")) throw new Error(`${basename(path)} has no video stream`);
+  const duration = Number(payload.format?.duration);
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error(`${basename(path)} has no valid duration`);
+  const riskyAttachment = streams.find((stream) => {
+    if (stream.codec_type !== "attachment") return false;
+    return riskyAttachmentPattern.test(stream.tags?.filename ?? "") || /(?:executable|script|java-archive)/i.test(stream.tags?.mimetype ?? "");
+  });
+  if (riskyAttachment) throw new Error(`${basename(path)} contains a blocked executable or script attachment`);
+  return streams;
+}
+
+async function verifyMediaStreams(item: ManifestItem, path: string, logPath: string) {
+  await setItemState(item.id, { mediaVerification: "running" });
+  const videos = await collectFiles(path, (file) => videoExtensions.has(extname(file).toLowerCase()));
+  if (!videos.length) throw new Error(`No video files were downloaded for ${item.title}`);
+  for (const video of videos) probeMedia(video);
+  await appendFile(logPath, `\n--- Media verification ---\nVerified ${videos.length} readable video container(s) with ffprobe.\n`);
+  await setItemState(item.id, { mediaVerification: "passed" });
+  await appendBatch(`Verified ${videos.length} media file(s) for ${item.title}`);
+}
+
+function hasEnglishLanguage(stream: ProbeStream) {
+  const language = (stream.tags?.language ?? "").toLowerCase();
+  return stream.codec_type === "subtitle" && (language === "en" || language === "eng" || language.startsWith("en-"));
+}
+
+async function normalizeMatchingEnglishSidecar(video: string) {
+  const directory = dirname(video);
+  const stem = basename(video, extname(video));
+  const entries = await readdir(directory);
+  const explicitlyEnglish = entries.some((entry) => {
+    const extension = extname(entry).toLowerCase();
+    if (!subtitleExtensions.has(extension)) return false;
+    const name = basename(entry, extension).toLowerCase();
+    return name === `${stem.toLowerCase()}.en` || name === `${stem.toLowerCase()}.eng` || name.startsWith(`${stem.toLowerCase()}.en.`);
+  });
+  if (explicitlyEnglish) return true;
+  const plain = entries.find((entry) => {
+    const extension = extname(entry).toLowerCase();
+    return subtitleExtensions.has(extension) && basename(entry, extension) === stem;
+  });
+  if (!plain) return false;
+  const extension = extname(plain).toLowerCase();
+  await rename(join(directory, plain), join(directory, `${stem}.en${extension}`));
+  return true;
+}
+
+async function openSubtitlesHeaders(authenticated = false) {
+  const headers: Record<string, string> = {
+    "Api-Key": openSubtitlesApiKey,
+    "User-Agent": openSubtitlesUserAgent,
+    "Content-Type": "application/json",
+  };
+  if (authenticated && !openSubtitlesToken) {
+    const username = (process.env.OPENSUBTITLES_USERNAME ?? "").trim();
+    const password = process.env.OPENSUBTITLES_PASSWORD ?? "";
+    if (username && password) {
+      const response = await fetch(`${openSubtitlesBaseUrl}/login`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ username, password }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!response.ok) throw new Error(`OpenSubtitles login failed with HTTP ${response.status}`);
+      const payload = await response.json() as { token?: string; base_url?: string };
+      openSubtitlesToken = payload.token ?? "";
+      if (payload.base_url) openSubtitlesBaseUrl = `https://${payload.base_url.replace(/^https?:\/\//, "").replace(/\/$/, "")}/api/v1`;
+    }
+  }
+  if (openSubtitlesToken) headers.Authorization = `Bearer ${openSubtitlesToken}`;
+  return headers;
+}
+
+async function openSubtitlesHash(path: string) {
+  const handle = await open(path, "r");
+  try {
+    const details = await handle.stat();
+    if (details.size < 128 * 1024) throw new Error("Video is too small for an OpenSubtitles hash");
+    const chunkSize = 64 * 1024;
+    const first = Buffer.alloc(chunkSize);
+    const last = Buffer.alloc(chunkSize);
+    await handle.read(first, 0, chunkSize, 0);
+    await handle.read(last, 0, chunkSize, details.size - chunkSize);
+    let hash = BigInt(details.size);
+    for (const chunk of [first, last]) {
+      for (let offset = 0; offset < chunk.length; offset += 8) hash = BigInt.asUintN(64, hash + chunk.readBigUInt64LE(offset));
+    }
+    return { hash: hash.toString(16).padStart(16, "0"), size: details.size };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function fetchExactEnglishSubtitle(video: string) {
+  if (!openSubtitlesApiKey) return false;
+  const identity = await openSubtitlesHash(video);
+  const headers = await openSubtitlesHeaders(false);
+  const query = new URLSearchParams({
+    languages: "en",
+    moviehash: identity.hash,
+    moviebytesize: String(identity.size),
+    order_by: "download_count",
+    order_direction: "desc",
+  });
+  const search = await fetch(`${openSubtitlesBaseUrl}/subtitles?${query}`, { headers, signal: AbortSignal.timeout(20_000) });
+  if (!search.ok) throw new Error(`OpenSubtitles search failed with HTTP ${search.status}`);
+  const payload = await search.json() as {
+    data?: Array<{ attributes?: { language?: string; moviehash_match?: boolean; files?: Array<{ file_id?: number }> } }>;
+  };
+  const match = payload.data?.find((entry) => {
+    const attributes = entry.attributes;
+    return attributes?.language === "en" && attributes.moviehash_match === true && Number.isInteger(attributes.files?.[0]?.file_id);
+  });
+  const fileId = match?.attributes?.files?.[0]?.file_id;
+  if (!fileId) return false;
+  const downloadHeaders = await openSubtitlesHeaders(true);
+  const request = await fetch(`${openSubtitlesBaseUrl}/download`, {
+    method: "POST",
+    headers: downloadHeaders,
+    body: JSON.stringify({ file_id: fileId, sub_format: "srt" }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!request.ok) throw new Error(`OpenSubtitles download request failed with HTTP ${request.status}`);
+  const download = await request.json() as { link?: string };
+  if (!download.link) throw new Error("OpenSubtitles returned no download link");
+  const downloadUrl = new URL(download.link);
+  if (downloadUrl.protocol !== "https:") throw new Error("OpenSubtitles returned an insecure download link");
+  const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`Subtitle download failed with HTTP ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new Error("Subtitle response had an invalid size");
+  const text = new TextDecoder().decode(bytes);
+  if (!/\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s+-->\s+\d{1,2}:\d{2}:\d{2}[,.]\d{3}/.test(text)) {
+    throw new Error("Subtitle response was not a valid timed caption file");
+  }
+  const destination = join(dirname(video), `${basename(video, extname(video))}.en.srt`);
+  const temporary = `${destination}.torplex-part`;
+  await writeFile(temporary, bytes);
+  const scan = Bun.spawnSync(["clamdscan", "--fdpass", "--infected", "--no-summary", temporary]);
+  if (scan.exitCode !== 0) {
+    await rm(temporary, { force: true });
+    throw new Error(`Downloaded subtitle failed its malware scan (exit ${scan.exitCode})`);
+  }
+  await rename(temporary, destination);
+  return true;
+}
+
+async function ensureEnglishSubtitles(item: ManifestItem, destinations: string[], logPath: string) {
+  await setItemState(item.id, { subtitleStatus: "checking" });
+  const videos = (
+    await Promise.all(
+      destinations.map((path) => collectFiles(path, (file) => videoExtensions.has(extname(file).toLowerCase()))),
+    )
+  ).flat();
+  let normalized = 0;
+  let fetched = 0;
+  let missing = 0;
+  const warnings: string[] = [];
+  for (const video of videos) {
+    try {
+      const streams = probeMedia(video);
+      if (streams.some(hasEnglishLanguage)) continue;
+      if (await normalizeMatchingEnglishSidecar(video)) {
+        normalized += 1;
+        continue;
+      }
+      if (await fetchExactEnglishSubtitle(video)) {
+        fetched += 1;
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+      } else {
+        missing += 1;
+      }
+    } catch (error) {
+      missing += 1;
+      warnings.push(`${basename(video)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const providerNote = openSubtitlesApiKey ? "" : " OpenSubtitles is not configured, so missing captions were not fetched.";
+  await appendFile(logPath, `\n--- English subtitles ---\nNormalized ${normalized}; fetched ${fetched}; still missing ${missing}.${providerNote}\n${warnings.join("\n")}\n`);
+  await setItemState(item.id, {
+    subtitleStatus: missing > 0 ? (openSubtitlesApiKey ? "incomplete" : "provider-not-configured") : "ready",
+    subtitleSummary: `normalized=${normalized}, fetched=${fetched}, missing=${missing}`,
+  });
+  await appendBatch(`Subtitle check for ${item.title}: normalized ${normalized}, fetched ${fetched}, missing ${missing}`);
+}
+
+const transferUnitBytes: Record<string, number> = {
+  B: 1,
+  KiB: 1024,
+  MiB: 1024 ** 2,
+  GiB: 1024 ** 3,
+  TiB: 1024 ** 4,
+};
+
+async function tailText(path: string, maxBytes = 128 * 1024) {
+  try {
+    const handle = await open(path, "r");
+    try {
+      const details = await handle.stat();
+      const length = Math.min(details.size, maxBytes);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, Math.max(0, details.size - length));
+      return buffer.toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "";
+  }
+}
+
+async function aggregateIngressBytesPerSecond(itemIds: string[]) {
+  let total = 0;
+  for (const id of itemIds) {
+    const lines = (await tailText(join(root, "logs", `${id}.log`))).split(/\r?\n/).reverse();
+    const progress = lines.find((line) => /\bDL:[0-9.]+(?:B|KiB|MiB|GiB|TiB)\b/.test(line));
+    const match = progress?.match(/\bDL:([0-9.]+)(B|KiB|MiB|GiB|TiB)\b/);
+    if (match) total += Number(match[1]) * transferUnitBytes[match[2]];
+  }
+  return total;
+}
+
+type DiskActivity = { writeBytesPerSecond: number; busyPercent: number };
+
+function createDiskActivitySampler(path: string) {
+  let blockId = "";
+  let previous: { at: number; sectorsWritten: number; ioMilliseconds: number } | null = null;
+  let smoothed: DiskActivity = { writeBytesPerSecond: 0, busyPercent: 0 };
+  return async (): Promise<DiskActivity> => {
+    try {
+      if (!blockId) {
+        const findMount = Bun.spawnSync(["findmnt", "-n", "-o", "MAJ:MIN", "-T", path]);
+        if (findMount.exitCode !== 0) return smoothed;
+        blockId = findMount.stdout.toString().trim();
+      }
+      const fields = (await readFile(`/sys/dev/block/${blockId}/stat`, "utf8")).trim().split(/\s+/).map(Number);
+      if (fields.length < 11 || fields.some((value) => !Number.isFinite(value))) return smoothed;
+      const current = { at: Date.now(), sectorsWritten: fields[6], ioMilliseconds: fields[9] };
+      if (previous) {
+        const elapsedMs = Math.max(1, current.at - previous.at);
+        const observed = {
+          writeBytesPerSecond: Math.max(0, current.sectorsWritten - previous.sectorsWritten) * 512 * 1000 / elapsedMs,
+          busyPercent: Math.min(100, Math.max(0, current.ioMilliseconds - previous.ioMilliseconds) * 100 / elapsedMs),
+        };
+        const weight = 0.25;
+        smoothed = {
+          writeBytesPerSecond: smoothed.writeBytesPerSecond * (1 - weight) + observed.writeBytesPerSecond * weight,
+          busyPercent: smoothed.busyPercent * (1 - weight) + observed.busyPercent * weight,
+        };
+      }
+      previous = current;
+    } catch {
+      blockId = "";
+    }
+    return smoothed;
+  };
+}
+
+function formatRate(bytesPerSecond: number) {
+  if (bytesPerSecond >= 1024 ** 2) return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
+  if (bytesPerSecond >= 1024) return `${(bytesPerSecond / 1024).toFixed(0)} KiB/s`;
+  return `${Math.round(bytesPerSecond)} B/s`;
 }
 
 async function runCommand(args: string[], logPath: string) {
@@ -192,8 +514,34 @@ async function runCommand(args: string[], logPath: string) {
   return proc.exitCode ?? 1;
 }
 
+async function scanForMalware(item: ManifestItem, staging: string, logPath: string) {
+  await setItemState(item.id, { securityScan: "running" });
+  await appendBatch(`Scanning ${item.title} for malware`);
+  const proc = Bun.spawnSync(["clamdscan", "--fdpass", "--multiscan", "--infected", "--no-summary", staging]);
+  const output = `${proc.stdout.toString()}${proc.stderr.toString()}`.trim();
+  if (output) await appendFile(logPath, `\n--- ClamAV malware scan ---\n${output}\n`);
+  if (proc.exitCode === 1) {
+    await setItemState(item.id, { securityScan: "infected" });
+    throw new Error("ClamAV detected malware; downloaded files remain quarantined in staging");
+  }
+  if (proc.exitCode !== 0) {
+    await setItemState(item.id, { securityScan: "error" });
+    throw new Error(`ClamAV scan failed with exit code ${proc.exitCode}; files were not organized`);
+  }
+  await setItemState(item.id, { securityScan: "clean" });
+  await appendBatch(`Malware scan clean for ${item.title}`);
+}
+
 function cleanPathSegment(value: string) {
   return String(value || "").replace(/\0/g, "").trim();
+}
+
+function safeRelativePath(value: string) {
+  const cleaned = cleanPathSegment(value).replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (!cleaned || cleaned.startsWith("/") || cleaned.split("/").some((part) => part === ".." || part === "")) {
+    throw new Error(`Unsafe source path: ${value}`);
+  }
+  return cleaned;
 }
 
 function sourceRoot(item: ManifestItem) {
@@ -216,6 +564,7 @@ async function resolveSourceRoot(item: ManifestItem) {
 async function organize(item: ManifestItem) {
   const staging = join(root, "staging", item.id);
   const dest = item.destination.path;
+  const organizedDestinations = new Set<string>();
 
   if (item.organize.strategy === "moveRoot") {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);
@@ -249,6 +598,7 @@ async function organize(item: ManifestItem) {
         await rename(source, target);
       }
     }
+    organizedDestinations.add(dest);
   } else if (item.organize.strategy === "mergeRoot") {
     await ensureDir(dest);
     const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
@@ -261,26 +611,57 @@ async function organize(item: ManifestItem) {
       if (await pathExists(target)) throw new Error(`Destination already exists: ${target}`);
       await movePath(join(source, entry), target);
     }
+    organizedDestinations.add(dest);
+  } else if (item.organize.strategy === "routeDirectories") {
+    const rootSource = await resolveSourceRoot(item);
+    for (const route of item.organize.routes) {
+      const source = join(rootSource, safeRelativePath(route.sourcePath));
+      const target = route.destinationPath;
+      if (!(await pathExists(source))) throw new Error(`Routed source not found: ${route.sourcePath}`);
+      await ensureDir(target);
+      const sourceStat = await stat(source);
+      if (sourceStat.isFile()) {
+        const destination = join(target, basename(source));
+        if (await pathExists(destination)) throw new Error(`Destination already exists: ${destination}`);
+        await movePath(source, destination);
+      } else {
+        const entries = (await readdir(source)).filter((entry) => !entry.endsWith(".aria2"));
+        if (!entries.length) throw new Error(`Routed source is empty: ${route.sourcePath}`);
+        for (const entry of entries) {
+          const destination = join(target, entry);
+          if (await pathExists(destination)) throw new Error(`Destination already exists: ${destination}`);
+          await movePath(join(source, entry), destination);
+        }
+      }
+      organizedDestinations.add(target);
+    }
   } else if (item.organize.strategy === "singleFile") {
     if (await pathExists(dest)) throw new Error(`Destination already exists: ${dest}`);
     await ensureDir(dest);
     await movePath(join(staging, item.organize.source), join(dest, item.organize.finalName));
+    organizedDestinations.add(dest);
   } else {
     await ensureDir(dest);
     const target = join(dest, item.organize.finalName);
     if (await pathExists(target)) throw new Error(`Destination already exists: ${target}`);
     await movePath(join(sourceRoot(item), item.organize.source), target);
+    organizedDestinations.add(dest);
   }
 
   await rm(staging, { recursive: true, force: true });
-  const stats = await collectFileStats(dest);
-  if (stats.videoCount === 0) throw new Error(`Organized destination has no video files: ${dest}`);
-  if (mediaChown) {
-    const chown = Bun.spawnSync(["sudo", "chown", "-R", mediaChown, dest]);
-    if (chown.exitCode !== 0) throw new Error(`chown failed for ${dest}`);
+  let videoCount = 0;
+  for (const destination of organizedDestinations) {
+    const stats = await collectFileStats(destination);
+    videoCount += stats.videoCount;
+    if (mediaChown) {
+      const chown = Bun.spawnSync(["sudo", "chown", "-R", mediaChown, destination]);
+      if (chown.exitCode !== 0) throw new Error(`chown failed for ${destination}`);
+    }
+    if (mediaDirMode) Bun.spawnSync(["find", destination, "-type", "d", "-exec", "chmod", mediaDirMode, "{}", "+"]);
+    if (mediaFileMode) Bun.spawnSync(["find", destination, "-type", "f", "-exec", "chmod", mediaFileMode, "{}", "+"]);
   }
-  if (mediaDirMode) Bun.spawnSync(["find", dest, "-type", "d", "-exec", "chmod", mediaDirMode, "{}", "+"]);
-  if (mediaFileMode) Bun.spawnSync(["find", dest, "-type", "f", "-exec", "chmod", mediaFileMode, "{}", "+"]);
+  if (videoCount === 0) throw new Error(`Organized destinations have no video files for ${item.title}`);
+  return [...organizedDestinations];
 }
 
 function plexToken() {
@@ -297,6 +678,57 @@ async function scanPlex(section: "movie" | "show") {
   const url = `${plexUrl}/library/sections/${key}/refresh?X-Plex-Token=${encodeURIComponent(token)}`;
   const proc = Bun.spawnSync(["curl", "-fsS", url]);
   if (proc.exitCode !== 0) throw new Error(`Plex scan failed for section ${key}`);
+}
+
+type PlexMetadata = {
+  title?: string;
+  grandparentTitle?: string;
+  summary?: string;
+  year?: number;
+  originallyAvailableAt?: string;
+  thumb?: string;
+  parentThumb?: string;
+  grandparentThumb?: string;
+  Media?: Array<{ Part?: Array<{ file?: string }> }>;
+};
+
+async function verifyPlexResult(item: ManifestItem, destinations: string[]) {
+  const token = plexToken();
+  if (!token) throw new Error("Could not read Plex token");
+  const key = item.destination.type === "movie" ? plexMovieSectionId : plexShowSectionId;
+  const type = item.destination.type === "movie" ? "1" : "4";
+  const normalized = destinations.map((path) => path.replace(/\/$/, ""));
+  let matches: PlexMetadata[] = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 5_000));
+    const url = `${plexUrl}/library/sections/${key}/all?type=${type}&X-Plex-Token=${encodeURIComponent(token)}`;
+    const response = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw new Error(`Plex metadata query failed with HTTP ${response.status}`);
+    const payload = await response.json() as { MediaContainer?: { Metadata?: PlexMetadata[] } };
+    matches = (payload.MediaContainer?.Metadata ?? []).filter((entry) =>
+      entry.Media?.some((media) => media.Part?.some((part) => normalized.some((path) => part.file === path || part.file?.startsWith(`${path}/`))))
+    );
+    if (matches.length) break;
+  }
+  if (!matches.length) throw new Error("Plex did not expose the organized media after its library refresh");
+  if (item.postDownload?.verifyCanonicalMetadata === true) {
+    const incomplete = matches.filter((entry) => {
+      const hasTitle = Boolean(entry.title && (item.destination.type === "movie" || entry.grandparentTitle));
+      const hasDate = Boolean(entry.originallyAvailableAt || entry.year);
+      return !hasTitle || !entry.summary || !hasDate;
+    });
+    await setItemState(item.id, {
+      metadataVerification: incomplete.length ? "incomplete" : "passed",
+      metadataSummary: `${matches.length - incomplete.length}/${matches.length} Plex item(s) have title, date, and description`,
+    });
+  }
+  if (item.postDownload?.verifyArtwork === true) {
+    const missingArtwork = matches.filter((entry) => !entry.thumb && !entry.parentThumb && !entry.grandparentThumb);
+    await setItemState(item.id, {
+      artworkVerification: missingArtwork.length ? "incomplete" : "passed",
+      artworkSummary: `${matches.length - missingArtwork.length}/${matches.length} Plex item(s) have artwork`,
+    });
+  }
 }
 
 await ensureDir(root);
@@ -338,6 +770,22 @@ async function processItem(item: ManifestItem) {
   const torrentSource = item.magnetUri || (item.torrentFile ? join(root, "torrents", item.torrentFile) : "");
   if (!torrentSource) throw new Error(`${item.title}: missing torrent file or magnet link`);
 
+  const selectedFiles = [...new Set(item.selectFiles ?? [])]
+    .filter((index) => Number.isInteger(index) && index > 0)
+    .sort((left, right) => left - right);
+  const compactSelection = selectedFiles.reduce<string[]>((parts, index) => {
+    const last = parts.at(-1);
+    const match = last?.match(/^(\d+)(?:-(\d+))?$/);
+    const end = match ? Number(match[2] ?? match[1]) : -1;
+    if (end + 1 !== index) {
+      parts.push(String(index));
+      return parts;
+    }
+    const start = Number(match?.[1]);
+    parts[parts.length - 1] = `${start}-${index}`;
+    return parts;
+  }, []).join(",");
+
   const exitCode = await runCommand(
     [
       "aria2c",
@@ -353,6 +801,7 @@ async function processItem(item: ManifestItem) {
       "--enable-peer-exchange=true",
       "--summary-interval=30",
       "--console-log-level=notice",
+      ...(compactSelection ? [`--select-file=${compactSelection}`] : []),
       torrentSource,
     ],
     logPath,
@@ -380,21 +829,50 @@ async function processItem(item: ManifestItem) {
     });
   }
 
+  if (item.postDownload?.verifyStreams === true) {
+    await verifyMediaStreams(item, staging, logPath);
+  }
+
+  if (item.postDownload?.scanForMalware === true) {
+    await scanForMalware(item, staging, logPath);
+  }
+
   await setItemState(item.id, { status: "organizing" });
   await appendBatch(`Organizing ${item.title}`);
+  let organizedDestinations: string[];
   try {
-    await organize(item);
+    organizedDestinations = await organize(item);
   } catch (error) {
     await setItemState(item.id, { status: "failed", failedAt: now(), error: error instanceof Error ? error.message : String(error) });
     await appendBatch(`FAILED ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
-  try {
-    await scanPlex(item.destination.type);
-  } catch (error) {
-    const warning = error instanceof Error ? error.message : String(error);
-    await setItemState(item.id, { plexScanWarning: warning });
-    await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
+  if (item.postDownload?.ensureEnglishSubtitles === true) {
+    try {
+      await ensureEnglishSubtitles(item, organizedDestinations, logPath);
+    } catch (error) {
+      const warning = error instanceof Error ? error.message : String(error);
+      await setItemState(item.id, { subtitleStatus: "error", subtitleWarning: warning });
+      await appendBatch(`Subtitle warning for ${item.title}: ${warning}`);
+    }
+  }
+  if (item.postDownload?.refreshPlex !== false) {
+    try {
+      await scanPlex(item.destination.type);
+    } catch (error) {
+      const warning = error instanceof Error ? error.message : String(error);
+      await setItemState(item.id, { plexScanWarning: warning });
+      await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
+    }
+  }
+  if (item.postDownload?.verifyCanonicalMetadata === true || item.postDownload?.verifyArtwork === true) {
+    try {
+      await verifyPlexResult(item, organizedDestinations);
+    } catch (error) {
+      const warning = error instanceof Error ? error.message : String(error);
+      await setItemState(item.id, { plexVerificationWarning: warning });
+      await appendBatch(`Plex verification warning for ${item.title}: ${warning}`);
+    }
   }
   await setItemState(item.id, { status: "completed", completedAt: now(), error: null, failedAt: null });
   await appendBatch(`Completed ${item.title}`);
@@ -406,6 +884,8 @@ function sleep(ms: number) {
 
 const running = new Map<string, Promise<void>>();
 let completionLogged = false;
+let lastAdaptiveStartAt = 0;
+const sampleDiskActivity = createDiskActivitySampler(root);
 
 async function markBatchCompleteIfIdle(manifest: Manifest) {
   if (running.size > 0 || manifest.items.length === 0) return;
@@ -444,8 +924,24 @@ function startItem(item: ManifestItem) {
 while (true) {
   const manifest = await loadManifest();
   const state = await loadState();
+  const diskActivity = adaptiveConcurrency ? await sampleDiskActivity() : { writeBytesPerSecond: 0, busyPercent: 0 };
+  const ingressBytesPerSecond = adaptiveConcurrency && running.size > 0
+    ? await aggregateIngressBytesPerSecond([...running.keys()])
+    : 0;
+  let openedAdaptiveSlot = false;
   for (const item of manifest.items) {
-    if (maxConcurrentDownloads > 0 && running.size >= maxConcurrentDownloads) break;
+    if (adaptiveConcurrency) {
+      if (running.size >= adaptiveMaxConcurrency) break;
+      if (running.size >= adaptiveMinConcurrency) {
+        const settled = Date.now() - lastAdaptiveStartAt >= adaptiveSettleMs;
+        const ingressHasRoom = ingressBytesPerSecond < diskWriteBudgetBytes * adaptiveIngressThreshold;
+        const diskRateHasRoom = diskActivity.writeBytesPerSecond < diskWriteBudgetBytes * 0.85;
+        const diskIsResponsive = diskActivity.busyPercent < adaptiveDiskBusyThreshold;
+        if (openedAdaptiveSlot || !settled || !ingressHasRoom || !diskRateHasRoom || !diskIsResponsive) break;
+      }
+    } else if (maxConcurrentDownloads > 0 && running.size >= maxConcurrentDownloads) {
+      break;
+    }
     if (running.has(item.id)) continue;
     let status = state.items[item.id]?.status;
     if (status === "completed" && !existsSync(item.destination.path)) {
@@ -455,7 +951,16 @@ while (true) {
     }
     if (status === "completed" || status === "failed") continue;
     completionLogged = false;
+    if (adaptiveConcurrency && running.size >= adaptiveMinConcurrency) {
+      await appendBatch(
+        `Adaptive scheduler opened slot ${running.size + 1}/${adaptiveMaxConcurrency}: `
+        + `ingress ${formatRate(ingressBytesPerSecond)}, disk ${formatRate(diskActivity.writeBytesPerSecond)}, `
+        + `busy ${diskActivity.busyPercent.toFixed(0)}%`,
+      );
+      openedAdaptiveSlot = true;
+    }
     startItem(item);
+    if (adaptiveConcurrency) lastAdaptiveStartAt = Date.now();
   }
   await markBatchCompleteIfIdle(manifest);
   await sleep(2_000);

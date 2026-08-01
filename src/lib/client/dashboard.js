@@ -1249,7 +1249,6 @@ function setIntakeFields(suggested) {
 function renderTorrentSummary(meta) {
   const summary = document.getElementById('torrentSummary');
   if (!summary) return;
-  const preview = (meta.files || []).slice(0, 4).map((file) => file.path).join(' | ');
   const sourceKind = meta.source?.kind === 'magnet' ? 'Magnet' : meta.source?.kind === 'torrentUrl' ? 'Torrent URL' : meta.source?.kind === 'upload' ? 'Upload' : 'Source';
   const size = meta.totalBytes ? fmt(meta.totalBytes) : 'metadata pending';
   const fileCount = meta.fileCount ? meta.fileCount + ' file' + (meta.fileCount === 1 ? '' : 's') : 'file list pending';
@@ -1259,8 +1258,108 @@ function renderTorrentSummary(meta) {
   title.textContent = meta.payloadName || 'Ready to queue';
   const details = document.createElement('div');
   details.className = 'summary-details';
-  details.textContent = sourceKind + ' - ' + size + ' - ' + fileCount + (preview ? ' - ' + preview : '');
+  details.textContent = sourceKind + ' - ' + size + ' - ' + fileCount;
   summary.append(title, details);
+}
+
+const mediaAndCaptionPattern = /\.(?:mkv|mp4|m4v|avi|mov|webm|ts|m2ts|srt|ass|ssa|vtt|sub|idx|sup)$/i;
+const riskyTorrentFilePattern = /\.(?:exe|dll|com|scr|bat|cmd|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|msp|reg|lnk|desktop|appimage|apk|jar|dmg|pkg|deb|rpm|sh|bash|zsh|fish|py|pl|rb)$/i;
+
+function torrentTree(files) {
+  const root = { folders: new Map(), files: [] };
+  for (const file of files) {
+    const parts = String(file.path || '').split('/').filter(Boolean);
+    const name = parts.pop() || `File ${file.index}`;
+    let node = root;
+    for (const part of parts) {
+      if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [] });
+      node = node.folders.get(part);
+    }
+    node.files.push({ ...file, name });
+  }
+  return root;
+}
+
+function collectTreeFiles(node) {
+  const files = [...node.files];
+  for (const child of node.folders.values()) files.push(...collectTreeFiles(child));
+  return files;
+}
+
+function renderTorrentFileTree(files, selectedFiles, filter = '') {
+  const container = document.getElementById('torrentFileTree');
+  const visibleCount = document.getElementById('visibleFileCount');
+  if (!container) return;
+  const query = filter.trim().toLowerCase();
+  const visibleFiles = query ? files.filter((file) => String(file.path).toLowerCase().includes(query)) : files;
+  if (visibleCount) visibleCount.textContent = query ? `${visibleFiles.length} of ${files.length} shown` : `${files.length} files`;
+  container.replaceChildren();
+  if (!visibleFiles.length) {
+    const empty = document.createElement('div');
+    empty.className = 'file-tree-empty';
+    empty.textContent = files.length ? 'No torrent files match that filter.' : 'The file list will be available after magnet metadata is retrieved.';
+    container.append(empty);
+    return;
+  }
+
+  const makeCheckbox = (indexes, label) => {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.dataset.fileIndexes = indexes.join(',');
+    checkbox.setAttribute('aria-label', label);
+    const selectedCount = indexes.filter((index) => selectedFiles.has(index)).length;
+    checkbox.checked = selectedCount === indexes.length;
+    checkbox.indeterminate = selectedCount > 0 && selectedCount < indexes.length;
+    return checkbox;
+  };
+
+  const renderNode = (node, depth) => {
+    const fragment = document.createDocumentFragment();
+    for (const [name, child] of [...node.folders.entries()].sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))) {
+      const childFiles = collectTreeFiles(child);
+      const details = document.createElement('details');
+      details.className = 'file-folder';
+      details.open = depth === 0 || Boolean(query);
+      const summary = document.createElement('summary');
+      const checkbox = makeCheckbox(childFiles.map((file) => file.index), `Select folder ${name}`);
+      checkbox.dataset.role = 'folder-selection';
+      const folderName = document.createElement('span');
+      folderName.className = 'file-folder-name';
+      folderName.textContent = name;
+      folderName.title = name;
+      const meta = document.createElement('span');
+      meta.className = 'file-folder-meta';
+      meta.textContent = `${childFiles.length} files - ${fmt(childFiles.reduce((sum, file) => sum + file.length, 0))}`;
+      summary.append(checkbox, folderName, meta);
+      const children = document.createElement('div');
+      children.className = 'file-children';
+      children.append(renderNode(child, depth + 1));
+      details.append(summary, children);
+      fragment.append(details);
+    }
+    for (const file of [...node.files].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))) {
+      const row = document.createElement('label');
+      row.className = 'torrent-file-row';
+      if (riskyTorrentFilePattern.test(file.path)) {
+        row.classList.add('risky-file');
+        row.title = 'Executable or script file. Torplex will not queue this payload.';
+      }
+      const checkbox = makeCheckbox([file.index], `Select ${file.name}`);
+      checkbox.dataset.role = 'file-selection';
+      const name = document.createElement('span');
+      name.className = 'file-name';
+      name.textContent = file.name;
+      name.title = file.path;
+      const size = document.createElement('span');
+      size.className = 'file-size';
+      size.textContent = fmt(file.length);
+      row.append(checkbox, name, size);
+      fragment.append(row);
+    }
+    return fragment;
+  };
+
+  container.append(renderNode(torrentTree(visibleFiles), 0));
 }
 
 function initDialogControls() {
@@ -1288,10 +1387,180 @@ function initIntakeControls() {
   const sourceInput = document.getElementById('sourceUrl');
   const inspect = document.getElementById('inspectTorrent');
   const submit = document.getElementById('addTorrent');
-  if (!form || !input || !sourceInput || !inspect || !submit) return;
+  const contentSelection = document.getElementById('contentSelection');
+  const plexSetup = document.getElementById('plexSetup');
+  const selectedInput = document.getElementById('selectedFiles');
+  const selectionSummary = document.getElementById('selectionSummary');
+  const queueReadiness = document.getElementById('queueReadiness');
+  const rightsConfirmed = document.getElementById('rightsConfirmed');
+  const fileFilter = document.getElementById('fileFilter');
+  const fileTree = document.getElementById('torrentFileTree');
+  const smartSetupPanel = document.getElementById('smartSetupPanel');
+  const smartSetupButton = document.getElementById('runSmartSetup');
+  const smartSetupStatus = document.getElementById('smartSetupStatus');
+  const smartProgress = document.getElementById('smartProgress');
+  const smartPlanReview = document.getElementById('smartPlanReview');
+  const additionalInstructions = document.getElementById('additionalInstructions');
+  const organizeStrategy = document.getElementById('organizeStrategy');
+  const routeEditor = document.getElementById('routeEditor');
+  const routeRows = document.getElementById('routeRows');
+  const organizationRoutes = document.getElementById('organizationRoutes');
+  const postDownloadSetup = document.getElementById('postDownloadSetup');
+  if (!form || !input || !sourceInput || !inspect || !submit || !selectedInput || !rightsConfirmed) return;
   let inspectTimer = 0;
   let inspectNonce = 0;
+  let inspectedTorrent = null;
+  let selectedFiles = new Set();
+  let smartSetupAvailable = false;
+  let smartSetupModel = '';
+  const appendSmartProgress = (message) => {
+    if (!smartProgress) return;
+    const active = smartProgress.querySelector('.smart-progress-line:not(.done)');
+    active?.classList.add('done');
+    const line = document.createElement('div');
+    line.className = 'smart-progress-line';
+    line.textContent = message;
+    smartProgress.append(line);
+    smartProgress.hidden = false;
+    smartProgress.scrollTop = smartProgress.scrollHeight;
+  };
+  const currentRoutes = () => Array.from(routeRows?.querySelectorAll('.route-row') || []).map((row) => ({
+    sourcePath: row.querySelector('[data-route-source]')?.value.trim() || '',
+    destinationPath: row.querySelector('[data-route-destination]')?.value.trim() || '',
+  }));
+  const syncRoutes = () => {
+    if (organizationRoutes) organizationRoutes.value = JSON.stringify(currentRoutes().filter((route) => route.sourcePath || route.destinationPath));
+  };
+  const renderRoutes = (routes = []) => {
+    if (!routeRows) return;
+    routeRows.replaceChildren();
+    for (const route of routes) {
+      const row = document.createElement('div');
+      row.className = 'route-row';
+      const sourceField = document.createElement('div');
+      sourceField.className = 'intake-field';
+      const sourceLabel = document.createElement('label');
+      sourceLabel.textContent = 'Torrent source folder';
+      const source = document.createElement('input');
+      source.dataset.routeSource = 'true';
+      source.value = route.sourcePath || '';
+      source.placeholder = 'Folder path inside torrent';
+      sourceField.append(sourceLabel, source);
+      const destinationField = document.createElement('div');
+      destinationField.className = 'intake-field';
+      const destinationLabel = document.createElement('label');
+      destinationLabel.textContent = 'Plex destination';
+      const destination = document.createElement('input');
+      destination.dataset.routeDestination = 'true';
+      destination.value = route.destinationPath || '';
+      destination.placeholder = '/media/plex/TV Shows/Title (Year)/Season 01';
+      destinationField.append(destinationLabel, destination);
+      const remove = document.createElement('button');
+      remove.className = 'danger-button route-remove';
+      remove.type = 'button';
+      remove.textContent = 'x';
+      remove.title = 'Remove route';
+      remove.setAttribute('aria-label', 'Remove route');
+      remove.addEventListener('click', () => {
+        row.remove();
+        syncRoutes();
+      });
+      row.append(sourceField, destinationField, remove);
+      routeRows.append(row);
+    }
+    syncRoutes();
+  };
+  const updateRouteEditor = () => {
+    const routed = organizeStrategy?.value === 'routeDirectories';
+    if (routeEditor) routeEditor.hidden = !routed;
+    if (routed && !currentRoutes().length) renderRoutes([{ sourcePath: '', destinationPath: '' }]);
+    syncRoutes();
+  };
+  const renderSmartPlan = (plan) => {
+    if (!smartPlanReview) return;
+    smartPlanReview.replaceChildren();
+    const summary = document.createElement('div');
+    const confidence = document.createElement('strong');
+    confidence.textContent = `${String(plan.confidence || 'unknown').toUpperCase()} confidence: `;
+    summary.append(confidence, document.createTextNode(plan.summary || 'Plan applied.'));
+    smartPlanReview.append(summary);
+    for (const decision of plan.decisions || []) {
+      const line = document.createElement('div');
+      line.textContent = `- ${decision}`;
+      smartPlanReview.append(line);
+    }
+    for (const warning of plan.warnings || []) {
+      const line = document.createElement('div');
+      line.className = 'smart-plan-warning';
+      line.textContent = `Warning: ${warning}`;
+      smartPlanReview.append(line);
+    }
+    smartPlanReview.hidden = false;
+  };
   const hasSource = () => Boolean(input.files?.[0] || sourceInput.value.trim());
+  const hasSelectableFiles = () => Boolean(inspectedTorrent?.files?.length);
+  const updateSelection = () => {
+    const files = inspectedTorrent?.files || [];
+    const selected = files.filter((file) => selectedFiles.has(file.index));
+    const selectedBytes = selected.reduce((sum, file) => sum + file.length, 0);
+    selectedInput.value = hasSelectableFiles() ? JSON.stringify(selected.map((file) => file.index)) : '';
+    if (selectionSummary) {
+      selectionSummary.textContent = hasSelectableFiles()
+        ? `${selected.length} of ${files.length} files selected - ${fmt(selectedBytes)}`
+        : 'File selection becomes available after magnet metadata is retrieved.';
+    }
+    for (const checkbox of fileTree?.querySelectorAll('input[data-file-indexes]') || []) {
+      const indexes = checkbox.dataset.fileIndexes.split(',').map(Number).filter(Boolean);
+      const count = indexes.filter((index) => selectedFiles.has(index)).length;
+      checkbox.checked = count === indexes.length;
+      checkbox.indeterminate = count > 0 && count < indexes.length;
+    }
+  };
+  const updateSubmitAvailability = () => {
+    const hasSelection = Boolean(inspectedTorrent) && (!hasSelectableFiles() || selectedFiles.size > 0);
+    const blockedSelectionCount = (inspectedTorrent?.files || []).filter(
+      (file) => selectedFiles.has(file.index) && riskyTorrentFilePattern.test(file.path),
+    ).length;
+    const selectionReady = hasSelection && blockedSelectionCount === 0;
+    const rightsReady = rightsConfirmed.checked;
+    submit.disabled = !sessionState.authenticated || !selectionReady || !rightsReady;
+    if (smartSetupButton) smartSetupButton.disabled = !smartSetupAvailable || !inspectedTorrent || !rightsReady;
+    if (queueReadiness) {
+      queueReadiness.textContent = !inspectedTorrent
+        ? 'Inspect a source to continue.'
+        : !hasSelection
+          ? 'Select at least one file.'
+          : blockedSelectionCount > 0
+            ? `Remove ${blockedSelectionCount} blocked executable or script file${blockedSelectionCount === 1 ? '' : 's'} from the selection.`
+          : !rightsReady
+            ? 'Confirm the rights statement to add this torrent.'
+            : 'Ready to add the selected content.';
+    }
+  };
+  const resetInspection = () => {
+    inspectedTorrent = null;
+    selectedFiles = new Set();
+    selectedInput.value = '';
+    if (contentSelection) contentSelection.hidden = true;
+    if (plexSetup) plexSetup.hidden = true;
+    if (postDownloadSetup) postDownloadSetup.hidden = true;
+    if (smartSetupPanel) smartSetupPanel.hidden = true;
+    if (smartPlanReview) {
+      smartPlanReview.hidden = true;
+      smartPlanReview.replaceChildren();
+    }
+    if (smartProgress) {
+      smartProgress.hidden = true;
+      smartProgress.replaceChildren();
+    }
+    smartSetupAvailable = false;
+    smartSetupModel = '';
+    renderRoutes([]);
+    if (organizationRoutes) organizationRoutes.value = '';
+    if (fileTree) fileTree.replaceChildren();
+    if (fileFilter) fileFilter.value = '';
+    updateSubmitAvailability();
+  };
   const updateInspectAvailability = () => {
     inspect.disabled = !sessionState.authenticated || !hasSource();
   };
@@ -1306,7 +1575,7 @@ function initIntakeControls() {
     const nonce = ++inspectNonce;
     const file = input.files?.[0];
     const sourceUrl = sourceInput.value.trim();
-    submit.disabled = true;
+    resetInspection();
     updateInspectAvailability();
     if (!file && !sourceUrl) {
       document.getElementById('torrentSummary').textContent = 'Waiting for a source.';
@@ -1330,10 +1599,23 @@ function initIntakeControls() {
       const payload = await res.json();
       if (nonce !== inspectNonce) return;
       if (!res.ok) throw new Error(payload.error || 'Inspect failed');
+      inspectedTorrent = payload;
+      selectedFiles = new Set((payload.files || []).map((file) => file.index));
       setIntakeFields(payload.suggested || {});
       renderTorrentSummary(payload);
-      submit.disabled = false;
-      setIntakeStatus('Auto-filled');
+      if (contentSelection) contentSelection.hidden = !(payload.files || []).length;
+      if (plexSetup) plexSetup.hidden = false;
+      if (postDownloadSetup) postDownloadSetup.hidden = false;
+      smartSetupAvailable = Boolean(payload.smartSetup?.available && (payload.files || []).length);
+      smartSetupModel = payload.smartSetup?.model || '';
+      if (smartSetupPanel) smartSetupPanel.hidden = !(payload.files || []).length;
+      if (smartSetupStatus) {
+        smartSetupStatus.textContent = smartSetupAvailable ? `${smartSetupModel} - optional` : 'Set OPENAI_API_KEY to enable';
+      }
+      renderTorrentFileTree(payload.files || [], selectedFiles, '');
+      updateSelection();
+      updateSubmitAvailability();
+      setIntakeStatus('Ready to review');
       setIntakeMode('ready');
     } catch (error) {
       if (nonce !== inspectNonce) return;
@@ -1344,7 +1626,7 @@ function initIntakeControls() {
   };
   const scheduleInspect = (delay = 450) => {
     window.clearTimeout(inspectTimer);
-    submit.disabled = true;
+    resetInspection();
     updateInspectAvailability();
     if (!hasSource()) {
       document.getElementById('torrentSummary').textContent = 'Waiting for a source.';
@@ -1369,6 +1651,123 @@ function initIntakeControls() {
   sourceInput.addEventListener('paste', () => window.setTimeout(() => scheduleInspect(120), 0));
   sourceInput.addEventListener('change', inspectCurrentTorrent);
   inspect.addEventListener('click', inspectCurrentTorrent);
+  rightsConfirmed.addEventListener('change', updateSubmitAvailability);
+  organizeStrategy?.addEventListener('change', updateRouteEditor);
+  routeRows?.addEventListener('input', syncRoutes);
+  document.getElementById('addRoute')?.addEventListener('click', () => {
+    renderRoutes([...currentRoutes(), { sourcePath: '', destinationPath: '' }]);
+  });
+  fileFilter?.addEventListener('input', () => {
+    renderTorrentFileTree(inspectedTorrent?.files || [], selectedFiles, fileFilter.value);
+    updateSelection();
+  });
+  fileTree?.addEventListener('click', (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.dataset.fileIndexes) event.stopPropagation();
+  });
+  fileTree?.addEventListener('change', (event) => {
+    const checkbox = event.target;
+    if (!(checkbox instanceof HTMLInputElement) || !checkbox.dataset.fileIndexes) return;
+    const indexes = checkbox.dataset.fileIndexes.split(',').map(Number).filter(Boolean);
+    for (const index of indexes) {
+      if (checkbox.checked) selectedFiles.add(index);
+      else selectedFiles.delete(index);
+    }
+    updateSelection();
+    updateSubmitAvailability();
+  });
+  document.getElementById('selectAllFiles')?.addEventListener('click', () => {
+    selectedFiles = new Set((inspectedTorrent?.files || []).map((file) => file.index));
+    updateSelection();
+    updateSubmitAvailability();
+  });
+  document.getElementById('selectMedia')?.addEventListener('click', () => {
+    selectedFiles = new Set((inspectedTorrent?.files || []).filter((file) => mediaAndCaptionPattern.test(file.path)).map((file) => file.index));
+    updateSelection();
+    updateSubmitAvailability();
+  });
+  document.getElementById('clearFileSelection')?.addEventListener('click', () => {
+    selectedFiles.clear();
+    updateSelection();
+    updateSubmitAvailability();
+  });
+  smartSetupButton?.addEventListener('click', async () => {
+    const file = input.files?.[0];
+    const sourceUrl = sourceInput.value.trim();
+    if ((!file && !sourceUrl) || !inspectedTorrent || !rightsConfirmed.checked || !smartSetupAvailable) return;
+    smartSetupButton.disabled = true;
+    submit.disabled = true;
+    if (smartSetupStatus) smartSetupStatus.textContent = `${smartSetupModel} is building a plan...`;
+    setIntakeStatus('Planning');
+    setIntakeMode('busy');
+    if (smartProgress) {
+      smartProgress.replaceChildren();
+      smartProgress.hidden = false;
+    }
+    appendSmartProgress('Starting Smart Setup');
+    try {
+      const data = new FormData();
+      if (sourceUrl) data.set('sourceUrl', sourceUrl);
+      else data.set('torrent', file);
+      data.set('rightsConfirmed', 'on');
+      data.set('additionalInstructions', additionalInstructions?.value.trim() || '');
+      const res = await fetch('/api/torrent/plan', { method: 'POST', body: data });
+      if (!res.ok || !res.body) throw new Error('Smart Setup could not start');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let payload = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === 'progress') {
+            appendSmartProgress(event.message);
+            if (smartSetupStatus) smartSetupStatus.textContent = event.message;
+          } else if (event.type === 'result') {
+            payload = event;
+          } else if (event.type === 'error') {
+            throw new Error(event.error || 'Smart Setup failed');
+          }
+        }
+      }
+      if (!payload) throw new Error('Smart Setup ended without a plan');
+      const plan = payload.plan;
+      selectedFiles = new Set(plan.selectedFiles || []);
+      setIntakeFields(plan);
+      if (organizeStrategy) organizeStrategy.value = plan.organizeStrategy || 'mergeRoot';
+      renderRoutes(plan.routes || []);
+      updateRouteEditor();
+      for (const [id, key] of [
+        ['verifyStreams', 'verifyStreams'],
+        ['ensureEnglishSubtitles', 'ensureEnglishSubtitles'],
+        ['verifyCanonicalMetadata', 'verifyCanonicalMetadata'],
+        ['verifyArtwork', 'verifyArtwork'],
+        ['refreshPlex', 'refreshPlex'],
+      ]) {
+        const control = document.getElementById(id);
+        if (control instanceof HTMLInputElement) control.checked = Boolean(plan.postDownloadChecks?.[key]);
+      }
+      renderTorrentFileTree(inspectedTorrent.files || [], selectedFiles, fileFilter?.value || '');
+      updateSelection();
+      renderSmartPlan(plan);
+      const activeProgress = smartProgress?.querySelector('.smart-progress-line:not(.done)');
+      activeProgress?.classList.add('done');
+      if (smartSetupStatus) smartSetupStatus.textContent = `${payload.model} plan applied`;
+      setIntakeStatus('Plan ready');
+      setIntakeMode('ready');
+    } catch (error) {
+      if (smartSetupStatus) smartSetupStatus.textContent = error instanceof Error ? error.message : String(error);
+      setIntakeStatus('Planning failed');
+      setIntakeMode('error');
+    } finally {
+      updateSubmitAvailability();
+    }
+  });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     window.clearTimeout(inspectTimer);
@@ -1390,7 +1789,7 @@ function initIntakeControls() {
       setIntakeMode('ready');
       document.getElementById('torrentSummary').textContent = 'Queued ' + payload.item.title + ' - ' + fmt(payload.item.totalBytes);
       form.reset();
-      submit.disabled = true;
+      resetInspection();
       updateInspectAvailability();
       document.getElementById('intakeDialog')?.close();
       refreshFallback().catch(() => {});

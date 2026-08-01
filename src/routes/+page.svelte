@@ -70,61 +70,153 @@
         </div>
       </div>
       <form id="intakeForm" class="intake-panel">
-        <div class="source-card">
-          <div class="intake-field source-field">
-            <label for="sourceUrl">Magnet / URL</label>
-            <input id="sourceUrl" name="sourceUrl" type="text" autocomplete="off" placeholder="magnet:?xt=... or https://..." />
+        <section class="intake-step">
+          <div class="step-heading">
+            <span class="step-number">1</span>
+            <div>
+              <div class="step-title">Choose a torrent source</div>
+              <div class="small">Paste a magnet or web link, or upload a .torrent file. Torplex inspects it before anything is queued.</div>
+            </div>
           </div>
-          <button id="inspectTorrent" class="secondary-button inspect-button" type="button" disabled>Inspect</button>
-          <div class="intake-field file-field">
-            <label for="torrentFile">Torrent File</label>
-            <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
+          <div class="source-card">
+            <div class="intake-field source-field">
+              <label for="sourceUrl">Magnet or link</label>
+              <input id="sourceUrl" name="sourceUrl" type="text" autocomplete="off" placeholder="magnet:?xt=... or https://..." />
+            </div>
+            <button id="inspectTorrent" class="secondary-button inspect-button" type="button" disabled>Inspect</button>
+            <div class="intake-field file-field">
+              <label for="torrentFile">Torrent file</label>
+              <input id="torrentFile" name="torrent" type="file" accept=".torrent,application/x-bittorrent" />
+            </div>
           </div>
-        </div>
 
-        <div id="torrentSummary" class="intake-summary">Waiting for a source.</div>
+          <div id="torrentSummary" class="intake-summary">Waiting for a source.</div>
+        </section>
 
-        <div class="intake-section-head">
-          <div>
-            <div class="label">Suggested Details</div>
-            <div class="small" id="inspectHint">Inspect fills these fields automatically.</div>
+        <section id="contentSelection" class="intake-step" hidden>
+          <div class="step-heading selection-heading">
+            <span class="step-number">2</span>
+            <div>
+              <div class="step-title">Choose what to download</div>
+              <div id="selectionSummary" class="small">Everything is selected.</div>
+            </div>
+            <div class="selection-actions">
+              <button id="selectMedia" class="secondary-button small-button" type="button">Media + captions</button>
+              <button id="selectAllFiles" class="secondary-button small-button" type="button">Select all</button>
+              <button id="clearFileSelection" class="secondary-button small-button" type="button">Clear</button>
+            </div>
           </div>
-        </div>
-        <div class="intake-grid">
-          <div class="intake-field">
-            <label for="torrentTitle">Title</label>
-            <input id="torrentTitle" name="title" autocomplete="off" />
+          <div class="file-filter-row">
+            <input id="fileFilter" type="search" autocomplete="off" placeholder="Filter torrent contents" aria-label="Filter torrent contents" />
+            <span id="visibleFileCount" class="small"></span>
           </div>
-          <div class="intake-field">
-            <label for="torrentId">Id</label>
-            <input id="torrentId" name="id" autocomplete="off" />
+          <input id="selectedFiles" name="selectedFiles" type="hidden" />
+          <div id="torrentFileTree" class="torrent-file-tree" aria-label="Torrent contents"></div>
+
+          <div id="smartSetupPanel" class="smart-setup" hidden>
+            <div class="smart-setup-copy">
+              <div class="step-title">Smart Setup</div>
+              <div class="small">Describe any special scope. The model will fill the same controls shown in this dialog for you to review.</div>
+            </div>
+            <div class="intake-field smart-instructions">
+              <label for="additionalInstructions">Additional instructions</label>
+              <textarea id="additionalInstructions" name="additionalInstructions" rows="3" placeholder="Example: Only the two animated series. Skip the live-action movie and extras."></textarea>
+            </div>
+            <div class="smart-actions">
+              <div id="smartSetupStatus" class="small">Optional</div>
+              <button id="runSmartSetup" class="primary-button" type="button">Fill with Smart Setup</button>
+            </div>
+            <div id="smartProgress" class="smart-progress" hidden aria-live="polite"></div>
+            <div id="smartPlanReview" class="smart-plan-review" hidden></div>
           </div>
-          <div class="intake-field compact-field">
-            <label for="mediaType">Type</label>
-            <select id="mediaType" name="mediaType">
-              <option value="show">Show</option>
-              <option value="movie">Movie</option>
-            </select>
+        </section>
+
+        <section id="plexSetup" class="intake-step" hidden>
+          <div class="step-heading">
+            <span class="step-number">3</span>
+            <div>
+              <div class="step-title">Review Plex placement</div>
+              <div class="small">Torplex has filled in a safe default. Change it only when the torrent belongs somewhere else.</div>
+            </div>
           </div>
-          <div class="intake-field destination-field">
-            <label for="destinationPath">Destination</label>
-            <input id="destinationPath" name="destinationPath" autocomplete="off" />
+          <div class="intake-grid plex-grid">
+            <div class="intake-field">
+              <label for="torrentTitle">Queue name</label>
+              <input id="torrentTitle" name="title" autocomplete="off" />
+            </div>
+            <div class="intake-field compact-field">
+              <label for="mediaType">Plex library</label>
+              <select id="mediaType" name="mediaType">
+                <option value="show">TV Shows</option>
+                <option value="movie">Movies</option>
+              </select>
+            </div>
+            <div class="intake-field destination-field">
+              <label for="destinationPath">Plex folder</label>
+              <input id="destinationPath" name="destinationPath" autocomplete="off" />
+            </div>
           </div>
-          <div class="intake-field compact-field">
-            <label for="organizeStrategy">Organize</label>
-            <select id="organizeStrategy" name="organizeStrategy">
-              <option value="mergeRoot">Merge into folder</option>
-              <option value="moveRoot">Move payload folder</option>
-            </select>
+
+          <details class="advanced-settings">
+            <summary>Advanced organization settings</summary>
+            <div class="intake-grid advanced-grid">
+              <div class="intake-field">
+                <label for="torrentId">Queue ID</label>
+                <input id="torrentId" name="id" autocomplete="off" />
+              </div>
+              <div class="intake-field compact-field">
+                <label for="organizeStrategy">Organizer</label>
+                <select id="organizeStrategy" name="organizeStrategy">
+                  <option value="mergeRoot">Merge into folder</option>
+                  <option value="moveRoot">Move payload folder</option>
+                  <option value="routeDirectories">Route selected folders</option>
+                </select>
+              </div>
+              <div class="intake-field">
+                <label for="targetSubdir">Season or subfolder</label>
+                <input id="targetSubdir" name="targetSubdir" autocomplete="off" />
+              </div>
+            </div>
+            <input id="organizationRoutes" name="organizationRoutes" type="hidden" />
+            <div id="routeEditor" class="route-editor" hidden>
+              <div class="route-editor-head">
+                <div>
+                  <div class="step-title">Folder routes</div>
+                  <div class="small">Move each selected source folder into its own Plex destination.</div>
+                </div>
+                <button id="addRoute" class="secondary-button small-button" type="button">Add route</button>
+              </div>
+              <div id="routeRows" class="route-rows"></div>
+            </div>
+          </details>
+        </section>
+
+        <section id="postDownloadSetup" class="intake-step" hidden>
+          <div class="step-heading">
+            <span class="step-number">4</span>
+            <div>
+              <div class="step-title">After download</div>
+              <div class="small">Choose the checks Torplex should run before considering the item ready in Plex.</div>
+            </div>
           </div>
-          <div class="intake-field">
-            <label for="targetSubdir">Subfolder</label>
-            <input id="targetSubdir" name="targetSubdir" autocomplete="off" />
+          <div class="post-download-options">
+            <label><input id="scanForMalware" type="checkbox" checked disabled /> <span><strong>Scan for malware <em>Required</em></strong><small>ClamAV must report clean before files move into Plex. This cannot be bypassed.</small></span></label>
+            <label><input id="verifyStreams" name="verifyStreams" type="checkbox" checked /> <span><strong>Verify media streams</strong><small>Confirm downloaded video files can be read.</small></span></label>
+            <label><input id="ensureEnglishSubtitles" name="ensureEnglishSubtitles" type="checkbox" checked /> <span><strong>Ensure English captions</strong><small>Check embedded and sidecar captions; fetch a match when configured.</small></span></label>
+            <label><input id="verifyCanonicalMetadata" name="verifyCanonicalMetadata" type="checkbox" checked /> <span><strong>Verify title and date</strong><small>Reconcile the Plex match with canonical metadata.</small></span></label>
+            <label><input id="verifyArtwork" name="verifyArtwork" type="checkbox" checked /> <span><strong>Verify artwork</strong><small>Make sure the Plex item has appropriate poster art.</small></span></label>
+            <label><input id="refreshPlex" name="refreshPlex" type="checkbox" checked /> <span><strong>Refresh Plex</strong><small>Scan the affected library after organization.</small></span></label>
           </div>
-        </div>
+        </section>
+
+        <label class="rights-attestation" for="rightsConfirmed">
+          <input id="rightsConfirmed" name="rightsConfirmed" type="checkbox" />
+          <span>I confirm that I have the rights or authorization required to download and store the selected content. I accept responsibility for complying with applicable laws and service terms.</span>
+        </label>
 
         <div class="intake-actions">
-          <button id="addTorrent" class="primary-button" type="submit" disabled>Add to Queue</button>
+          <div id="queueReadiness" class="small">Inspect a source to continue.</div>
+          <button id="addTorrent" class="primary-button" type="submit" disabled>Add selected content</button>
         </div>
       </form>
     </div>

@@ -8,7 +8,10 @@ Torplex does not search for torrents or provide media. It only manages `.torrent
 
 - Serves a real-time dashboard over server-sent events.
 - Lets an authenticated user upload `.torrent` files, paste magnet links, paste direct `.torrent` URLs, or paste pages that contain an extractable torrent source.
-- Inspects torrent metadata and suggests Plex destination paths.
+- Inspects complete torrent metadata and lets the user select individual files or folders before downloading.
+- Optionally uses a constrained OpenAI Smart Setup plan to fill the same visible selection, routing, and verification controls available manually.
+- Requires an explicit rights attestation for every newly queued torrent.
+- Rejects executable and script payloads and requires a clean ClamAV scan before downloaded files leave staging; there is no UI or API bypass.
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
 - Persists drag-and-drop queue priority changes and safely pauses the active transfer when another item is promoted above it.
@@ -107,7 +110,14 @@ By default, Torplex requires password login for the dashboard, status API, live 
 | `BATCH_DIR` | `/media/plex/.downloads/torrent-batch` | Runtime state, torrent files, staging, and logs. |
 | `ARIA2_CHECK_INTEGRITY` | disabled | Set to `true`, `yes`, or `1` to hash existing partial data before resuming. Recommended after an unclean shutdown or storage disconnect. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
-| `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Maximum simultaneous torrent jobs. Use a small value on single-disk systems. |
+| `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Fixed maximum simultaneous torrent jobs when adaptive scheduling is disabled. |
+| `ADAPTIVE_CONCURRENCY` | `false` | Dynamically open download slots based on aggregate ingress and measured block-device write activity. |
+| `ADAPTIVE_MIN_CONCURRENCY` | `1` | Jobs started immediately by the adaptive scheduler. |
+| `ADAPTIVE_MAX_CONCURRENCY` | `4` | Hard ceiling for the adaptive scheduler. |
+| `DISK_WRITE_BUDGET_MIB` | `35` | Conservative sustained write budget used to decide whether another job may start. |
+| `ADAPTIVE_INGRESS_THRESHOLD` | `0.75` | Fraction of the write budget below which ingress may open another slot. |
+| `ADAPTIVE_DISK_BUSY_PERCENT` | `80` | Maximum smoothed block-device utilization allowed before opening another slot. |
+| `ADAPTIVE_SETTLE_SECONDS` | `30` | Observation window after starting a job before another slot can open. |
 | `MAX_MAP_PEERS` | `320` | Maximum aria2 connections retained for the swarm map. |
 | `MAP_ORIGIN_LABEL` | `SERVER` | Label shown above the receiving node on the swarm map. |
 | `MAP_ORIGIN_LAT`, `MAP_ORIGIN_LON` | automatic | Optional fixed receiving-node coordinates. By default Torplex geolocates its public IP. |
@@ -123,6 +133,35 @@ By default, Torplex requires password login for the dashboard, status API, live 
 | `DISK_USAGE_PATH` | `$MEDIA_ROOT` | Path used for dashboard disk usage. |
 
 Torplex validates uploaded items so their destination is under `MOVIES_DIR` or `TV_DIR`.
+
+### Smart Setup
+
+Smart Setup is optional. Without an API key, the normal torrent inspector, per-file selection, destination controls, and queue remain fully functional.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | empty | Enables Smart Setup. Keep the value in an ignored `.env` or service credential file; never commit it. |
+| `TORPLEX_AI_MODEL` | `gpt-5.6-terra` | OpenAI model used for structured intake plans. |
+| `TORPLEX_AI_EXTRA_INSTRUCTIONS` | empty | Optional installation-wide rules appended to Torplex's built-in planning policy. |
+
+The dialog also accepts per-torrent **Additional instructions**. Those instructions are appended to the fixed Torplex policy; they do not replace its path, selection, validation, or review requirements.
+
+Smart Setup sends the torrent filename, payload name, file paths, file sizes, automatic suggestions, configured media roots, and the additional instructions to the OpenAI API. It does not send media bytes. The model returns a draft that fills the same visible controls a user can edit manually. Torplex validates all selected indexes and destinations server-side before queueing.
+
+Every Smart Setup request and queue submission requires the user to confirm that they have the rights or authorization needed for the selected content. Torplex records the attestation timestamp in the queue manifest. This feature is not a substitute for determining whether a download is permitted in the user's jurisdiction or under applicable service terms.
+
+### Post-download checks
+
+New queue entries always pass through ClamAV before leaving staging. The **Verify media streams** control uses `ffprobe` to reject unreadable containers, files without a video stream or duration, and executable/script attachments. The **Ensure English captions** control recognizes embedded English tracks, renames an exact same-stem sidecar such as `Episode.srt` to Plex's explicit `Episode.en.srt` convention, and can fetch a missing caption only when OpenSubtitles reports an exact file-hash match. A fetched caption is validated as timed text and scanned with ClamAV before it is kept. After the library refresh, the metadata and artwork checks query Plex by the organized file paths and record whether the matched entries contain a title, release date, description, and artwork.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENSUBTITLES_API_KEY` | empty | Enables exact-hash English subtitle search and download. |
+| `OPENSUBTITLES_USER_AGENT` | `Torplex v1` | Application identifier required by OpenSubtitles. |
+| `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD` | empty | Optional account login for authenticated download limits. Keep these only in the runtime secret environment. |
+| `OPENSUBTITLES_TOKEN` | empty | Optional pre-issued token; normally leave empty and let Torplex log in. |
+
+Without an OpenSubtitles API key, Torplex still audits embedded and sidecar captions and records missing-caption counts, but it cannot fetch replacements. Provider download quotas still apply.
 
 ### Plex
 
@@ -179,11 +218,11 @@ These files are runtime state and are intentionally ignored by git.
 
 ## Queue Model
 
-The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`.
+The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`. For inspectable `.torrent` sources, selected file indexes are stored in the manifest and passed to aria2 with `--select-file`; unselected files are not downloaded. Mixed bundles can use visible folder routes to place separate titles or seasons into independent Plex destinations.
 
 For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 
-The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` to cap parallel jobs; the default of `0` preserves unlimited parallel processing. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
+The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` for a fixed cap. With `ADAPTIVE_CONCURRENCY=true`, the runner starts the minimum immediately, observes aria2 ingress plus the media block device's actual write rate and busy time, and opens at most one additional slot per settling window up to `ADAPTIVE_MAX_CONCURRENCY`. It does not kill healthy transfers when load rises; it simply stops expanding until running jobs finish. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
 
 Pending rows can be reordered from the dashboard with animated position changes. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 
