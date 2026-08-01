@@ -14,6 +14,10 @@ const tvDir = process.env.TV_DIR ?? `${mediaRoot}/TV Shows`;
 const diskUsagePath = process.env.DISK_USAGE_PATH ?? mediaRoot;
 const maxTorrentBytes = 20 * 1024 * 1024;
 const maxHtmlBytes = 2 * 1024 * 1024;
+const configuredMetadataTimeout = Number.parseInt(process.env.TORPLEX_METADATA_TIMEOUT_SECONDS ?? "60", 10);
+const metadataTimeoutSeconds = Number.isFinite(configuredMetadataTimeout)
+  ? Math.min(300, Math.max(15, configuredMetadataTimeout))
+  : 60;
 const configuredMaxMapPeers = Number.parseInt(process.env.MAX_MAP_PEERS ?? "320", 10);
 const maxMapPeers = Number.isFinite(configuredMaxMapPeers) && configuredMaxMapPeers > 0 ? configuredMaxMapPeers : 320;
 const mapOriginLabel = (process.env.MAP_ORIGIN_LABEL ?? "SERVER").trim() || "SERVER";
@@ -515,7 +519,7 @@ function magnetMetadata(uri: string) {
   };
 }
 
-async function resolveMagnetTorrent(uri: string, hash: string) {
+async function resolveMagnetTorrent(uri: string, hash: string, inactivityTimeoutSeconds = metadataTimeoutSeconds) {
   const normalizedHash = hash.toLowerCase();
   const metadataDir = join(root, "torrent-metadata", normalizedHash);
   const filename = "metadata.torrent";
@@ -545,7 +549,7 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
         "--console-log-level=warn",
         "--connect-timeout=15",
         "--timeout=15",
-        "--bt-stop-timeout=150",
+        `--bt-stop-timeout=${inactivityTimeoutSeconds}`,
         `--dht-file-path=${join(metadataDir, "dht.dat")}`,
         `--dht-file-path6=${join(metadataDir, "dht6.dat")}`,
         uri,
@@ -556,7 +560,7 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
       };
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
-      const timeout = setTimeout(() => child.kill("SIGTERM"), 180_000);
+      const timeout = setTimeout(() => child.kill("SIGTERM"), (inactivityTimeoutSeconds + 20) * 1000);
       child.once("error", (error) => {
         clearTimeout(timeout);
         reject(error);
@@ -565,7 +569,7 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
         clearTimeout(timeout);
         if (code === 0) resolve(log);
         else if (code === 7 || signal === "SIGTERM") {
-          reject(new Error("No connected peer supplied this magnet's file list within 150 seconds. The reported swarm may be stale; retry later or use another source."));
+          reject(new Error(`No connected peer supplied this magnet's file list within ${inactivityTimeoutSeconds} seconds. The reported swarm may be stale; retry later or use another source.`));
         }
         else reject(new Error(`aria2c metadata lookup ${signal ? `was stopped by ${signal}` : `exited ${code}`}${log ? `: ${log.trim().split("\n").at(-1)}` : ""}`));
       });
@@ -1315,10 +1319,13 @@ async function intakeSourceFromForm(form: FormData) {
   return { kind: "upload" as const, ...(await torrentFromForm(form)) };
 }
 
-async function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceFromForm>>) {
+async function metadataForSource(
+  source: Awaited<ReturnType<typeof intakeSourceFromForm>>,
+  options: { metadataTimeoutSeconds?: number } = {},
+) {
   if (source.kind === "magnet") {
     const magnet = magnetMetadata(source.magnetUri);
-    const resolved = await resolveMagnetTorrent(source.magnetUri, magnet.hash);
+    const resolved = await resolveMagnetTorrent(source.magnetUri, magnet.hash, options.metadataTimeoutSeconds);
     return {
       metadata: { ...torrentMetadata(resolved.bytes, resolved.filename), magnetUri: source.magnetUri, hash: magnet.hash },
       filename: "",
@@ -1326,6 +1333,19 @@ async function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceF
     };
   }
   return { metadata: torrentMetadata(source.bytes, source.filename), filename: source.filename, magnetUri: "" };
+}
+
+export async function preflightTorrentSource(sourceUrl: string, options: { metadataTimeoutSeconds?: number } = {}) {
+  const source = sourceUrl.toLowerCase().startsWith("magnet:")
+    ? { kind: "magnet" as const, magnetUri: sourceUrl }
+    : await resolveSourceUrl(sourceUrl);
+  const { metadata } = await metadataForSource(source, options);
+  return {
+    payloadName: metadata.payloadName,
+    totalBytes: metadata.totalBytes,
+    fileCount: metadata.fileCount,
+    sampleFiles: metadata.files.slice(0, 12).map((file) => file.path),
+  };
 }
 
 export async function inspectTorrentUpload(req: Request) {

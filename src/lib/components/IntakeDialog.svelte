@@ -25,6 +25,15 @@
     return `intake-${Date.now().toString(36)}-${sequence}`;
   }
 
+  function fmt(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '-';
+    const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+    return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
+  }
+
   function addItem(initial = {}) {
     const item = {
       clientId: makeClientId(),
@@ -248,7 +257,7 @@
               <label class="proposal-row">
                 <input type="checkbox" checked={selectedProposals.has(selection.candidateId)} on:change={(event) => toggleProposal(selection.candidateId, event.currentTarget.checked)} />
                 <div class="proposal-work"><strong>{selection.work.title}{selection.work.year ? ` (${selection.work.year})` : ''}</strong><span>{selection.work.type}</span></div>
-                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.confidence} confidence{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
+                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.metadata?.fileCount || 0} files · {fmt(selection.metadata?.totalBytes || selection.candidate.sizeBytes)} · metadata verified{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
               </label>
             {/each}
           </div>

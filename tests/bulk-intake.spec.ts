@@ -55,6 +55,12 @@ test("AI search proposals become independently planned bulk intake items", async
               leechers: 1,
               publishedAt: 2,
             }] : [],
+            metadata: {
+              payloadName: `${work.title} (${work.year})`,
+              totalBytes: 4_000_001_024,
+              fileCount: 2,
+              sampleFiles: [`${work.title} (${work.year})/${work.title} (${work.year}).mkv`],
+            },
           })),
           missing: [],
           providers: ["fixture"],
