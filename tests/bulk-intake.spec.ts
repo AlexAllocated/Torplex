@@ -42,6 +42,19 @@ test("AI search proposals become independently planned bulk intake items", async
               leechers: 2,
               publishedAt: 1,
             },
+            alternatives: index === 0 ? [{
+              id: "candidate-alpha-fallback",
+              workId: work.id,
+              name: `${work.title}.${work.year}.1080p.BluRay.FALLBACK`,
+              sourceUrl: `magnet:?xt=urn:btih:${"C".repeat(40)}`,
+              descriptionUrl: "",
+              providerUrl: "https://fallback.example.test",
+              provider: "fallback.example.test",
+              sizeBytes: 4_100_000_000,
+              seeders: 38,
+              leechers: 1,
+              publishedAt: 2,
+            }] : [],
           })),
           missing: [],
           providers: ["fixture"],
@@ -50,8 +63,20 @@ test("AI search proposals become independently planned bulk intake items", async
       }),
     });
   });
+  let primaryFailures = 0;
+  let fallbackInspections = 0;
   await page.route("**/api/torrent/inspect", async (route) => {
     const body = route.request().postData() || "";
+    if (body.includes("AAAAAAAA")) {
+      primaryFailures += 1;
+      await route.fulfill({
+        status: 408,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "No connected peer supplied this magnet's file list within 150 seconds." }),
+      });
+      return;
+    }
+    if (body.includes("CCCCCCCC")) fallbackInspections += 1;
     const beta = body.includes("BBBBBBBB");
     const title = beta ? "Beta (2002)" : "Alpha (2001)";
     await route.fulfill({
@@ -102,6 +127,8 @@ test("AI search proposals become independently planned bulk intake items", async
     const body = route.request().postData() || "";
     expect(body).toContain("alpha-2001");
     expect(body).toContain("beta-2002");
+    expect(body).toContain("CCCCCCCC");
+    expect(body).not.toContain("AAAAAAAA");
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, items: [{}, {}], restartMessage: "Queued 2 items" }) });
   });
 
@@ -122,6 +149,9 @@ test("AI search proposals become independently planned bulk intake items", async
   await page.getByRole("button", { name: "Prepare 2 selected" }).click();
   await expect(page.locator(".bulk-intake-item")).toHaveCount(2);
   await expect(page.locator(".bulk-intake-item.ready")).toHaveCount(2);
+  await expect(page.getByText("Fallback source active")).toBeVisible();
+  expect(primaryFailures).toBe(1);
+  expect(fallbackInspections).toBe(1);
   await page.getByLabel(/I confirm that I have the rights or authorization required/).check();
   await expect(page.getByRole("button", { name: "Add 2 selected items" })).toBeEnabled();
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-bulk-intake.png", fullPage: false });

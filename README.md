@@ -177,8 +177,8 @@ Nova plugins are executable third-party Python, not passive provider definitions
 The **Find with AI** flow works in two review stages:
 
 1. The model resolves the prompt into exact canonical works. Nova searches each work using the configured provider allowlist.
-2. The model may select only opaque candidate IDs actually returned by Nova. It cannot invent a source URL. The user reviews this proposal before Torplex creates intake items.
-3. Each accepted result independently retrieves metadata and runs Smart Setup with a client-side concurrency limit of two. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
+2. The model may select only opaque candidate IDs actually returned by Nova. It cannot invent a source URL. It chooses one primary result and up to three independently suitable fallbacks for each title. The user reviews this proposal before Torplex creates intake items.
+3. Each accepted result independently retrieves metadata and runs Smart Setup with a client-side concurrency limit of two. If a source cannot provide metadata, Torplex automatically advances through its reviewed fallbacks. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
 4. A transactional bulk request validates the complete batch before writing torrent descriptors or the queue manifest.
 
 Search requires its own rights acknowledgement and never queues or downloads media. Final execution uses the separate batch rights acknowledgement and the same server-side path, payload, malware, and duplicate validation used by manual intake.

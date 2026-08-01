@@ -31,6 +31,7 @@
       sourceUrl: initial.sourceUrl || '',
       instructions: initial.instructions || '',
       work: initial.work || null,
+      alternatives: initial.alternatives || [],
     };
     items = [...items, item];
     activeView = 'workspace';
@@ -137,6 +138,7 @@
       const year = selection.work.year ? ` (${selection.work.year})` : '';
       addItem({
         sourceUrl: selection.candidate.sourceUrl,
+        alternatives: selection.alternatives || [],
         work: selection.work,
         instructions: `Include only ${selection.work.title}${year}, matching the requested ${selection.work.type}. Exclude unrelated titles, samples, and extras.`,
       });
@@ -246,7 +248,7 @@
               <label class="proposal-row">
                 <input type="checkbox" checked={selectedProposals.has(selection.candidateId)} on:change={(event) => toggleProposal(selection.candidateId, event.currentTarget.checked)} />
                 <div class="proposal-work"><strong>{selection.work.title}{selection.work.year ? ` (${selection.work.year})` : ''}</strong><span>{selection.work.type}</span></div>
-                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.confidence} confidence</span><small>{selection.reason}</small></div>
+                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.confidence} confidence{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
               </label>
             {/each}
           </div>
@@ -267,7 +269,7 @@
         </div>
         <div class="bulk-item-list">
           {#each items as item, index (item.clientId)}
-            <IntakeItem clientId={item.clientId} initialSourceUrl={item.sourceUrl} initialInstructions={item.instructions} ordinal={index + 1} onremove={removeItem} onchange={updateItem} />
+            <IntakeItem clientId={item.clientId} initialSourceUrl={item.sourceUrl} initialInstructions={item.instructions} initialAlternatives={item.alternatives} ordinal={index + 1} onremove={removeItem} onchange={updateItem} />
           {/each}
         </div>
         {#if !items.length}

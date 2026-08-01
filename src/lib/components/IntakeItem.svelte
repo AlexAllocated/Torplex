@@ -5,6 +5,7 @@
   export let clientId;
   export let initialSourceUrl = '';
   export let initialInstructions = '';
+  export let initialAlternatives = [];
   export let ordinal = 1;
   export let onremove = () => {};
   export let onchange = () => {};
@@ -28,6 +29,11 @@
   let operation = 0;
   let inspectStartedAt = 0;
   let elapsedTimer;
+  let fallbackSources = [...new Map((Array.isArray(initialAlternatives) ? initialAlternatives : [])
+    .filter((candidate) => candidate?.sourceUrl && candidate.sourceUrl !== initialSourceUrl)
+    .map((candidate) => [candidate.sourceUrl, candidate])).values()];
+  let fallbackAttempt = 0;
+  let fallbackHistory = [];
   let fields = {
     title: '', id: '', mediaType: 'show', destinationPath: '', organizeStrategy: 'mergeRoot', targetSubdir: '',
     verifyStreams: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, refreshPlex: true,
@@ -89,6 +95,36 @@
     routes = [];
   }
 
+  function clearFallbackPlan() {
+    fallbackSources = [];
+    fallbackAttempt = 0;
+    fallbackHistory = [];
+  }
+
+  function tryNextFallback(failure) {
+    const candidate = fallbackSources[fallbackAttempt];
+    if (!candidate) return false;
+    fallbackAttempt += 1;
+    fallbackHistory = [...fallbackHistory, {
+      sourceUrl,
+      message: failure,
+      replacementName: candidate.name || `Fallback ${fallbackAttempt}`,
+    }];
+    sourceUrl = candidate.sourceUrl;
+    torrentFile = null;
+    inspection = null;
+    selectedFiles = [];
+    smartPlan = null;
+    progress = [];
+    sourceKey = '';
+    error = '';
+    routes = [];
+    status = `Trying fallback ${fallbackAttempt} of ${fallbackSources.length}: ${candidate.name || candidate.provider || 'alternate source'}`;
+    mode = 'busy';
+    timer = setTimeout(inspectSource, 150);
+    return true;
+  }
+
   function currentSourceKey() {
     if (torrentFile) return `file:${torrentFile.name}:${torrentFile.size}:${torrentFile.lastModified}`;
     return sourceUrl.trim() ? `url:${sourceUrl.trim()}` : '';
@@ -144,7 +180,9 @@
       if (payload.smartSetup?.available && payload.files?.length) await runSmartSetup(nonce);
     } catch (caught) {
       if (nonce !== operation) return;
-      error = caught instanceof Error ? caught.message : String(caught);
+      const failure = caught instanceof Error ? caught.message : String(caught);
+      if (tryNextFallback(failure)) return;
+      error = failure;
       status = error;
       mode = 'error';
     } finally {
@@ -220,6 +258,7 @@
 
   function handleUrlInput() {
     if (sourceUrl.trim()) torrentFile = null;
+    clearFallbackPlan();
     resetInspection();
     scheduleInspect();
   }
@@ -227,6 +266,7 @@
   function handleFile(event) {
     torrentFile = event.currentTarget.files?.[0] || null;
     if (torrentFile) sourceUrl = '';
+    clearFallbackPlan();
     resetInspection();
     scheduleInspect(80);
   }
@@ -280,6 +320,13 @@
 
   {#if error}
     <div class="bulk-item-error">{error}</div>
+  {/if}
+
+  {#if fallbackHistory.length}
+    <div class="bulk-fallback-note">
+      <strong>{mode === 'error' ? 'Fallbacks exhausted' : mode === 'ready' ? 'Fallback source active' : 'Trying fallback source'}</strong>
+      <span>{fallbackHistory.length} earlier source{fallbackHistory.length === 1 ? '' : 's'} could not provide metadata. {mode === 'error' ? 'No reviewed source was usable.' : `Torplex is using ${fallbackHistory.at(-1).replacementName}.`}</span>
+    </div>
   {/if}
 
   {#if progress.length && (mode === 'planning' || mode === 'busy')}

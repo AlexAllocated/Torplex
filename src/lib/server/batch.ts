@@ -564,6 +564,9 @@ async function resolveMagnetTorrent(uri: string, hash: string) {
       child.once("close", (code, signal) => {
         clearTimeout(timeout);
         if (code === 0) resolve(log);
+        else if (code === 7 || signal === "SIGTERM") {
+          reject(new Error("No connected peer supplied this magnet's file list within 150 seconds. The reported swarm may be stale; retry later or use another source."));
+        }
         else reject(new Error(`aria2c metadata lookup ${signal ? `was stopped by ${signal}` : `exited ${code}`}${log ? `: ${log.trim().split("\n").at(-1)}` : ""}`));
       });
     });

@@ -859,6 +859,19 @@
       background: rgba(244, 112, 134, .08);
       font-size: 12px;
     }
+
+    .bulk-fallback-note {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 203, 100, .28);
+      background: rgba(255, 203, 100, .07);
+      color: var(--text);
+      font-size: 12px;
+    }
+    .bulk-fallback-note strong { color: #ffcb64; white-space: nowrap; }
+    .bulk-fallback-note span { color: var(--muted); }
     .bulk-preflight-instructions label span { color: rgba(150, 167, 190, .7); font-size: 9px; }
     .bulk-preflight-instructions textarea { min-height: 56px; }
     .bulk-progress { margin: 0; }
