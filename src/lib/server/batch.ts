@@ -34,6 +34,7 @@ type Item = {
   totalBytes: number;
   fileCount?: number;
   selectFiles?: number[];
+  selectedPaths?: string[];
   rightsAttestedAt?: string;
   postDownload?: {
     verifyStreams: boolean;
@@ -1415,6 +1416,7 @@ async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promis
   const { metadata, filename, magnetUri } = await metadataForSource(source);
   const selection = selectedFileIndexes(form, metadata.files);
   const selectedSet = new Set(selection.indexes.length ? selection.indexes : metadata.files.map((file) => file.index));
+  const selectedPaths = metadata.files.filter((file) => selectedSet.has(file.index)).map((file) => file.path);
   const riskyFiles = metadata.files.filter((file) => selectedSet.has(file.index) && riskyTorrentFilePattern.test(file.path));
   if (riskyFiles.length) {
     throw new Error(`Selected content contains ${riskyFiles.length} executable or script file(s). Torplex will not queue risky payloads.`);
@@ -1456,6 +1458,7 @@ async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promis
     totalBytes: selection.totalBytes,
     fileCount: selection.indexes.length || metadata.fileCount,
     ...(selection.indexes.length && selection.indexes.length < metadata.fileCount ? { selectFiles: selection.indexes } : {}),
+    selectedPaths,
     rightsAttestedAt: new Date().toISOString(),
     postDownload: {
       verifyStreams: formBool(form, "verifyStreams"),

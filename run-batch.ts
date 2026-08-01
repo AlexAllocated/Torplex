@@ -48,6 +48,7 @@ type ManifestItem = {
   totalBytes: number;
   fileCount?: number;
   selectFiles?: number[];
+  selectedPaths?: string[];
   rightsAttestedAt?: string;
   postDownload?: {
     verifyStreams: boolean;
@@ -246,9 +247,34 @@ function probeMedia(path: string) {
   return streams;
 }
 
+async function selectedVideoFiles(item: ManifestItem, staging: string) {
+  const isVideo = (file: string) => videoExtensions.has(extname(file).toLowerCase());
+  if (item.selectedPaths?.length) {
+    const rootSource = await resolveSourceRoot(item);
+    const requested = item.selectedPaths.filter(isVideo);
+    const videos: string[] = [];
+    for (const relativePath of requested) {
+      const file = join(rootSource, safeRelativePath(relativePath));
+      if (await pathExists(file)) videos.push(file);
+    }
+    if (videos.length !== requested.length) {
+      throw new Error(`${requested.length - videos.length} selected video file(s) are missing for ${item.title}`);
+    }
+    return videos;
+  }
+  if (item.organize.strategy === "routeDirectories") {
+    const rootSource = await resolveSourceRoot(item);
+    const routed = await Promise.all(item.organize.routes.map((route) =>
+      collectFiles(join(rootSource, safeRelativePath(route.sourcePath)), isVideo)
+    ));
+    return [...new Set(routed.flat())];
+  }
+  return await collectFiles(staging, isVideo);
+}
+
 async function verifyMediaStreams(item: ManifestItem, path: string, logPath: string) {
   await setItemState(item.id, { mediaVerification: "running" });
-  const videos = await collectFiles(path, (file) => videoExtensions.has(extname(file).toLowerCase()));
+  const videos = await selectedVideoFiles(item, path);
   if (!videos.length) throw new Error(`No video files were downloaded for ${item.title}`);
   for (const video of videos) probeMedia(video);
   await appendFile(logPath, `\n--- Media verification ---\nVerified ${videos.length} readable video container(s) with ffprobe.\n`);
@@ -861,7 +887,7 @@ async function processItem(item: ManifestItem) {
   }
 
   const downloadedStats = await collectFileStats(staging);
-  if (downloadedStats.totalBytes > 0) {
+  if (downloadedStats.totalBytes > 0 && !item.selectFiles?.length) {
     item.totalBytes = downloadedStats.totalBytes;
     item.fileCount = downloadedStats.fileCount;
     await updateManifestItem(item.id, {
