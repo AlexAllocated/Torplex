@@ -555,6 +555,7 @@ function renderMapPeerLabels(width, height) {
   const visible = swarmMap.displayPeers
     .filter((item) => item.peer?.active && !item.fading)
     .sort((a, b) =>
+      Number(Boolean(b.peer.infrastructure)) - Number(Boolean(a.peer.infrastructure)) ||
       (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0) ||
       (Number(a.rank) || 0) - (Number(b.rank) || 0),
     );
@@ -581,9 +582,10 @@ function renderMapPeerLabels(width, height) {
       layer.appendChild(node);
       swarmMap.labelNodes.set(key, node);
     }
-    const text = formatPeerRate(item.peer.receiveRateBps);
+    const rateText = formatPeerRate(item.peer.receiveRateBps);
+    const text = item.peer.label ? item.peer.label + ' ' + rateText : rateText;
     const country = item.peer.country || item.peer.countryCode || 'Unknown country';
-    const detailText = country + ' - ' + item.peer.ip + ':' + item.peer.port;
+    const detailText = (item.peer.label ? item.peer.label + ' - ' : '') + country + ' - ' + item.peer.ip + ':' + item.peer.port;
     const flagUrl = flagUrlForCountry(item.peer.countryCode);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
     const img = node.querySelector('img');
@@ -769,6 +771,13 @@ function drawWorldFrame(now) {
     ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? 1 : .68) * alpha) + ')';
     ctx.fill();
+    if (item.peer.infrastructure) {
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, outerRadius + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + nodeLimeRgb + ', ' + (.9 * alpha) + ')';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
   });
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
@@ -1411,8 +1420,12 @@ function initIntakeControls() {
   let inspectNonce = 0;
   let inspectedTorrent = null;
   let selectedFiles = new Set();
+  let inspectedSourceKey = '';
   let smartSetupAvailable = false;
   let smartSetupModel = '';
+  let smartSetupRunning = false;
+  let smartSetupAutoSourceKey = '';
+  let smartSetupAbortController = null;
   const appendSmartProgress = (message) => {
     if (!smartProgress) return;
     const active = smartProgress.querySelector('.smart-progress-line:not(.done)');
@@ -1523,8 +1536,10 @@ function initIntakeControls() {
     ).length;
     const selectionReady = hasSelection && blockedSelectionCount === 0;
     const rightsReady = rightsConfirmed.checked;
-    submit.disabled = !sessionState.authenticated || !selectionReady || !rightsReady;
-    if (smartSetupButton) smartSetupButton.disabled = !smartSetupAvailable || !inspectedTorrent || !rightsReady;
+    submit.disabled = smartSetupRunning || !sessionState.authenticated || !selectionReady || !rightsReady;
+    if (smartSetupButton) {
+      smartSetupButton.disabled = smartSetupRunning || !smartSetupAvailable || !inspectedTorrent;
+    }
     if (queueReadiness) {
       queueReadiness.textContent = !inspectedTorrent
         ? 'Inspect a source to continue.'
@@ -1538,7 +1553,11 @@ function initIntakeControls() {
     }
   };
   const resetInspection = () => {
+    smartSetupAbortController?.abort();
+    smartSetupAbortController = null;
+    smartSetupRunning = false;
     inspectedTorrent = null;
+    inspectedSourceKey = '';
     selectedFiles = new Set();
     selectedInput.value = '';
     if (contentSelection) contentSelection.hidden = true;
@@ -1555,6 +1574,8 @@ function initIntakeControls() {
     }
     smartSetupAvailable = false;
     smartSetupModel = '';
+    if (!hasSource()) smartSetupAutoSourceKey = '';
+    if (smartSetupButton) smartSetupButton.textContent = 'Run Smart Setup';
     renderRoutes([]);
     if (organizationRoutes) organizationRoutes.value = '';
     if (fileTree) fileTree.replaceChildren();
@@ -1570,8 +1591,121 @@ function initIntakeControls() {
     submit.disabled = true;
     inspect.disabled = true;
   }
+  const runSmartSetup = async () => {
+    const file = input.files?.[0];
+    const sourceUrl = sourceInput.value.trim();
+    if (
+      (!file && !sourceUrl)
+      || !inspectedTorrent
+      || !smartSetupAvailable
+      || smartSetupRunning
+    ) return;
+    const planNonce = inspectNonce;
+    const controller = new AbortController();
+    smartSetupAbortController = controller;
+    smartSetupRunning = true;
+    if (smartSetupButton) smartSetupButton.textContent = 'Planning...';
+    updateSubmitAvailability();
+    if (smartSetupStatus) smartSetupStatus.textContent = `${smartSetupModel} is building a plan...`;
+    setIntakeStatus('Planning');
+    setIntakeMode('busy');
+    if (smartProgress) {
+      smartProgress.replaceChildren();
+      smartProgress.hidden = false;
+    }
+    appendSmartProgress('Starting Smart Setup');
+    try {
+      const data = new FormData();
+      if (sourceUrl) data.set('sourceUrl', sourceUrl);
+      else data.set('torrent', file);
+      data.set('additionalInstructions', additionalInstructions?.value.trim() || '');
+      const res = await fetch('/api/torrent/plan', { method: 'POST', body: data, signal: controller.signal });
+      if (!res.ok || !res.body) throw new Error('Smart Setup could not start');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let payload = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === 'progress') {
+            appendSmartProgress(event.message);
+            if (smartSetupStatus) smartSetupStatus.textContent = event.message;
+          } else if (event.type === 'result') {
+            payload = event;
+          } else if (event.type === 'error') {
+            throw new Error(event.error || 'Smart Setup failed');
+          }
+        }
+      }
+      if (planNonce !== inspectNonce) return;
+      if (!payload) throw new Error('Smart Setup ended without a plan');
+      const plan = payload.plan;
+      selectedFiles = new Set(plan.selectedFiles || []);
+      setIntakeFields(plan);
+      if (organizeStrategy) organizeStrategy.value = plan.organizeStrategy || 'mergeRoot';
+      renderRoutes(plan.routes || []);
+      updateRouteEditor();
+      for (const [id, key] of [
+        ['verifyStreams', 'verifyStreams'],
+        ['ensureEnglishSubtitles', 'ensureEnglishSubtitles'],
+        ['verifyCanonicalMetadata', 'verifyCanonicalMetadata'],
+        ['verifyArtwork', 'verifyArtwork'],
+        ['refreshPlex', 'refreshPlex'],
+      ]) {
+        const control = document.getElementById(id);
+        if (control instanceof HTMLInputElement) control.checked = Boolean(plan.postDownloadChecks?.[key]);
+      }
+      renderTorrentFileTree(inspectedTorrent.files || [], selectedFiles, fileFilter?.value || '');
+      updateSelection();
+      renderSmartPlan(plan);
+      const activeProgress = smartProgress?.querySelector('.smart-progress-line:not(.done)');
+      activeProgress?.classList.add('done');
+      if (smartSetupStatus) smartSetupStatus.textContent = `${payload.model} plan applied`;
+      if (smartSetupButton) smartSetupButton.textContent = 'Run Smart Setup again';
+      setIntakeStatus('Plan ready');
+      setIntakeMode('ready');
+    } catch (error) {
+      if (controller.signal.aborted || planNonce !== inspectNonce) return;
+      if (smartSetupStatus) smartSetupStatus.textContent = error instanceof Error ? error.message : String(error);
+      if (smartSetupButton) smartSetupButton.textContent = 'Retry Smart Setup';
+      setIntakeStatus('Planning failed');
+      setIntakeMode('error');
+    } finally {
+      if (smartSetupAbortController === controller) smartSetupAbortController = null;
+      if (planNonce === inspectNonce) {
+        smartSetupRunning = false;
+        updateSubmitAvailability();
+      }
+    }
+  };
+  const currentSourceKey = () => {
+    const file = input.files?.[0];
+    if (file) return `file:${file.name}:${file.size}:${file.lastModified}`;
+    return sourceInput.value.trim() ? `url:${sourceInput.value.trim()}` : '';
+  };
+  const maybeRunSmartSetup = () => {
+    const sourceKey = currentSourceKey();
+    if (
+      !sourceKey
+      || smartSetupAutoSourceKey === sourceKey
+      || smartSetupRunning
+      || !smartSetupAvailable
+      || !inspectedTorrent
+    ) return;
+    smartSetupAutoSourceKey = sourceKey;
+    runSmartSetup().catch(() => {});
+  };
   const inspectCurrentTorrent = async () => {
     window.clearTimeout(inspectTimer);
+    const sourceKey = currentSourceKey();
+    if (sourceKey && sourceKey === inspectedSourceKey && inspectedTorrent) return;
     const nonce = ++inspectNonce;
     const file = input.files?.[0];
     const sourceUrl = sourceInput.value.trim();
@@ -1600,6 +1734,7 @@ function initIntakeControls() {
       if (nonce !== inspectNonce) return;
       if (!res.ok) throw new Error(payload.error || 'Inspect failed');
       inspectedTorrent = payload;
+      inspectedSourceKey = sourceKey;
       selectedFiles = new Set((payload.files || []).map((file) => file.index));
       setIntakeFields(payload.suggested || {});
       renderTorrentSummary(payload);
@@ -1610,13 +1745,16 @@ function initIntakeControls() {
       smartSetupModel = payload.smartSetup?.model || '';
       if (smartSetupPanel) smartSetupPanel.hidden = !(payload.files || []).length;
       if (smartSetupStatus) {
-        smartSetupStatus.textContent = smartSetupAvailable ? `${smartSetupModel} - optional` : 'Set OPENAI_API_KEY to enable';
+        smartSetupStatus.textContent = smartSetupAvailable
+          ? `${smartSetupModel} starting automatically...`
+          : 'Set OPENAI_API_KEY to enable';
       }
       renderTorrentFileTree(payload.files || [], selectedFiles, '');
       updateSelection();
       updateSubmitAvailability();
       setIntakeStatus('Ready to review');
       setIntakeMode('ready');
+      maybeRunSmartSetup();
     } catch (error) {
       if (nonce !== inspectNonce) return;
       setIntakeStatus(error instanceof Error ? error.message : String(error));
@@ -1626,6 +1764,7 @@ function initIntakeControls() {
   };
   const scheduleInspect = (delay = 450) => {
     window.clearTimeout(inspectTimer);
+    inspectNonce += 1;
     resetInspection();
     updateInspectAvailability();
     if (!hasSource()) {
@@ -1651,7 +1790,9 @@ function initIntakeControls() {
   sourceInput.addEventListener('paste', () => window.setTimeout(() => scheduleInspect(120), 0));
   sourceInput.addEventListener('change', inspectCurrentTorrent);
   inspect.addEventListener('click', inspectCurrentTorrent);
-  rightsConfirmed.addEventListener('change', updateSubmitAvailability);
+  rightsConfirmed.addEventListener('change', () => {
+    updateSubmitAvailability();
+  });
   organizeStrategy?.addEventListener('change', updateRouteEditor);
   routeRows?.addEventListener('input', syncRoutes);
   document.getElementById('addRoute')?.addEventListener('click', () => {
@@ -1690,84 +1831,7 @@ function initIntakeControls() {
     updateSelection();
     updateSubmitAvailability();
   });
-  smartSetupButton?.addEventListener('click', async () => {
-    const file = input.files?.[0];
-    const sourceUrl = sourceInput.value.trim();
-    if ((!file && !sourceUrl) || !inspectedTorrent || !rightsConfirmed.checked || !smartSetupAvailable) return;
-    smartSetupButton.disabled = true;
-    submit.disabled = true;
-    if (smartSetupStatus) smartSetupStatus.textContent = `${smartSetupModel} is building a plan...`;
-    setIntakeStatus('Planning');
-    setIntakeMode('busy');
-    if (smartProgress) {
-      smartProgress.replaceChildren();
-      smartProgress.hidden = false;
-    }
-    appendSmartProgress('Starting Smart Setup');
-    try {
-      const data = new FormData();
-      if (sourceUrl) data.set('sourceUrl', sourceUrl);
-      else data.set('torrent', file);
-      data.set('rightsConfirmed', 'on');
-      data.set('additionalInstructions', additionalInstructions?.value.trim() || '');
-      const res = await fetch('/api/torrent/plan', { method: 'POST', body: data });
-      if (!res.ok || !res.body) throw new Error('Smart Setup could not start');
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let payload = null;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const event = JSON.parse(line);
-          if (event.type === 'progress') {
-            appendSmartProgress(event.message);
-            if (smartSetupStatus) smartSetupStatus.textContent = event.message;
-          } else if (event.type === 'result') {
-            payload = event;
-          } else if (event.type === 'error') {
-            throw new Error(event.error || 'Smart Setup failed');
-          }
-        }
-      }
-      if (!payload) throw new Error('Smart Setup ended without a plan');
-      const plan = payload.plan;
-      selectedFiles = new Set(plan.selectedFiles || []);
-      setIntakeFields(plan);
-      if (organizeStrategy) organizeStrategy.value = plan.organizeStrategy || 'mergeRoot';
-      renderRoutes(plan.routes || []);
-      updateRouteEditor();
-      for (const [id, key] of [
-        ['verifyStreams', 'verifyStreams'],
-        ['ensureEnglishSubtitles', 'ensureEnglishSubtitles'],
-        ['verifyCanonicalMetadata', 'verifyCanonicalMetadata'],
-        ['verifyArtwork', 'verifyArtwork'],
-        ['refreshPlex', 'refreshPlex'],
-      ]) {
-        const control = document.getElementById(id);
-        if (control instanceof HTMLInputElement) control.checked = Boolean(plan.postDownloadChecks?.[key]);
-      }
-      renderTorrentFileTree(inspectedTorrent.files || [], selectedFiles, fileFilter?.value || '');
-      updateSelection();
-      renderSmartPlan(plan);
-      const activeProgress = smartProgress?.querySelector('.smart-progress-line:not(.done)');
-      activeProgress?.classList.add('done');
-      if (smartSetupStatus) smartSetupStatus.textContent = `${payload.model} plan applied`;
-      setIntakeStatus('Plan ready');
-      setIntakeMode('ready');
-    } catch (error) {
-      if (smartSetupStatus) smartSetupStatus.textContent = error instanceof Error ? error.message : String(error);
-      setIntakeStatus('Planning failed');
-      setIntakeMode('error');
-    } finally {
-      updateSubmitAvailability();
-    }
-  });
+  smartSetupButton?.addEventListener('click', () => runSmartSetup().catch(() => {}));
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     window.clearTimeout(inspectTimer);

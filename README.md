@@ -9,7 +9,7 @@ Torplex does not search for torrents or provide media. It only manages `.torrent
 - Serves a real-time dashboard over server-sent events.
 - Lets an authenticated user upload `.torrent` files, paste magnet links, paste direct `.torrent` URLs, or paste pages that contain an extractable torrent source.
 - Inspects complete torrent metadata and lets the user select individual files or folders before downloading.
-- Optionally uses a constrained OpenAI Smart Setup plan to fill the same visible selection, routing, and verification controls available manually.
+- Optionally runs a constrained OpenAI Smart Setup plan automatically after source inspection to fill the same visible selection, routing, and verification controls available manually.
 - Requires an explicit rights attestation for every newly queued torrent.
 - Rejects executable and script payloads and requires a clean ClamAV scan before downloaded files leave staging; there is no UI or API bypass.
 - Stores queue state in a runtime `manifest.json`.
@@ -118,10 +118,16 @@ By default, Torplex requires password login for the dashboard, status API, live 
 | `ADAPTIVE_INGRESS_THRESHOLD` | `0.75` | Fraction of the write budget below which ingress may open another slot. |
 | `ADAPTIVE_DISK_BUSY_PERCENT` | `80` | Maximum smoothed block-device utilization allowed before opening another slot. |
 | `ADAPTIVE_SETTLE_SECONDS` | `30` | Observation window after starting a job before another slot can open. |
+| `ADAPTIVE_SCALE_DOWN_DISK_BUSY_PERCENT` | `95` | Sustained block-device utilization that triggers a scale-down. |
+| `ADAPTIVE_SCALE_DOWN_WRITE_RATIO` | `1.0` | Fraction of the disk write budget that counts as scale-down pressure. |
+| `ADAPTIVE_SCALE_DOWN_SECONDS` | `20` | Time pressure must remain high before pausing the lowest-priority active transfer. |
+| `ADAPTIVE_COOLDOWN_SECONDS` | `45` | Minimum delay between concurrency changes to prevent pause/resume churn. |
 | `MAX_MAP_PEERS` | `320` | Maximum aria2 connections retained for the swarm map. |
 | `MAP_ORIGIN_LABEL` | `SERVER` | Label shown above the receiving node on the swarm map. |
 | `MAP_ORIGIN_LAT`, `MAP_ORIGIN_LON` | automatic | Optional fixed receiving-node coordinates. By default Torplex geolocates its public IP. |
 | `MAP_ORIGIN_IP` | automatic | Optional public IP metadata used with fixed map coordinates. |
+| `PRIVATE_SEED_IPS` | empty | Comma-separated public IPs for private webseeds or seed hosts that should receive priority map labels. |
+| `PRIVATE_SEED_LABEL` | `VM SEED` | Label shown for configured private seed connections. |
 
 ### Media Paths
 
@@ -146,9 +152,9 @@ Smart Setup is optional. Without an API key, the normal torrent inspector, per-f
 
 The dialog also accepts per-torrent **Additional instructions**. Those instructions are appended to the fixed Torplex policy; they do not replace its path, selection, validation, or review requirements.
 
-Smart Setup sends the torrent filename, payload name, file paths, file sizes, automatic suggestions, configured media roots, and the additional instructions to the OpenAI API. It does not send media bytes. The model returns a draft that fills the same visible controls a user can edit manually. Torplex validates all selected indexes and destinations server-side before queueing.
+Smart Setup runs once automatically when source inspection succeeds. It sends the torrent filename, payload name, file paths, file sizes, automatic suggestions, configured media roots, and any additional instructions to the OpenAI API. It does not send media bytes. The model returns a draft that fills the same visible controls a user can edit manually; the button remains available for an intentional rerun. Torplex validates all selected indexes and destinations server-side before queueing.
 
-Every Smart Setup request and queue submission requires the user to confirm that they have the rights or authorization needed for the selected content. Torplex records the attestation timestamp in the queue manifest. This feature is not a substitute for determining whether a download is permitted in the user's jurisdiction or under applicable service terms.
+Smart Setup only prepares a reviewable plan and does not require an attestation. Queue submission remains disabled until the user confirms that they have the rights or authorization needed for the selected content, and Torplex records that attestation timestamp in the queue manifest. This feature is not a substitute for determining whether a download is permitted in the user's jurisdiction or under applicable service terms.
 
 ### Post-download checks
 
@@ -218,11 +224,11 @@ These files are runtime state and are intentionally ignored by git.
 
 ## Queue Model
 
-The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`. For inspectable `.torrent` sources, selected file indexes are stored in the manifest and passed to aria2 with `--select-file`; unselected files are not downloaded. Mixed bundles can use visible folder routes to place separate titles or seasons into independent Plex destinations.
+The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`. During inspection, magnet links use aria2's metadata-only mode to cache the small torrent manifest under `BATCH_DIR/torrent-metadata/`; media payload bytes are not downloaded. Uploaded files and resolved magnets therefore share the same file picker and Smart Setup flow. Selected file indexes are stored in the manifest and passed to aria2 with `--select-file`; unselected files are not downloaded. Mixed bundles can use visible folder routes to place separate titles or seasons into independent Plex destinations.
 
 For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 
-The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` for a fixed cap. With `ADAPTIVE_CONCURRENCY=true`, the runner starts the minimum immediately, observes aria2 ingress plus the media block device's actual write rate and busy time, and opens at most one additional slot per settling window up to `ADAPTIVE_MAX_CONCURRENCY`. It does not kill healthy transfers when load rises; it simply stops expanding until running jobs finish. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
+The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` for a fixed cap. With `ADAPTIVE_CONCURRENCY=true`, the runner starts the minimum immediately, observes aggregate aria2 ingress plus the media block device's actual write rate and busy time, and opens at most one additional slot per settling window up to `ADAPTIVE_MAX_CONCURRENCY`. Sustained write pressure pauses the lowest-priority active transfer, preserving its partial files and aria2 resume state. Separate pressure and cooldown windows keep the scheduler from oscillating. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
 
 Pending rows can be reordered from the dashboard with animated position changes. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 

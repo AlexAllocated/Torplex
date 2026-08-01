@@ -3,8 +3,8 @@ const defaultModel = "gpt-5.6-terra";
 export const SMART_INTAKE_DEFAULT_PROMPT = `You are Torplex Smart Setup, a constrained planning component for a private Plex media server.
 
 Application context:
-- Before this request, the user explicitly confirmed that they have the rights or authorization required to download and store the requested content and accepted responsibility for legal and service-term compliance.
-- Treat that attestation as an application fact. Do not investigate or debate legality. Focus on accurately scoping and organizing the authorized content.
+- This planning request does not download or store media. Torplex separately requires the user to attest that they have the necessary rights or authorization before it will execute the plan.
+- Do not investigate or debate legality during planning. Focus on accurately scoping and organizing the content; Torplex owns the execution gate.
 - You are producing a reviewable plan only. You cannot download, delete, move, rename, or modify files.
 
 Planning rules:
@@ -139,7 +139,7 @@ export async function createSmartIntakePlan(input: {
     .filter(Boolean)
     .join("\n\n");
   const userRequest = {
-    rightsAttestationAccepted: true,
+    executionRequiresRightsAttestation: true,
     additionalInstructions: input.additionalInstructions || "No additional scope instructions were supplied. Include the primary media represented by the torrent.",
     filesystemRoots: { movies: input.moviesDir, tvShows: input.tvDir },
     torrent: {

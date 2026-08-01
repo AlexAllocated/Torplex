@@ -23,6 +23,13 @@ const diskWriteBudgetBytes = Math.max(1, Number.parseFloat(process.env.DISK_WRIT
 const adaptiveIngressThreshold = Math.min(1, Math.max(0.1, Number.parseFloat(process.env.ADAPTIVE_INGRESS_THRESHOLD ?? "0.75") || 0.75));
 const adaptiveDiskBusyThreshold = Math.min(100, Math.max(1, Number.parseFloat(process.env.ADAPTIVE_DISK_BUSY_PERCENT ?? "80") || 80));
 const adaptiveSettleMs = Math.max(10, Number.parseInt(process.env.ADAPTIVE_SETTLE_SECONDS ?? "30", 10) || 30) * 1000;
+const adaptiveScaleDownBusyThreshold = Math.min(
+  100,
+  Math.max(adaptiveDiskBusyThreshold, Number.parseFloat(process.env.ADAPTIVE_SCALE_DOWN_DISK_BUSY_PERCENT ?? "95") || 95),
+);
+const adaptiveScaleDownWriteRatio = Math.max(0.5, Number.parseFloat(process.env.ADAPTIVE_SCALE_DOWN_WRITE_RATIO ?? "1") || 1);
+const adaptiveScaleDownMs = Math.max(5, Number.parseInt(process.env.ADAPTIVE_SCALE_DOWN_SECONDS ?? "20", 10) || 20) * 1000;
+const adaptiveCooldownMs = Math.max(10, Number.parseInt(process.env.ADAPTIVE_COOLDOWN_SECONDS ?? "45", 10) || 45) * 1000;
 const checkIntegrity = /^(1|true|yes)$/i.test(process.env.ARIA2_CHECK_INTEGRITY ?? "");
 const videoExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm"]);
 const subtitleExtensions = new Set([".srt", ".ass", ".ssa", ".vtt", ".sub"]);
@@ -514,6 +521,38 @@ async function runCommand(args: string[], logPath: string) {
   return proc.exitCode ?? 1;
 }
 
+function aria2ProcessItems() {
+  const processes = new Map<string, string>();
+  let proc;
+  try {
+    proc = Bun.spawnSync(["ps", "-eo", "pid=,args="]);
+  } catch {
+    return processes;
+  }
+  if (proc.exitCode !== 0) return processes;
+  for (const line of proc.stdout.toString().split(/\r?\n/)) {
+    if (!line.includes("aria2c") || !line.includes("/staging/")) continue;
+    const pid = line.trim().match(/^(\d+)/)?.[1];
+    const itemId = line.match(/\/staging\/([^/\s]+)/)?.[1];
+    if (pid && itemId) processes.set(pid, itemId);
+  }
+  return processes;
+}
+
+function stopAria2ForItem(itemId: string) {
+  const pids = [...aria2ProcessItems().entries()]
+    .filter(([, processItemId]) => processItemId === itemId)
+    .map(([pid]) => pid);
+  for (const pid of pids) Bun.spawnSync(["kill", "-TERM", pid]);
+  if (pids.length) {
+    Bun.spawnSync(["sleep", "0.4"]);
+    for (const pid of pids) {
+      if (Bun.spawnSync(["kill", "-0", pid]).exitCode === 0) Bun.spawnSync(["kill", "-KILL", pid]);
+    }
+  }
+  return pids;
+}
+
 async function scanForMalware(item: ManifestItem, staging: string, logPath: string) {
   await setItemState(item.id, { securityScan: "running" });
   await appendBatch(`Scanning ${item.title} for malware`);
@@ -741,6 +780,7 @@ const interruptedItemIds = Object.entries(initialState.items)
   .map(([id]) => id);
 for (const id of interruptedItemIds) {
   initialState.items[id] = { ...initialState.items[id], status: "pending" };
+  await rm(join(root, "control", "preempt", id), { force: true });
 }
 await enqueueState(async () =>
   saveState({
@@ -763,6 +803,7 @@ async function processItem(item: ManifestItem) {
   }
   const staging = join(root, "staging", item.id);
   const logPath = join(root, "logs", `${item.id}.log`);
+  await rm(join(root, "control", "preempt", item.id), { force: true });
   await ensureDir(staging);
   await ensureDir(join(root, "logs"));
   await setItemState(item.id, { status: "active", startedAt: now(), error: null });
@@ -884,7 +925,8 @@ function sleep(ms: number) {
 
 const running = new Map<string, Promise<void>>();
 let completionLogged = false;
-let lastAdaptiveStartAt = 0;
+let lastAdaptiveChangeAt = 0;
+let adaptiveOverloadSince = 0;
 const sampleDiskActivity = createDiskActivitySampler(root);
 
 async function markBatchCompleteIfIdle(manifest: Manifest) {
@@ -921,6 +963,24 @@ function startItem(item: ManifestItem) {
   running.set(item.id, task);
 }
 
+async function pauseLowestPriorityItem(manifest: Manifest, state: State, reason: string) {
+  const item = [...manifest.items].reverse().find((candidate) =>
+    running.has(candidate.id) && state.items[candidate.id]?.status === "active"
+  );
+  if (!item) return false;
+  const preemptDir = join(root, "control", "preempt");
+  const preemptPath = join(preemptDir, item.id);
+  await ensureDir(preemptDir);
+  await writeFile(preemptPath, new Date().toISOString());
+  const pids = stopAria2ForItem(item.id);
+  if (!pids.length) {
+    await rm(preemptPath, { force: true });
+    return false;
+  }
+  await appendBatch(`Adaptive scheduler paused ${item.title}: ${reason}`);
+  return true;
+}
+
 while (true) {
   const manifest = await loadManifest();
   const state = await loadState();
@@ -928,12 +988,38 @@ while (true) {
   const ingressBytesPerSecond = adaptiveConcurrency && running.size > 0
     ? await aggregateIngressBytesPerSecond([...running.keys()])
     : 0;
+  if (adaptiveConcurrency && running.size > adaptiveMinConcurrency) {
+    const diskWriteOverloaded = diskActivity.writeBytesPerSecond >= diskWriteBudgetBytes * adaptiveScaleDownWriteRatio;
+    const diskBusyOverloaded = diskActivity.busyPercent >= adaptiveScaleDownBusyThreshold;
+    const ingressOutrunningDisk = (
+      diskActivity.busyPercent >= adaptiveDiskBusyThreshold
+      && ingressBytesPerSecond >= diskWriteBudgetBytes * adaptiveIngressThreshold
+      && ingressBytesPerSecond > diskActivity.writeBytesPerSecond * 1.2
+    );
+    const overloaded = diskWriteOverloaded || diskBusyOverloaded || ingressOutrunningDisk;
+    adaptiveOverloadSince = overloaded ? adaptiveOverloadSince || Date.now() : 0;
+    const pressureSustained = adaptiveOverloadSince > 0 && Date.now() - adaptiveOverloadSince >= adaptiveScaleDownMs;
+    const cooldownElapsed = Date.now() - lastAdaptiveChangeAt >= adaptiveCooldownMs;
+    if (pressureSustained && cooldownElapsed) {
+      const reasons = [
+        diskBusyOverloaded ? `disk busy ${diskActivity.busyPercent.toFixed(0)}%` : "",
+        diskWriteOverloaded ? `disk writes ${formatRate(diskActivity.writeBytesPerSecond)}` : "",
+        ingressOutrunningDisk ? `ingress ${formatRate(ingressBytesPerSecond)} outrunning writes` : "",
+      ].filter(Boolean).join(", ");
+      if (await pauseLowestPriorityItem(manifest, state, reasons)) {
+        lastAdaptiveChangeAt = Date.now();
+        adaptiveOverloadSince = 0;
+      }
+    }
+  } else {
+    adaptiveOverloadSince = 0;
+  }
   let openedAdaptiveSlot = false;
   for (const item of manifest.items) {
     if (adaptiveConcurrency) {
       if (running.size >= adaptiveMaxConcurrency) break;
       if (running.size >= adaptiveMinConcurrency) {
-        const settled = Date.now() - lastAdaptiveStartAt >= adaptiveSettleMs;
+        const settled = Date.now() - lastAdaptiveChangeAt >= Math.max(adaptiveSettleMs, adaptiveCooldownMs);
         const ingressHasRoom = ingressBytesPerSecond < diskWriteBudgetBytes * adaptiveIngressThreshold;
         const diskRateHasRoom = diskActivity.writeBytesPerSecond < diskWriteBudgetBytes * 0.85;
         const diskIsResponsive = diskActivity.busyPercent < adaptiveDiskBusyThreshold;
@@ -960,7 +1046,7 @@ while (true) {
       openedAdaptiveSlot = true;
     }
     startItem(item);
-    if (adaptiveConcurrency) lastAdaptiveStartAt = Date.now();
+    if (adaptiveConcurrency) lastAdaptiveChangeAt = Date.now();
   }
   await markBatchCompleteIfIdle(manifest);
   await sleep(2_000);

@@ -116,7 +116,7 @@
           <div id="smartSetupPanel" class="smart-setup" hidden>
             <div class="smart-setup-copy">
               <div class="step-title">Smart Setup</div>
-              <div class="small">Describe any special scope. The model will fill the same controls shown in this dialog for you to review.</div>
+              <div class="small">Smart Setup runs once automatically after inspection and fills these controls for review. Add special instructions and run it again when you need a narrower scope.</div>
             </div>
             <div class="intake-field smart-instructions">
               <label for="additionalInstructions">Additional instructions</label>
@@ -124,7 +124,7 @@
             </div>
             <div class="smart-actions">
               <div id="smartSetupStatus" class="small">Optional</div>
-              <button id="runSmartSetup" class="primary-button" type="button">Fill with Smart Setup</button>
+              <button id="runSmartSetup" class="primary-button" type="button">Run Smart Setup</button>
             </div>
             <div id="smartProgress" class="smart-progress" hidden aria-live="polite"></div>
             <div id="smartPlanReview" class="smart-plan-review" hidden></div>

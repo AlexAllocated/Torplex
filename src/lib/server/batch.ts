@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "fs";
+import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -16,6 +17,8 @@ const maxHtmlBytes = 2 * 1024 * 1024;
 const configuredMaxMapPeers = Number.parseInt(process.env.MAX_MAP_PEERS ?? "320", 10);
 const maxMapPeers = Number.isFinite(configuredMaxMapPeers) && configuredMaxMapPeers > 0 ? configuredMaxMapPeers : 320;
 const mapOriginLabel = (process.env.MAP_ORIGIN_LABEL ?? "SERVER").trim() || "SERVER";
+const privateSeedIps = new Set((process.env.PRIVATE_SEED_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
+const privateSeedLabel = (process.env.PRIVATE_SEED_LABEL ?? "VM SEED").trim() || "VM SEED";
 
 type Item = {
   id: string;
@@ -72,6 +75,8 @@ type Peer = {
   pid?: string;
   itemId?: string;
   bytesReceived?: number;
+  infrastructure?: boolean;
+  label?: string;
 };
 
 type PeerGeo = Peer & {
@@ -139,6 +144,7 @@ let peerSnapshot: PeerSnapshot = {
 let lastPeerRefresh = 0;
 let peerRefreshPromise: Promise<PeerSnapshot> | null = null;
 let diskUsageCache: { expiresAt: number; value: Awaited<ReturnType<typeof readDiskUsage>> } | null = null;
+const magnetMetadataResolutions = new Map<string, Promise<{ bytes: Uint8Array; filename: string }>>();
 const peerRefreshMs = 5_000;
 const peerGeoTtlMs = 12 * 60 * 60 * 1000;
 const peerHistoryTtlMs = 15 * 60 * 1000;
@@ -509,6 +515,74 @@ function magnetMetadata(uri: string) {
   };
 }
 
+async function resolveMagnetTorrent(uri: string, hash: string) {
+  const normalizedHash = hash.toLowerCase();
+  const metadataDir = join(root, "torrent-metadata", normalizedHash);
+  const filename = "metadata.torrent";
+  const torrentPath = join(metadataDir, filename);
+  if (existsSync(torrentPath)) {
+    const bytes = new Uint8Array(readFileSync(torrentPath));
+    if (bytes.length && bytes.length <= maxTorrentBytes) return { bytes, filename };
+  }
+  const pending = magnetMetadataResolutions.get(normalizedHash);
+  if (pending) return pending;
+
+  const resolution = (async () => {
+    await mkdir(metadataDir, { recursive: true });
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn("aria2c", [
+        `--dir=${metadataDir}`,
+        "--bt-metadata-only=true",
+        "--bt-save-metadata=true",
+        "--seed-time=0",
+        "--seed-ratio=0",
+        "--max-upload-limit=1K",
+        "--bt-enable-lpd=false",
+        "--file-allocation=none",
+        "--summary-interval=0",
+        "--console-log-level=warn",
+        "--connect-timeout=15",
+        "--timeout=15",
+        "--bt-stop-timeout=60",
+        `--dht-file-path=${join(metadataDir, "dht.dat")}`,
+        `--dht-file-path6=${join(metadataDir, "dht6.dat")}`,
+        uri,
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+      let log = "";
+      const collect = (chunk: Buffer) => {
+        log = `${log}${chunk.toString("utf8")}`.slice(-16_000);
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+      const timeout = setTimeout(() => child.kill("SIGTERM"), 120_000);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        if (code === 0) resolve(log);
+        else reject(new Error(`aria2c metadata lookup ${signal ? `was stopped by ${signal}` : `exited ${code}`}${log ? `: ${log.trim().split("\n").at(-1)}` : ""}`));
+      });
+    });
+    if (!existsSync(torrentPath)) {
+      const resolvedFilename = (await readdir(metadataDir)).find((entry) => entry.toLowerCase().endsWith(".torrent"));
+      if (!resolvedFilename) throw new Error(`aria2c completed without saving torrent metadata${output ? `: ${output.trim().split("\n").at(-1)}` : ""}`);
+      await rename(join(metadataDir, resolvedFilename), torrentPath);
+    }
+    const bytes = new Uint8Array(readFileSync(torrentPath));
+    if (!bytes.length) throw new Error("Resolved magnet metadata is empty");
+    if (bytes.length > maxTorrentBytes) throw new Error("Resolved magnet metadata is too large");
+    return { bytes, filename };
+  })();
+  magnetMetadataResolutions.set(normalizedHash, resolution);
+  try {
+    return await resolution;
+  } finally {
+    magnetMetadataResolutions.delete(normalizedHash);
+  }
+}
+
 async function saveManifest(manifest: Manifest) {
   const path = join(root, "manifest.json");
   const tmp = `${path}.tmp`;
@@ -826,7 +900,14 @@ function connectedPeers(): Peer[] {
     if (!remote || !isPublicIp(remote.ip)) continue;
     if (ignoredPeerIps.has(remote.ip)) continue;
     const pid = line.match(/\bpid=(\d+)/)?.[1];
-    current = { ip: remote.ip, port: remote.port, state, ...(pid ? { pid, itemId: processes.get(pid) } : {}) };
+    const infrastructure = privateSeedIps.has(remote.ip);
+    current = {
+      ip: remote.ip,
+      port: remote.port,
+      state,
+      ...(pid ? { pid, itemId: processes.get(pid) } : {}),
+      ...(infrastructure ? { infrastructure: true, label: privateSeedLabel } : {}),
+    };
     peers.set(peerKey(current), current);
   }
   return [...peers.values()].slice(0, maxMapPeers);
@@ -991,6 +1072,7 @@ async function refreshSwarmPeers(stats?: { connections?: number; seeders?: numbe
   }
 
   const history = [...peerHistory.values()].sort((a, b) => {
+    if (Boolean(a.infrastructure) !== Boolean(b.infrastructure)) return a.infrastructure ? -1 : 1;
     const aRank = a.active ? 0 : a.probing ? 1 : 2;
     const bRank = b.active ? 0 : b.probing ? 1 : 2;
     if (aRank !== bRank) return aRank - bRank;
@@ -1226,9 +1308,15 @@ async function intakeSourceFromForm(form: FormData) {
   return { kind: "upload" as const, ...(await torrentFromForm(form)) };
 }
 
-function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceFromForm>>) {
+async function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceFromForm>>) {
   if (source.kind === "magnet") {
-    return { metadata: magnetMetadata(source.magnetUri), filename: "", magnetUri: source.magnetUri };
+    const magnet = magnetMetadata(source.magnetUri);
+    const resolved = await resolveMagnetTorrent(source.magnetUri, magnet.hash);
+    return {
+      metadata: { ...torrentMetadata(resolved.bytes, resolved.filename), magnetUri: source.magnetUri, hash: magnet.hash },
+      filename: "",
+      magnetUri: source.magnetUri,
+    };
   }
   return { metadata: torrentMetadata(source.bytes, source.filename), filename: source.filename, magnetUri: "" };
 }
@@ -1236,7 +1324,7 @@ function metadataForSource(source: Awaited<ReturnType<typeof intakeSourceFromFor
 export async function inspectTorrentUpload(req: Request) {
   const form = await req.formData();
   const source = await intakeSourceFromForm(form);
-  const { metadata } = metadataForSource(source);
+  const { metadata } = await metadataForSource(source);
   return Response.json(
     {
       ...metadata,
@@ -1260,11 +1348,8 @@ export function planTorrentUpload(req: Request) {
         try {
           send({ type: "progress", message: "Reading torrent metadata and user instructions" });
           const form = await req.formData();
-          if (!formBool(form, "rightsConfirmed")) {
-            throw new Error("Confirm the rights statement before using Smart Setup");
-          }
           const source = await intakeSourceFromForm(form);
-          const { metadata, filename } = metadataForSource(source);
+          const { metadata, filename } = await metadataForSource(source);
           send({ type: "progress", message: `Prepared ${metadata.files.length} file records for planning` });
           const result = await createSmartIntakePlan({
             filename,
@@ -1299,7 +1384,7 @@ export async function addTorrentUpload(req: Request) {
     throw new Error("Confirm that you have the rights to download this content");
   }
   const source = await intakeSourceFromForm(form);
-  const { metadata, filename, magnetUri } = metadataForSource(source);
+  const { metadata, filename, magnetUri } = await metadataForSource(source);
   const selection = selectedFileIndexes(form, metadata.files);
   const selectedSet = new Set(selection.indexes.length ? selection.indexes : metadata.files.map((file) => file.index));
   const riskyFiles = metadata.files.filter((file) => selectedSet.has(file.index) && riskyTorrentFilePattern.test(file.path));
