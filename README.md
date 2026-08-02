@@ -102,6 +102,8 @@ Use **Add Torrent** from the dashboard, or open `/add` directly, to enter the au
 
 By default, Torplex requires password login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
 
+Torplex accepts the same authenticated build through LAN addresses, forwarded public IPs, and reverse-proxy hostnames. Unsafe multipart and form requests are protected by runtime same-host validation: the browser `Origin` must match the requested `Host`. This avoids embedding deployment-specific public addresses in the application while retaining cross-site request protection.
+
 ## Configuration
 
 ### Server

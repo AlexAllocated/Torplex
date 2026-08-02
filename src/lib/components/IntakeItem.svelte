@@ -54,6 +54,16 @@
     return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
   }
 
+  async function responsePayload(response) {
+    const body = await response.text();
+    if (!body) return {};
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { error: body.trim() };
+    }
+  }
+
   function emitChange(isReady, url, file, currentFields, currentRoutes, currentSelection) {
     onchange({
       clientId,
@@ -168,7 +178,7 @@
       if (sourceUrl.trim()) data.set('sourceUrl', sourceUrl.trim());
       else if (torrentFile) data.set('torrent', torrentFile);
       const response = await fetch('/api/torrent/inspect', { method: 'POST', body: data });
-      const payload = await response.json();
+      const payload = await responsePayload(response);
       if (nonce !== operation) return;
       if (!response.ok) throw new Error(payload.error || 'Inspection failed');
       inspection = payload;
@@ -206,7 +216,11 @@
         else if (torrentFile) data.set('torrent', torrentFile);
         data.set('additionalInstructions', additionalInstructions.trim());
         const response = await fetch('/api/torrent/plan', { method: 'POST', body: data });
-        if (!response.ok || !response.body) throw new Error('Smart Setup could not start');
+        if (!response.ok) {
+          const payload = await responsePayload(response);
+          throw new Error(payload.error || 'Smart Setup could not start');
+        }
+        if (!response.body) throw new Error('Smart Setup could not start');
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';

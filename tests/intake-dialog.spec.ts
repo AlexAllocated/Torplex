@@ -31,6 +31,26 @@ test("torrent intake uses normal document scrolling on mobile", async ({ page })
   await expect(page.getByRole("button", { name: "Add 0 selected items" })).toBeVisible();
 });
 
+test("multipart intake accepts the requested host and rejects cross-site origins", async ({ page }) => {
+  test.skip(!baseUrl || !password, "Torplex URL and password are required");
+
+  await unlock(page);
+  const endpoint = new URL("/api/torrent/inspect", baseUrl!).toString();
+  const sameHost = await page.request.post(endpoint, {
+    headers: { origin: new URL(baseUrl!).origin },
+    multipart: { sourceUrl: "not-a-valid-torrent-source" },
+  });
+  expect(sameHost.status()).toBe(400);
+  await expect(sameHost.json()).resolves.toHaveProperty("error");
+
+  const crossSite = await page.request.post(endpoint, {
+    headers: { origin: "https://example.invalid" },
+    multipart: { sourceUrl: "not-a-valid-torrent-source" },
+  });
+  expect(crossSite.status()).toBe(403);
+  await expect(crossSite.text()).resolves.toContain("Cross-site POST");
+});
+
 test("torrent intake supports reviewed file selection and Smart Setup", async ({ page }) => {
   test.skip(!baseUrl || !password || !torrentPath, "Torplex URL, password, and a torrent fixture are required");
   test.setTimeout(180_000);

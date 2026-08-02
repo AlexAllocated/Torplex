@@ -96,6 +96,16 @@
     return result;
   }
 
+  async function responsePayload(response) {
+    const body = await response.text();
+    if (!body) return {};
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { error: body.trim() };
+    }
+  }
+
   async function runSearch() {
     if (!searchPrompt.trim() || !searchRightsConfirmed || searchRunning) return;
     searchRunning = true;
@@ -181,7 +191,7 @@
         if (item.file) data.set(`torrent:${item.clientId}`, item.file);
       }
       const response = await fetch('/api/torrents/bulk', { method: 'POST', body: data });
-      const result = await response.json();
+      const result = await responsePayload(response);
       if (!response.ok) throw new Error(result.error || 'Bulk add failed');
       dialogStatus = result.restartMessage || 'Queued';
       dialogMode = 'ready';
