@@ -9,6 +9,8 @@
   let searchPrompt = '';
   let searchRightsConfirmed = false;
   let searchRunning = false;
+  let searchController = null;
+  let activeSearchId = '';
   let searchProgress = [];
   let searchProposal = null;
   let selectedProposals = new Set();
@@ -115,11 +117,16 @@
     dialogStatus = 'Searching';
     dialogMode = 'busy';
     queueError = '';
+    const controller = new AbortController();
+    const searchId = `search-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+    searchController = controller;
+    activeSearchId = searchId;
     try {
       const response = await fetch('/api/torrent/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: searchPrompt.trim(), rightsConfirmed: true }),
+        body: JSON.stringify({ prompt: searchPrompt.trim(), rightsConfirmed: true, searchId }),
+        signal: controller.signal,
       });
       const result = await readNdjson(response, (message) => searchProgress = [...searchProgress, message]);
       searchProposal = result.proposal;
@@ -127,12 +134,42 @@
       dialogStatus = `${searchProposal.selections.length} proposed`;
       dialogMode = 'ready';
     } catch (caught) {
-      queueError = caught instanceof Error ? caught.message : String(caught);
-      dialogStatus = queueError;
-      dialogMode = 'error';
+      if (controller.signal.aborted) {
+        if (searchController === controller) {
+          searchProgress = [...searchProgress, 'Search cancelled'];
+          dialogStatus = 'Search cancelled';
+          dialogMode = 'idle';
+        }
+      } else {
+        queueError = caught instanceof Error ? caught.message : String(caught);
+        dialogStatus = queueError;
+        dialogMode = 'error';
+      }
     } finally {
-      searchRunning = false;
+      if (searchController === controller) {
+        searchController = null;
+        activeSearchId = '';
+        searchRunning = false;
+      }
     }
+  }
+
+  function cancelSearch() {
+    if (!searchController || !searchRunning) return;
+    const controller = searchController;
+    const searchId = activeSearchId;
+    searchController = null;
+    activeSearchId = '';
+    searchRunning = false;
+    searchProgress = [...searchProgress, 'Search cancelled'];
+    dialogStatus = 'Search cancelled';
+    dialogMode = 'idle';
+    void fetch('/api/torrent/search/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ searchId }),
+    }).catch(() => {});
+    controller.abort();
   }
 
   function toggleProposal(candidateId, checked) {
@@ -245,7 +282,11 @@
         </label>
         <div class="search-actions">
           <span class="small">Search does not add a torrent or download media.</span>
-          <button class="primary-button" type="button" disabled={!searchPrompt.trim() || !searchRightsConfirmed || searchRunning} on:click={runSearch}>{searchRunning ? 'Searching...' : 'Build proposal'}</button>
+          {#if searchRunning}
+            <button class="secondary-button" type="button" on:click={cancelSearch}>Cancel search</button>
+          {:else}
+            <button class="primary-button" type="button" disabled={!searchPrompt.trim() || !searchRightsConfirmed} on:click={runSearch}>Build proposal</button>
+          {/if}
         </div>
 
         {#if searchProgress.length}
@@ -270,6 +311,9 @@
               </label>
             {/each}
           </div>
+          {#if searchProposal.alreadyOwned?.length}
+            <details class="owned-results" open><summary>{searchProposal.alreadyOwned.length} existing title{searchProposal.alreadyOwned.length === 1 ? '' : 's'} skipped</summary>{#each searchProposal.alreadyOwned as entry}<div><strong>{entry.inventoryItem.title}{entry.inventoryItem.year ? ` (${entry.inventoryItem.year})` : ''}</strong><span>{entry.inventoryItem.source === 'plex' ? 'Already in Plex' : `Already ${entry.inventoryItem.status} in Torplex`}. {entry.reason}</span></div>{/each}</details>
+          {/if}
           {#if searchProposal.missing.length}
             <details class="missing-results"><summary>{searchProposal.missing.length} title{searchProposal.missing.length === 1 ? '' : 's'} need manual sourcing</summary>{#each searchProposal.missing as entry}<div><strong>{entry.work.title}</strong><span>{entry.reason}</span></div>{/each}</details>
           {/if}

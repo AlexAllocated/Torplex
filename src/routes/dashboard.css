@@ -885,7 +885,7 @@
       border-top: 1px solid rgba(150, 167, 190, .12);
       padding-top: 10px;
     }
-    .bulk-details > summary, .missing-results > summary {
+    .bulk-details > summary, .missing-results > summary, .owned-results > summary {
       color: #c8d4e1;
       cursor: pointer;
       font-size: 12px;
@@ -961,9 +961,12 @@
     .proposal-work strong, .proposal-release strong { overflow: hidden; color: #edf5fc; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .proposal-work span, .proposal-release span, .proposal-release small { color: var(--muted); font-size: 10px; line-height: 1.4; }
     .proposal-work span { text-transform: uppercase; }
-    .missing-results { padding: 10px 12px; border-left: 3px solid rgba(247, 198, 95, .62); background: rgba(247, 198, 95, .05); }
-    .missing-results div { display: grid; grid-template-columns: minmax(160px, .35fr) 1fr; gap: 10px; padding-top: 8px; color: var(--muted); font-size: 11px; }
+    .missing-results, .owned-results { padding: 10px 12px; }
+    .missing-results { border-left: 3px solid rgba(247, 198, 95, .62); background: rgba(247, 198, 95, .05); }
+    .owned-results { border-left: 3px solid rgba(83, 220, 177, .62); background: rgba(83, 220, 177, .05); }
+    .missing-results div, .owned-results div { display: grid; grid-template-columns: minmax(160px, .35fr) 1fr; gap: 10px; padding-top: 8px; color: var(--muted); font-size: 11px; }
     .missing-results strong { color: #f3e8ca; }
+    .owned-results strong { color: #baf4dd; }
     .proposal-actions { padding-top: 4px; }
     canvas {
       width: 100%;
@@ -1544,7 +1547,7 @@
       .bulk-workspace-head, .search-intro, .proposal-head, .search-actions { align-items: stretch; flex-direction: column; }
       .proposal-row { grid-template-columns: auto minmax(0, 1fr); }
       .proposal-release { grid-column: 2; }
-      .missing-results div { grid-template-columns: 1fr; }
+      .missing-results div, .owned-results div { grid-template-columns: 1fr; }
       .bulk-item-head { grid-template-columns: 28px minmax(0, 1fr); }
       .bulk-item-head .status-pill, .bulk-item-head .danger-button { grid-column: 2; grid-row: auto; justify-self: start; }
       .selection-actions { grid-column: 1 / -1; }

@@ -399,7 +399,33 @@ async function limitedResponseBytes(response: Response, maxBytes: number, tooLar
   return bytes;
 }
 
-async function fetchExternalSource(inputUrl: URL) {
+function cancellableTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function cancellationError() {
+  return new DOMException("Operation cancelled", "AbortError");
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(cancellationError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(cancellationError());
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); },
+    );
+  });
+}
+
+async function fetchExternalSource(inputUrl: URL, signal?: AbortSignal) {
   let url = inputUrl;
   for (let redirect = 0; redirect < 6; redirect += 1) {
     await assertFetchableSourceUrl(url);
@@ -411,7 +437,7 @@ async function fetchExternalSource(inputUrl: URL) {
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/x-bittorrent,*/*;q=0.8",
         "accept-language": "en-US,en;q=0.9",
       },
-      signal: AbortSignal.timeout(15_000),
+      signal: cancellableTimeoutSignal(signal, 15_000),
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -456,7 +482,7 @@ function extractTorrentSourceFromHtml(html: string, baseUrl: URL) {
   return null;
 }
 
-async function resolveSourceUrl(sourceUrl: string) {
+async function resolveSourceUrl(sourceUrl: string, signal?: AbortSignal) {
   let inputUrl: URL;
   try {
     inputUrl = new URL(sourceUrl);
@@ -464,7 +490,7 @@ async function resolveSourceUrl(sourceUrl: string) {
     throw new Error("URL is invalid");
   }
 
-  const fetched = await fetchExternalSource(inputUrl);
+  const fetched = await fetchExternalSource(inputUrl, signal);
   const { url, response } = fetched;
   if (!response.ok) throw new Error(sourceHttpError(response));
 
@@ -485,7 +511,7 @@ async function resolveSourceUrl(sourceUrl: string) {
   if (extracted.magnetUri) return { kind: "magnet" as const, magnetUri: extracted.magnetUri, sourceUrl, resolvedUrl: url.href };
   if (!extracted.torrentUrl) throw new Error("No .torrent link found on that page");
 
-  const torrent = await fetchExternalSource(extracted.torrentUrl);
+  const torrent = await fetchExternalSource(extracted.torrentUrl, signal);
   if (!torrent.response.ok) throw new Error(sourceHttpError(torrent.response).replace("URL returned", "Torrent link returned"));
   const bytes = await limitedResponseBytes(torrent.response, maxTorrentBytes, "Torrent file is too large");
   if (!bytes.length) throw new Error("Torrent file is empty");
@@ -524,21 +550,28 @@ function magnetMetadata(uri: string) {
   };
 }
 
-async function resolveMagnetTorrent(uri: string, hash: string, inactivityTimeoutSeconds = metadataTimeoutSeconds) {
+async function resolveMagnetTorrent(
+  uri: string,
+  hash: string,
+  inactivityTimeoutSeconds = metadataTimeoutSeconds,
+  signal?: AbortSignal,
+) {
   const normalizedHash = hash.toLowerCase();
   const metadataDir = join(root, "torrent-metadata", normalizedHash);
   const filename = "metadata.torrent";
   const torrentPath = join(metadataDir, filename);
   if (existsSync(torrentPath)) {
+    if (signal?.aborted) throw cancellationError();
     const bytes = new Uint8Array(readFileSync(torrentPath));
     if (bytes.length && bytes.length <= maxTorrentBytes) return { bytes, filename };
   }
   const pending = magnetMetadataResolutions.get(normalizedHash);
-  if (pending) return pending;
+  if (pending) return await waitWithSignal(pending, signal);
 
   const resolution = (async () => {
     await mkdir(metadataDir, { recursive: true });
     await new Promise<string>((resolve, reject) => {
+      if (signal?.aborted) return reject(cancellationError());
       const child = spawn("aria2c", [
         `--dir=${metadataDir}`,
         "--bt-metadata-only=true",
@@ -560,25 +593,36 @@ async function resolveMagnetTorrent(uri: string, hash: string, inactivityTimeout
         uri,
       ], { stdio: ["ignore", "pipe", "pipe"] });
       let log = "";
+      let settled = false;
       const collect = (chunk: Buffer) => {
         log = `${log}${chunk.toString("utf8")}`.slice(-16_000);
       };
       child.stdout.on("data", collect);
       child.stderr.on("data", collect);
       const timeout = setTimeout(() => child.kill("SIGTERM"), (inactivityTimeoutSeconds + 20) * 1000);
+      const onAbort = () => child.kill("SIGTERM");
+      signal?.addEventListener("abort", onAbort, { once: true });
       child.once("error", (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
         reject(error);
       });
-      child.once("close", (code, signal) => {
+      child.once("close", (code, childSignal) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
+        if (signal?.aborted) return reject(cancellationError());
         if (code === 0) resolve(log);
-        else if (code === 7 || signal === "SIGTERM") {
+        else if (code === 7 || childSignal === "SIGTERM") {
           reject(new Error(`No connected peer supplied this magnet's file list within ${inactivityTimeoutSeconds} seconds. The reported swarm may be stale; retry later or use another source.`));
         }
-        else reject(new Error(`aria2c metadata lookup ${signal ? `was stopped by ${signal}` : `exited ${code}`}${log ? `: ${log.trim().split("\n").at(-1)}` : ""}`));
+        else reject(new Error(`aria2c metadata lookup ${childSignal ? `was stopped by ${childSignal}` : `exited ${code}`}${log ? `: ${log.trim().split("\n").at(-1)}` : ""}`));
       });
     });
+    if (signal?.aborted) throw cancellationError();
     if (!existsSync(torrentPath)) {
       const resolvedFilename = (await readdir(metadataDir)).find((entry) => entry.toLowerCase().endsWith(".torrent"));
       if (!resolvedFilename) {
@@ -593,7 +637,7 @@ async function resolveMagnetTorrent(uri: string, hash: string, inactivityTimeout
   })();
   magnetMetadataResolutions.set(normalizedHash, resolution);
   try {
-    return await resolution;
+    return await waitWithSignal(resolution, signal);
   } finally {
     magnetMetadataResolutions.delete(normalizedHash);
   }
@@ -1380,11 +1424,11 @@ async function intakeSourceFromForm(form: FormData) {
 
 async function metadataForSource(
   source: Awaited<ReturnType<typeof intakeSourceFromForm>>,
-  options: { metadataTimeoutSeconds?: number } = {},
+  options: { metadataTimeoutSeconds?: number; signal?: AbortSignal } = {},
 ) {
   if (source.kind === "magnet") {
     const magnet = magnetMetadata(source.magnetUri);
-    const resolved = await resolveMagnetTorrent(source.magnetUri, magnet.hash, options.metadataTimeoutSeconds);
+    const resolved = await resolveMagnetTorrent(source.magnetUri, magnet.hash, options.metadataTimeoutSeconds, options.signal);
     return {
       metadata: { ...torrentMetadata(resolved.bytes, resolved.filename), magnetUri: source.magnetUri, hash: magnet.hash },
       filename: "",
@@ -1394,10 +1438,13 @@ async function metadataForSource(
   return { metadata: torrentMetadata(source.bytes, source.filename), filename: source.filename, magnetUri: "" };
 }
 
-export async function preflightTorrentSource(sourceUrl: string, options: { metadataTimeoutSeconds?: number } = {}) {
+export async function preflightTorrentSource(
+  sourceUrl: string,
+  options: { metadataTimeoutSeconds?: number; signal?: AbortSignal } = {},
+) {
   const source = sourceUrl.toLowerCase().startsWith("magnet:")
     ? { kind: "magnet" as const, magnetUri: sourceUrl }
-    : await resolveSourceUrl(sourceUrl);
+    : await resolveSourceUrl(sourceUrl, options.signal);
   const { metadata } = await metadataForSource(source, options);
   return {
     payloadName: metadata.payloadName,

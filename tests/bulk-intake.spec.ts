@@ -23,6 +23,10 @@ test("AI search proposals become independently planned bulk intake items", async
         proposal: {
           summary: "Two exact films found",
           works,
+          alreadyOwned: [{
+            inventoryItem: { id: "plex-movie-42", title: "Event Horizon", year: 1997, type: "movie", source: "plex", status: "in library" },
+            reason: "Excluded because it is already in Plex",
+          }],
           selections: works.map((work, index) => ({
             workId: work.id,
             candidateId: `candidate-${index}`,
@@ -147,6 +151,8 @@ test("AI search proposals become independently planned bulk intake items", async
   await page.getByLabel(/I will use these search results only/).check();
   await page.getByRole("button", { name: "Build proposal" }).click();
   await expect(page.locator(".proposal-row")).toHaveCount(2);
+  await expect(page.getByText("Event Horizon (1997)")).toBeVisible();
+  await expect(page.getByText("1 existing title skipped")).toBeVisible();
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-search-proposal.png", fullPage: false });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "Prepare 2 selected" })).toBeVisible();
@@ -163,4 +169,25 @@ test("AI search proposals become independently planned bulk intake items", async
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-bulk-intake.png", fullPage: false });
   await page.getByRole("button", { name: "Add 2 selected items" }).click();
   await expect.poll(() => bulkSubmitted).toBe(true);
+});
+
+test("an active AI search can be cancelled", async ({ page }) => {
+  test.skip(!baseUrl || !password, "Torplex URL and password are required");
+  await page.route("**/api/torrent/search", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await route.fulfill({ status: 200, contentType: "application/x-ndjson", body: "" }).catch(() => {});
+  });
+
+  await page.goto(new URL("/auth/login", baseUrl!).toString());
+  await page.getByLabel("Password").fill(password!);
+  await page.getByRole("button", { name: "Unlock" }).click();
+  await page.getByRole("button", { name: "Add Torrent" }).click();
+  await page.getByRole("tab", { name: "Find with AI" }).click();
+  await page.getByLabel("What do you want to find?").fill("Find ten science fiction horror films");
+  await page.getByLabel(/I will use these search results only/).check();
+  await page.getByRole("button", { name: "Build proposal" }).click();
+  await expect(page.getByRole("button", { name: "Cancel search" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel search" }).click();
+  await expect(page.getByText("Search cancelled").last()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Build proposal" })).toBeEnabled();
 });

@@ -2,12 +2,18 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { preflightTorrentSource } from "$lib/server/batch";
+import {
+  findLibraryMatch,
+  loadLibraryInventory,
+  type LibraryInventoryItem,
+} from "$lib/server/library-inventory";
 
 const defaultModel = "gpt-5.6-terra";
 const defaultMetadataCandidateLimit = 24;
 const defaultMetadataMaxCandidates = 200;
 const defaultVerifiedCandidateTarget = 4;
 const defaultMetadataSearchBudgetSeconds = 180;
+const defaultProviderFailureLimit = 3;
 const maxWorks = 40;
 const maxNovaOutputBytes = 6 * 1024 * 1024;
 
@@ -44,6 +50,7 @@ type TorrentPreflightMetadata = {
 export type SearchProposal = {
   summary: string;
   works: SearchWork[];
+  alreadyOwned: Array<{ inventoryItem: LibraryInventoryItem; reason: string }>;
   selections: Array<{
     workId: string;
     candidateId: string;
@@ -64,7 +71,7 @@ type Progress = (message: string) => void;
 const outlineSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "works"],
+  required: ["summary", "works", "excludedExisting"],
   properties: {
     summary: { type: "string" },
     works: {
@@ -81,6 +88,19 @@ const outlineSchema = {
           type: { type: "string", enum: ["movie", "show"] },
           searchQuery: { type: "string" },
           notes: { type: "string" },
+        },
+      },
+    },
+    excludedExisting: {
+      type: "array",
+      maxItems: maxWorks,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["inventoryId", "reason"],
+        properties: {
+          inventoryId: { type: "string" },
+          reason: { type: "string" },
         },
       },
     },
@@ -141,7 +161,7 @@ function searchConfig() {
     .filter((value) => /^[a-z0-9_]+$/.test(value));
   const timeout = Number.parseInt(process.env.TORPLEX_SEARCH_TIMEOUT_MS || "30000", 10);
   const concurrency = Number.parseInt(process.env.TORPLEX_SEARCH_CONCURRENCY || "2", 10);
-  const metadataTimeout = Number.parseInt(process.env.TORPLEX_SEARCH_METADATA_TIMEOUT_SECONDS || "45", 10);
+  const metadataTimeout = Number.parseInt(process.env.TORPLEX_SEARCH_METADATA_TIMEOUT_SECONDS || "20", 10);
   const metadataConcurrency = Number.parseInt(process.env.TORPLEX_SEARCH_METADATA_CONCURRENCY || "3", 10);
   const metadataCandidateLimit = Number.parseInt(
     process.env.TORPLEX_SEARCH_METADATA_CANDIDATE_LIMIT || String(defaultMetadataCandidateLimit),
@@ -159,6 +179,10 @@ function searchConfig() {
     process.env.TORPLEX_SEARCH_METADATA_BUDGET_SECONDS || String(defaultMetadataSearchBudgetSeconds),
     10,
   );
+  const providerFailureLimit = Number.parseInt(
+    process.env.TORPLEX_SEARCH_PROVIDER_FAILURE_LIMIT || String(defaultProviderFailureLimit),
+    10,
+  );
   const normalizedCandidateLimit = Number.isFinite(metadataCandidateLimit)
     ? Math.min(40, Math.max(4, metadataCandidateLimit))
     : defaultMetadataCandidateLimit;
@@ -172,7 +196,7 @@ function searchConfig() {
     plugins: [...new Set(plugins)],
     timeoutMs: Number.isFinite(timeout) ? Math.min(120000, Math.max(5000, timeout)) : 30000,
     concurrency: Number.isFinite(concurrency) ? Math.min(4, Math.max(1, concurrency)) : 2,
-    metadataTimeoutSeconds: Number.isFinite(metadataTimeout) ? Math.min(120, Math.max(15, metadataTimeout)) : 45,
+    metadataTimeoutSeconds: Number.isFinite(metadataTimeout) ? Math.min(120, Math.max(10, metadataTimeout)) : 20,
     metadataConcurrency: Number.isFinite(metadataConcurrency) ? Math.min(6, Math.max(1, metadataConcurrency)) : 3,
     metadataCandidateLimit: normalizedCandidateLimit,
     metadataMaxCandidates: normalizedMaxCandidates,
@@ -182,6 +206,9 @@ function searchConfig() {
     metadataSearchBudgetSeconds: Number.isFinite(metadataSearchBudgetSeconds)
       ? Math.min(600, Math.max(30, metadataSearchBudgetSeconds))
       : defaultMetadataSearchBudgetSeconds,
+    providerFailureLimit: Number.isFinite(providerFailureLimit)
+      ? Math.min(10, Math.max(1, providerFailureLimit))
+      : defaultProviderFailureLimit,
     model: process.env.TORPLEX_AI_MODEL || defaultModel,
   };
 }
@@ -211,7 +238,22 @@ function outputText(payload: Record<string, unknown>) {
   return "";
 }
 
-async function structuredResponse(name: string, schema: Record<string, unknown>, developer: string, input: unknown) {
+function abortError() {
+  return new DOMException("Search cancelled", "AbortError");
+}
+
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+async function structuredResponse(
+  name: string,
+  schema: Record<string, unknown>,
+  developer: string,
+  input: unknown,
+  signal?: AbortSignal,
+) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("AI search is not configured");
   const model = process.env.TORPLEX_AI_MODEL || defaultModel;
@@ -235,7 +277,7 @@ async function structuredResponse(name: string, schema: Record<string, unknown>,
         format: { type: "json_schema", name, strict: true, schema },
       },
     }),
-    signal: AbortSignal.timeout(120000),
+    signal: requestSignal(signal, 120_000),
   });
   const payload = await response.json() as Record<string, unknown>;
   if (!response.ok) {
@@ -247,18 +289,21 @@ async function structuredResponse(name: string, schema: Record<string, unknown>,
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-async function createOutline(prompt: string) {
+async function createOutline(prompt: string, inventory: LibraryInventoryItem[], signal?: AbortSignal) {
   const payload = await structuredResponse(
     "torplex_search_outline",
     outlineSchema,
     `You are the catalog planner for Torplex, a private media intake tool. This request only identifies the exact works implied by a user's prompt; it does not download anything. Torplex separately requires rights attestations before search and execution.
 
-Resolve the request into one canonical entry per movie or TV series. Follow scope boundaries exactly, include years when known, distinguish remakes and similarly named works, and do not invent works. For franchises, reason carefully about the requested start/end point, medium, continuity, and exclusions. Make searchQuery concise and include the canonical title and year when known. IDs must be short lowercase slugs and unique.`,
-    { prompt, maximumWorks: maxWorks },
+Resolve the request into one canonical entry per movie or TV series. Follow scope boundaries exactly, include years when known, distinguish remakes and similarly named works, and do not invent works. For franchises, reason carefully about the requested start/end point, medium, continuity, and exclusions. Make searchQuery concise and include the canonical title and year when known. IDs must be short lowercase slugs and unique.
+
+The supplied existingInventory is authoritative for content already in Plex or already queued in Torplex. Do not include an existing title in works when its title, year, and media type match. Report it in excludedExisting using the supplied inventory ID. Never infer ownership beyond this list. For ranked or count-based requests such as "top 10," return the full requested number of non-existing works by continuing farther down the ranking; excluded titles do not count toward the requested total.`,
+    { prompt, maximumWorks: maxWorks, existingInventory: inventory },
+    signal,
   );
   const rawWorks = Array.isArray(payload.works) ? payload.works : [];
   const seen = new Set<string>();
-  const works: SearchWork[] = rawWorks.map((entry, index) => {
+  const proposedWorks: SearchWork[] = rawWorks.map((entry, index) => {
     const work = entry as Record<string, unknown>;
     let id = cleanId(String(work.id || work.title || ""), `work-${index + 1}`);
     while (seen.has(id)) id = `${id}-${index + 1}`;
@@ -273,8 +318,28 @@ Resolve the request into one canonical entry per movie or TV series. Follow scop
       notes: String(work.notes || "").trim(),
     };
   }).filter((work) => work.title && work.searchQuery).slice(0, maxWorks);
-  if (!works.length) throw new Error("The request did not resolve to any searchable titles");
-  return { summary: String(payload.summary || "").trim(), works };
+  const inventoryById = new Map(inventory.map((item) => [item.id, item]));
+  const alreadyOwned = new Map<string, { inventoryItem: LibraryInventoryItem; reason: string }>();
+  for (const entry of Array.isArray(payload.excludedExisting) ? payload.excludedExisting : []) {
+    const excluded = entry as Record<string, unknown>;
+    const inventoryItem = inventoryById.get(String(excluded.inventoryId || ""));
+    if (!inventoryItem) continue;
+    alreadyOwned.set(inventoryItem.id, {
+      inventoryItem,
+      reason: String(excluded.reason || "Already present in Plex or Torplex").trim(),
+    });
+  }
+  const works = proposedWorks.filter((work) => {
+    const match = findLibraryMatch(work, inventory);
+    if (!match) return true;
+    alreadyOwned.set(match.id, {
+      inventoryItem: match,
+      reason: `${work.title}${work.year ? ` (${work.year})` : ""} is already ${match.status}`,
+    });
+    return false;
+  });
+  if (!works.length && !alreadyOwned.size) throw new Error("The request did not resolve to any searchable titles");
+  return { summary: String(payload.summary || "").trim(), works, alreadyOwned: [...alreadyOwned.values()] };
 }
 
 function providerName(url: string) {
@@ -321,10 +386,11 @@ function parseNovaOutput(workId: string, output: string): SearchCandidate[] {
   return [...deduped.values()];
 }
 
-function runNova(work: SearchWork): Promise<SearchCandidate[]> {
+function runNova(work: SearchWork, signal?: AbortSignal): Promise<SearchCandidate[]> {
   const config = searchConfig();
   if (!config.available) throw new Error("Torrent search is not configured");
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError());
     const child = spawn(config.python, ["-I", config.script, config.plugins.join(","), work.type === "show" ? "tv" : "movies", work.searchQuery], {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -337,7 +403,10 @@ function runNova(work: SearchWork): Promise<SearchCandidate[]> {
     let stdout = "";
     let stderr = "";
     let exceeded = false;
+    let settled = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), config.timeoutMs);
+    const onAbort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -352,14 +421,21 @@ function runNova(work: SearchWork): Promise<SearchCandidate[]> {
       if (stderr.length < 16000) stderr += chunk;
     });
     child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       reject(error);
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, childSignal) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (signal?.aborted) return reject(abortError());
       if (exceeded) return reject(new Error(`Search output exceeded ${maxNovaOutputBytes} bytes`));
       const candidates = parseNovaOutput(work.id, stdout);
-      if (!candidates.length && code && signal !== "SIGKILL") {
+      if (!candidates.length && code && childSignal !== "SIGKILL") {
         return reject(new Error(stderr.trim().split("\n").at(-1) || `Nova exited with code ${code}`));
       }
       resolve(candidates);
@@ -417,6 +493,7 @@ async function preflightCandidateGroups(
   candidateGroups: SearchCandidate[][],
   config: ReturnType<typeof searchConfig>,
   onProgress: Progress,
+  signal?: AbortSignal,
 ) {
   const workMap = new Map(works.map((work) => [work.id, work]));
   const verified = new Map<string, TorrentPreflightMetadata>();
@@ -425,6 +502,8 @@ async function preflightCandidateGroups(
   const extensionAnnounced = new Set<string>();
   const startedAt = new Map<string, number>();
   const exhausted = new Set<string>();
+  const providerFailures = new Map<string, number>();
+  const blockedProviders = new Set<string>();
   const schedule: SearchCandidate[] = [];
   const maxDepth = Math.max(0, ...candidateGroups.map((group) => group.length));
   for (let depth = 0; depth < maxDepth; depth += 1) {
@@ -435,9 +514,19 @@ async function preflightCandidateGroups(
 
   let cursor = 0;
   while (cursor < schedule.length) {
+    if (signal?.aborted) throw abortError();
     const batch: Array<{ candidate: SearchCandidate; timeoutSeconds: number }> = [];
     while (cursor < schedule.length && batch.length < config.metadataConcurrency) {
       const candidate = schedule[cursor++];
+      const providerKey = `${candidate.workId}:${candidate.provider}`;
+      if ((providerFailures.get(providerKey) || 0) >= config.providerFailureLimit) {
+        if (!blockedProviders.has(providerKey)) {
+          blockedProviders.add(providerKey);
+          const work = workMap.get(candidate.workId);
+          onProgress(`${work?.title || candidate.name}: skipping remaining ${candidate.provider} sources after repeated metadata failures`);
+        }
+        continue;
+      }
       if ((verifiedCounts.get(candidate.workId) || 0) >= config.verifiedCandidateTarget) continue;
       const workStartedAt = startedAt.get(candidate.workId) || Date.now();
       startedAt.set(candidate.workId, workStartedAt);
@@ -470,9 +559,11 @@ async function preflightCandidateGroups(
       try {
         const metadata = await preflightTorrentSource(candidate.sourceUrl, {
           metadataTimeoutSeconds: timeoutSeconds,
+          signal,
         });
         return { candidate, metadata, error: "" };
       } catch (error) {
+        if (signal?.aborted) throw abortError();
         return {
           candidate,
           metadata: null,
@@ -487,6 +578,8 @@ async function preflightCandidateGroups(
         verifiedCounts.set(result.candidate.workId, (verifiedCounts.get(result.candidate.workId) || 0) + 1);
         onProgress(`${work?.title || result.candidate.name}: verified ${result.candidate.provider} manifest (${result.metadata.fileCount} files)`);
       } else {
+        const providerKey = `${result.candidate.workId}:${result.candidate.provider}`;
+        providerFailures.set(providerKey, (providerFailures.get(providerKey) || 0) + 1);
         const reason = result.error.includes("No connected peer supplied")
           ? "no live peer supplied metadata"
           : result.error;
@@ -508,19 +601,44 @@ async function preflightCandidateGroups(
   return verified;
 }
 
-export async function createTorrentSearchProposal(prompt: string, onProgress: Progress = () => {}) {
+export async function createTorrentSearchProposal(
+  prompt: string,
+  onProgress: Progress = () => {},
+  signal?: AbortSignal,
+) {
   const config = searchConfig();
   if (!config.available) throw new Error("Torrent search needs OPENAI_API_KEY, TORPLEX_NOVA_SCRIPT, and TORPLEX_SEARCH_PLUGINS");
   const normalizedPrompt = prompt.trim();
   if (normalizedPrompt.length < 4) throw new Error("Describe the movies or shows you want to find");
   if (normalizedPrompt.length > 2000) throw new Error("Search prompt is too long");
+  if (signal?.aborted) throw abortError();
+  onProgress("Reading the Plex library and Torplex queue");
+  const inventory = await loadLibraryInventory(signal);
+  if (signal?.aborted) throw abortError();
+  for (const warning of inventory.warnings) onProgress(`Library inventory warning: ${warning}`);
+  onProgress(`Found ${inventory.items.length} existing movie and show title${inventory.items.length === 1 ? "" : "s"}`);
   onProgress(`Resolving the request with ${config.model}`);
-  const outline = await createOutline(normalizedPrompt);
+  const outline = await createOutline(normalizedPrompt, inventory.items, signal);
+  if (outline.alreadyOwned.length) {
+    onProgress(`Skipped ${outline.alreadyOwned.length} title${outline.alreadyOwned.length === 1 ? "" : "s"} already in Plex or Torplex`);
+  }
   onProgress(`Identified ${outline.works.length} exact title${outline.works.length === 1 ? "" : "s"}`);
+  if (!outline.works.length) {
+    return {
+      summary: outline.summary || "Everything requested is already in Plex or Torplex",
+      works: [],
+      alreadyOwned: outline.alreadyOwned,
+      selections: [],
+      missing: [],
+      providers: config.plugins,
+      model: config.model,
+    } satisfies SearchProposal;
+  }
   const candidateGroups = await mapWithConcurrency(outline.works, config.concurrency, async (work, index) => {
+    if (signal?.aborted) throw abortError();
     onProgress(`Searching ${work.title}${work.year ? ` (${work.year})` : ""} - ${index + 1} of ${outline.works.length}`);
     try {
-      const found = await runNova(work);
+      const found = await runNova(work, signal);
       const ranked = found.sort((left, right) => candidateScore(work, right) - candidateScore(work, left));
       const shortlisted = providerDiverseShortlist(ranked, config.metadataMaxCandidates);
       const providers = new Set(shortlisted.map((candidate) => candidate.provider)).size;
@@ -528,6 +646,7 @@ export async function createTorrentSearchProposal(prompt: string, onProgress: Pr
       onProgress(`${work.title}: ${found.length} result${found.length === 1 ? "" : "s"}; checking ${initial} initial candidates across ${providers} provider${providers === 1 ? "" : "s"}, with ${Math.max(0, shortlisted.length - initial)} adaptive fallbacks`);
       return shortlisted;
     } catch (error) {
+      if (signal?.aborted) throw abortError();
       onProgress(`${work.title}: search provider error - ${error instanceof Error ? error.message : String(error)}`);
       return [];
     }
@@ -535,7 +654,7 @@ export async function createTorrentSearchProposal(prompt: string, onProgress: Pr
   const candidates = candidateGroups.flat();
   if (!candidates.length) throw new Error("The configured search providers returned no candidates");
   onProgress(`Retrieving manifests before model selection; reported seed counts are treated as untrusted`);
-  const verifiedMetadata = await preflightCandidateGroups(outline.works, candidateGroups, config, onProgress);
+  const verifiedMetadata = await preflightCandidateGroups(outline.works, candidateGroups, config, onProgress, signal);
   const verifiedCandidates = candidates.filter((candidate) => verifiedMetadata.has(candidate.id));
   onProgress(`${verifiedCandidates.length} candidate manifest${verifiedCandidates.length === 1 ? "" : "s"} verified; comparing usable releases`);
   const decision = await structuredResponse(
@@ -552,6 +671,7 @@ Choose at most one primary supplied candidate for each requested work and rank u
         manifest: verifiedMetadata.get(candidate.id),
       })),
     },
+    signal,
   );
   const workMap = new Map(outline.works.map((work) => [work.id, work]));
   const candidateMap = new Map(verifiedCandidates.map((candidate) => [candidate.id, candidate]));
@@ -604,6 +724,7 @@ Choose at most one primary supplied candidate for each requested work and rank u
   return {
     summary: String(decision.summary || outline.summary || "Search proposal ready"),
     works: outline.works,
+    alreadyOwned: outline.alreadyOwned,
     selections,
     missing,
     providers: config.plugins,
