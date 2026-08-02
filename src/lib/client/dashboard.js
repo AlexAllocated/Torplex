@@ -96,9 +96,11 @@ const shapePalette = [
 const defaultPhosphorRgb = '74, 222, 128';
 let phosphorCache = { theme: '', rgb: defaultPhosphorRgb };
 let latestItems = [];
+let latestStatusData = null;
 let queueDragId = '';
 let queueOrderSaving = false;
 const queueReflowAnimations = new WeakMap();
+let consoleClockTimer = 0;
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -172,6 +174,22 @@ function tweenElementNumber(el, target, formatter, duration) {
 
 function setText(el, value) {
   if (el && el.textContent !== String(value)) el.textContent = String(value);
+}
+
+function updateConsoleClock() {
+  setText(document.getElementById('consoleClock'), new Intl.DateTimeFormat([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date()));
+}
+
+function setConsoleOutput(message, mode = 'ready') {
+  const output = document.getElementById('commandOutput');
+  if (!output) return;
+  output.dataset.mode = mode;
+  setText(output, message);
 }
 
 function moveQueueRow(container, dragged, insertionPoint) {
@@ -291,6 +309,9 @@ function renderSwarmMap(swarm) {
       .filter(Boolean)
       .join(' · ');
   }
+  setText(document.getElementById('commandHost'), 'torplex@' + String(swarmMap.origin.label || 'pi').toLowerCase() + ':~$');
+  setText(document.getElementById('consoleVpn'), swarmMap.vpn?.verified ? 'LOCKED' : swarmMap.vpn?.connected ? 'ROUTED' : 'OFFLINE');
+  setText(document.getElementById('consolePeers'), String(swarm?.activeCount || 0).padStart(3, '0'));
   routeStatus.textContent = peers.length
     ? 'aria2 SD:' + (swarm.aria2Seeders ?? 0) + ' CN:' + (swarm.aria2Connections ?? 0) +
       ' - active ' + (swarm.activeCount ?? 0) +
@@ -1202,7 +1223,7 @@ function renderItems(items) {
       return a.index - b.index;
     })
     .map((entry) => entry.item);
-  orderedItems.forEach((item) => {
+  orderedItems.forEach((item, queueIndex) => {
     const rowId = rowIdFor(item.id);
     seen.add(rowId);
     let row = document.getElementById(rowId);
@@ -1219,6 +1240,7 @@ function renderItems(items) {
     const statusClass = statusClassFor(item.status);
     row.className = 'item ' + statusClass + (item.status === 'pending' ? ' reorderable' : '') + (queueDragId === item.id ? ' is-dragging' : '');
     row.dataset.itemId = item.id;
+    row.dataset.address = 'Q/' + String(queueIndex + 1).padStart(3, '0');
     setText(row.querySelector('[data-role="title"]'), item.title);
     setText(row.querySelector('[data-role="size"]'), fmt(item.totalBytes));
     const visual = itemVisual(item.id);
@@ -2320,7 +2342,78 @@ function initQueueControls() {
   });
 }
 
+function initCommandConsole() {
+  const form = document.getElementById('commandForm');
+  const input = document.getElementById('commandInput');
+  if (!form || !input) return;
+
+  const execute = (rawCommand) => {
+    const [name = '', ...args] = String(rawCommand || '').trim().toLowerCase().split(/\s+/);
+    const argument = args.join(' ');
+    if (!name) return;
+    if (name === 'help' || name === '?') {
+      setConsoleOutput('STATUS  MAP [ON|OFF]  THEME <COLOR>  ADD  CLEAR  FULLSCREEN  LOGOUT');
+      return;
+    }
+    if (name === 'status') {
+      const active = Number(latestStatusData?.totals?.activeItems || 0);
+      const peers = Number(latestStatusData?.swarm?.activeCount || 0);
+      const rate = formatPeerRate(Number(latestStatusData?.totals?.activeRateBytesPerSecond || 0));
+      setConsoleOutput('STATE ' + (active ? 'XFER/' + active : 'IDLE') + '  PEERS ' + peers + '  I/O ' + rate);
+      return;
+    }
+    if (name === 'map') {
+      const nextCollapsed = argument === 'on' ? false : argument === 'off' ? true : !mapCollapsed;
+      setMapCollapsed(nextCollapsed);
+      setConsoleOutput('SWARM ATLAS ' + (nextCollapsed ? 'SUSPENDED' : 'ONLINE'));
+      return;
+    }
+    if (name === 'theme') {
+      const themeButton = document.querySelector('.crt-theme-dot[data-theme="' + CSS.escape(argument) + '"]');
+      if (!themeButton) {
+        setConsoleOutput('THEME NOT FOUND: ' + (argument || 'MISSING'), 'error');
+        return;
+      }
+      themeButton.click();
+      setConsoleOutput('PHOSPHOR TUBE: ' + argument.toUpperCase());
+      return;
+    }
+    if (name === 'add') {
+      document.getElementById('openIntake')?.click();
+      setConsoleOutput('OPENING INTAKE WORKSPACE');
+      return;
+    }
+    if (name === 'clear') {
+      document.getElementById('clearCompleted')?.click();
+      return;
+    }
+    if (name === 'fullscreen') {
+      if (mapCollapsed) setMapCollapsed(false);
+      requestAnimationFrame(() => document.getElementById('fullscreenMap')?.click());
+      setConsoleOutput('SWARM ATLAS FULLSCREEN');
+      return;
+    }
+    if (name === 'logout') {
+      document.getElementById('logoutButton')?.click();
+      return;
+    }
+    setConsoleOutput('COMMAND NOT FOUND: ' + name.toUpperCase(), 'error');
+  };
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    execute(input.value);
+    input.value = '';
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') input.blur();
+  });
+  updateConsoleClock();
+  consoleClockTimer = window.setInterval(updateConsoleClock, 1000);
+}
+
 function render(data) {
+  latestStatusData = data;
   const active = activeItem(data);
   const activeCount = data.totals.activeItems || 0;
   const activePercent = activeCount ? data.totals.activePercent || 0 : data.totals.completedItems === data.totals.totalItems ? 100 : 0;
@@ -2337,6 +2430,8 @@ function render(data) {
 
   document.getElementById('connection').textContent = 'Live';
   document.getElementById('subtitle').textContent = activeTitle;
+  setText(document.getElementById('consoleState'), activeCount ? 'XFER/' + String(activeCount).padStart(2, '0') : 'IDLE');
+  setText(document.getElementById('consoleRate'), activeRateLabel);
   tweenNumber('batchPercent', data.totals.percent, (value) => value.toFixed(1) + '%', 800);
   document.getElementById('batchText').textContent = data.totals.completedItems + ' of ' + data.totals.totalItems + ' complete';
   tweenNumber('activePercent', activePercent, (value) => Math.round(value) + '%', 800);
@@ -2397,6 +2492,7 @@ initMapCollapse();
 initMapControls();
 initIntakeNavigation();
 initQueueControls();
+initCommandConsole();
 refreshSession();
 window.addEventListener('torplex:refresh', () => refreshFallback().catch(() => {}));
 window.addEventListener('scroll', () => {

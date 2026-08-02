@@ -25,6 +25,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     sessionStorage.setItem('torplex:e2e-initialized', '1');
     localStorage.setItem('torplex:crt-theme', 'purple');
     localStorage.removeItem('torplex:map-collapsed');
+    localStorage.removeItem('torplex:crt-muted');
   });
   await page.goto(baseUrl!);
   await expect(page.locator('.theme-dot')).toHaveCount(7);
@@ -36,6 +37,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await powerOn(page);
+  await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
   await expect(page).toHaveTitle("Torplex");
   await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
@@ -97,6 +99,18 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   expect(font.family).toContain("BigBlue TerminalPlus");
   if (requirePeers) await expect(page.locator("#routeStatus")).toContainText("mapped", { timeout: 20_000 });
   else await expect(page.locator("#routeStatus")).not.toContainText("Waiting for peer telemetry", { timeout: 20_000 });
+  await expect(page.locator('.register-address')).toHaveCount(5);
+  await expect(page.locator('#consoleClock')).not.toHaveText('--:--:--');
+  await expect(page.locator('#consoleState')).not.toHaveText('BOOT');
+  await page.locator('#commandInput').fill('status');
+  await page.locator('#commandInput').press('Enter');
+  await expect(page.locator('#commandOutput')).toContainText('STATE');
+  await page.locator('#commandInput').fill('map off');
+  await page.locator('#commandInput').press('Enter');
+  await expect(page.locator('.transfer-map')).toHaveAttribute('data-map-rendering', 'paused');
+  await page.locator('#commandInput').fill('map on');
+  await page.locator('#commandInput').press('Enter');
+  await expect(page.locator('.transfer-map')).toHaveAttribute('data-map-rendering', 'running');
 
   const status = await page.evaluate(async () => {
     const response = await fetch("/api/status");
@@ -210,7 +224,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(lastQueueItem).toBeVisible();
   await expect(lastQueueItem.locator('[data-role="title"]')).toBeVisible();
   await expect(lastQueueItem.locator('[data-role="title"]')).not.toBeEmpty();
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(1_200);
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-queue-bottom.png` });
   await page.addStyleTag({ content: "#items .item { content-visibility: visible !important; }" });
   const overlappingRows = await page.locator("#items .item").evaluateAll((rows) => rows.flatMap((row) => {

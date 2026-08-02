@@ -29,20 +29,40 @@
     </div>
   </header>
 
+  <section class="operator-console" aria-label="Torplex operator console">
+    <div class="console-register" aria-hidden="true">SYS/00</div>
+    <form id="commandForm" class="command-line" autocomplete="off">
+      <label id="commandHost" for="commandInput">torplex@pi:~$</label>
+      <input id="commandInput" name="command" type="text" aria-label="Torplex command" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder=" " />
+      <span class="command-cursor" aria-hidden="true">_</span>
+    </form>
+    <output id="commandOutput" class="console-output" aria-live="polite">MONITOR LINK READY</output>
+    <dl class="telemetry-tape">
+      <div><dt>STATE</dt><dd id="consoleState">BOOT</dd></div>
+      <div><dt>VPN</dt><dd id="consoleVpn">CHECK</dd></div>
+      <div><dt>PEERS</dt><dd id="consolePeers">000</dd></div>
+      <div><dt>I/O</dt><dd id="consoleRate">0 B/s</dd></div>
+      <div><dt>LOCAL</dt><dd id="consoleClock">--:--:--</dd></div>
+    </dl>
+  </section>
+
   <section class="dashboard">
     <div class="gauge-stack">
       <div class="gauges">
         <div class="gauge">
+          <span class="register-address" aria-hidden="true">REG/01</span>
           <div class="label">Batch</div>
           <div class="ring" id="batchRing"><span id="batchPercent">0%</span></div>
           <div class="small" id="batchText">0 of 0 complete</div>
         </div>
         <div class="gauge">
+          <span class="register-address" aria-hidden="true">REG/02</span>
           <div class="label">Active Item</div>
           <div class="ring" id="activeRing" style="--ring-color: var(--amber);"><span id="activePercent">0%</span></div>
           <div class="small" id="activeText">No active item yet</div>
         </div>
         <div class="gauge">
+          <span class="register-address" aria-hidden="true">REG/03</span>
           <div class="label">Disk Free</div>
           <div class="ring" id="diskRing" style="--ring-color: var(--green);"><span id="diskPercent">0%</span></div>
           <div class="small" id="diskText">Checking disk...</div>
@@ -59,7 +79,7 @@
 
   <section class="transfer-map world-panel">
     <div class="map-title">
-      <div class="label">Swarm Atlas</div>
+      <div class="map-heading"><div class="label">Swarm Atlas</div><span class="register-address" aria-hidden="true">MAP/04</span></div>
       <div class="map-status-group">
         <div id="vpnStatus" class="vpn-status checking" title="Checking VPN route">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -112,7 +132,7 @@
 
   <section>
     <div class="queue-head">
-      <div class="label">Queue</div>
+      <div class="queue-heading"><div class="label">Queue</div><span class="register-address" aria-hidden="true">QUEUE/05</span></div>
       <button id="clearCompleted" class="secondary-button queue-action" type="button" disabled>Clear Completed</button>
     </div>
     <div id="items" class="items"></div>

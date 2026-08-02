@@ -12,6 +12,8 @@ const TYPE_SELECTOR = [
   '[data-role="eta"]',
   '.map-progress-title',
   '.map-progress-meta span',
+  '.console-output',
+  '.register-address',
   '.status-pill',
   '.step-title',
   '.dialog-title',
@@ -41,6 +43,7 @@ export function startCrtTerminal() {
   let themeSwapTimer = 0;
   let activeTyping = 0;
   let lastKeyClickAt = 0;
+  let audioUnlocked = false;
   let activated = false;
   let destroyed = false;
   let muted = localStorage.getItem('torplex:crt-muted') === '1';
@@ -59,10 +62,18 @@ export function startCrtTerminal() {
   body.classList.toggle('crt-audio-muted', muted);
 
   const setAudioUi = () => {
+    const state = muted ? 'muted' : audioContext?.state === 'running' ? 'running' : 'armed';
+    body.dataset.audioState = state;
     if (!audioToggle) return;
-    audioToggle.setAttribute('aria-label', muted ? 'Enable terminal audio' : 'Mute terminal audio');
-    audioToggle.title = muted ? 'Enable terminal audio' : 'Mute terminal audio';
-    audioToggle.setAttribute('aria-pressed', String(muted));
+    const label = state === 'muted'
+      ? 'Enable terminal audio'
+      : state === 'running'
+        ? 'Mute terminal audio'
+        : 'Terminal audio armed - interact to enable';
+    audioToggle.setAttribute('aria-label', label);
+    audioToggle.title = label;
+    audioToggle.setAttribute('aria-pressed', String(state === 'running'));
+    audioToggle.dataset.audioState = state;
   };
   setAudioUi();
 
@@ -73,10 +84,13 @@ export function startCrtTerminal() {
       if (!AudioContextClass) return null;
       audioContext = new AudioContextClass();
       audioOutput = audioContext.createGain();
-      audioOutput.gain.value = .78;
+      audioOutput.gain.value = .9;
       audioOutput.connect(audioContext.destination);
+      audioContext.addEventListener('statechange', setAudioUi);
     }
     if (audioContext.state !== 'running') await audioContext.resume().catch(() => {});
+    if (audioContext.state === 'running') audioUnlocked = true;
+    setAudioUi();
     return audioContext.state === 'running' ? audioContext : null;
   };
 
@@ -102,7 +116,7 @@ export function startCrtTerminal() {
     filter.frequency.exponentialRampToValueAtTime(760, now + duration);
     filter.Q.value = .7;
     noiseGain.gain.setValueAtTime(.0001, now);
-    noiseGain.gain.exponentialRampToValueAtTime(.055, now + .09);
+    noiseGain.gain.exponentialRampToValueAtTime(.07, now + .09);
     noiseGain.gain.exponentialRampToValueAtTime(.0001, now + duration);
     noise.connect(filter).connect(noiseGain).connect(audioOutput);
     noise.start(now);
@@ -115,7 +129,7 @@ export function startCrtTerminal() {
     beam.frequency.exponentialRampToValueAtTime(118, now + .34);
     beam.frequency.exponentialRampToValueAtTime(76, now + duration);
     beamGain.gain.setValueAtTime(.0001, now);
-    beamGain.gain.exponentialRampToValueAtTime(.025, now + .12);
+    beamGain.gain.exponentialRampToValueAtTime(.034, now + .12);
     beamGain.gain.exponentialRampToValueAtTime(.0001, now + duration);
     beam.connect(beamGain).connect(audioOutput);
     beam.start(now);
@@ -153,7 +167,7 @@ export function startCrtTerminal() {
     const highGain = context.createGain();
     const lfo = context.createOscillator();
     const lfoDepth = context.createGain();
-    master.gain.value = .0032;
+    master.gain.value = .006;
     low.type = 'sine';
     low.frequency.value = 72;
     high.type = 'triangle';
@@ -185,7 +199,7 @@ export function startCrtTerminal() {
     const gain = context.createGain();
     oscillator.type = Math.random() > .45 ? 'square' : 'triangle';
     oscillator.frequency.value = 760 + Math.random() * 520;
-    gain.gain.setValueAtTime(.008 + Math.random() * .004, now);
+    gain.gain.setValueAtTime(.018 + Math.random() * .008, now);
     gain.gain.exponentialRampToValueAtTime(.0001, now + .022 + Math.random() * .012);
     oscillator.connect(gain).connect(audioOutput);
     oscillator.start(now);
@@ -371,6 +385,19 @@ export function startCrtTerminal() {
     window.addEventListener('keydown', onBootKey, { once: true });
   }
 
+  const unlockAudio = async () => {
+    if (muted || audioContext?.state === 'running') return;
+    const context = await ensureAudio();
+    if (context && activated) void startHum();
+  };
+  const onUiActivate = (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest('button, a, [role="button"]')) return;
+    void playKeyClick();
+  };
+  document.addEventListener('pointerdown', unlockAudio, { capture: true });
+  document.addEventListener('keydown', unlockAudio, { capture: true });
+  document.addEventListener('click', onUiActivate);
+
   const toggleAudio = async () => {
     muted = !muted;
     localStorage.setItem('torplex:crt-muted', muted ? '1' : '0');
@@ -379,6 +406,8 @@ export function startCrtTerminal() {
     if (muted) {
       stopHum();
       if (audioContext?.state === 'running') await audioContext.suspend().catch(() => {});
+      audioUnlocked = false;
+      setAudioUi();
     } else {
       await ensureAudio();
       void playKeyClick();
@@ -389,8 +418,11 @@ export function startCrtTerminal() {
 
   const onVisibility = () => {
     if (!audioContext || muted) return;
-    if (document.hidden) audioContext.suspend().catch(() => {});
-    else audioContext.resume().then(() => startHum()).catch(() => {});
+    if (document.hidden) audioContext.suspend().then(setAudioUi).catch(() => {});
+    else if (audioUnlocked) audioContext.resume().then(() => {
+      setAudioUi();
+      return startHum();
+    }).catch(() => {});
   };
   document.addEventListener('visibilitychange', onVisibility);
 
@@ -400,6 +432,9 @@ export function startCrtTerminal() {
     boot?.removeEventListener('click', activate);
     window.removeEventListener('keydown', onBootKey);
     audioToggle?.removeEventListener('click', toggleAudio);
+    document.removeEventListener('pointerdown', unlockAudio, { capture: true });
+    document.removeEventListener('keydown', unlockAudio, { capture: true });
+    document.removeEventListener('click', onUiActivate);
     themeButtons.forEach((button) => button.removeEventListener('click', onThemeClick));
     window.removeEventListener('storage', onThemeStorage);
     window.removeEventListener('torplex:terminal-key', onTerminalKey);
@@ -410,6 +445,7 @@ export function startCrtTerminal() {
     if (themeTimer) clearTimeout(themeTimer);
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
     stopHum();
+    audioContext?.removeEventListener('statechange', setAudioUi);
     audioContext?.close().catch(() => {});
   };
 }
