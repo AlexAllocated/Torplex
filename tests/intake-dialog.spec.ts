@@ -13,8 +13,8 @@ async function unlock(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Unlock" }).click();
   await page.getByRole("button", { name: "Add Torrent" }).click();
   await expect(page).toHaveURL(/\/add$/);
-  await page.locator("#crtBootTrigger").click();
   await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
+  await expect(page.locator("#crtBootTrigger")).toBeHidden();
 }
 
 test("torrent intake uses normal document scrolling on mobile", async ({ page }) => {

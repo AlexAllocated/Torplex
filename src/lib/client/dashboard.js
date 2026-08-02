@@ -1,3 +1,5 @@
+import { goto } from '$app/navigation';
+
 export function startDashboard() {
 function fmt(bytes) {
   if (!Number.isFinite(bytes)) return "";
@@ -1954,10 +1956,10 @@ function initIntakeNavigation() {
   open?.addEventListener('click', () => {
     if (!sessionState.configured) return;
     if (!sessionState.authenticated) {
-      window.location.href = sessionState.loginUrl || '/auth/login';
+      void goto(sessionState.loginUrl || '/auth/login');
       return;
     }
-    window.location.href = '/add';
+    void goto('/add');
   });
 }
 
