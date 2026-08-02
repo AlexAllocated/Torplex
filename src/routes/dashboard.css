@@ -1344,8 +1344,13 @@
     }
     .title-copy {
       display: flex;
-      flex-direction: column;
+      align-items: baseline;
+      gap: 7px;
       min-width: 0;
+    }
+    .title-copy [data-role="size"] {
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .drag-handle {
       position: absolute;
@@ -1394,6 +1399,7 @@
       .item { transition-duration: 0s; }
     }
     .title-copy [data-role="title"] {
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1513,7 +1519,21 @@
       .bulk-item-head { grid-template-columns: 32px minmax(0, 1fr) auto; }
       .bulk-item-head .status-pill { grid-column: 2; grid-row: 2; justify-self: start; }
       .bulk-item-head .danger-button { grid-column: 3; grid-row: 1 / span 2; }
-      .item { grid-template-columns: 1fr; }
+      .item {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-areas:
+          "title status actions"
+          "progress rate eta";
+        gap: 12px 16px;
+        min-height: 112px;
+      }
+      .item-title { grid-area: title; }
+      .item-status { grid-area: status; }
+      .item-progress { grid-area: progress; }
+      .item-rate { grid-area: rate; }
+      .item-eta { grid-area: eta; }
+      .item-actions { grid-area: actions; }
+      .title-copy { flex-wrap: wrap; }
       .title-copy [data-role="title"] { white-space: normal; }
     }
     @media (max-width: 720px) {
@@ -1533,4 +1553,70 @@
       .intake-actions { align-items: stretch; flex-direction: column; }
       .gauges, .metric-grid, .summary-strip { grid-template-columns: 1fr; }
       .gauge { min-height: 174px; }
+      .items { gap: 8px; margin-top: 12px; }
+      .item {
+        grid-template-columns: minmax(0, 1fr) minmax(58px, auto) auto;
+        grid-template-areas:
+          "title title status"
+          "progress progress progress"
+          "rate eta actions";
+        gap: 10px 12px;
+        min-height: 0;
+        padding: 12px;
+      }
+      .item.reorderable { padding-left: 48px; }
+      .item-title { align-self: start; }
+      .title-copy {
+        column-gap: 7px;
+        row-gap: 2px;
+      }
+      .title-copy [data-role="title"] {
+        font-size: 14px;
+        line-height: 1.25;
+      }
+      .title-copy [data-role="size"] { font-size: 10px; }
+      .torrent-marker {
+        width: 12px;
+        height: 12px;
+        margin-top: 2px;
+      }
+      .item-status { align-self: start; }
+      .chip {
+        min-width: 0;
+        padding: 5px 8px;
+        font-size: 10px;
+      }
+      .item-progress [data-role="progress-label"] {
+        font-size: 13px;
+        line-height: 1;
+      }
+      .item-bar { height: 8px; margin-top: 6px; }
+      .item-progress [data-role="detail"] {
+        margin-top: 3px;
+        font-size: 10px;
+      }
+      .item-stat {
+        min-width: 0;
+        align-self: end;
+      }
+      .item-stat .label { font-size: 9px; }
+      .item-stat [data-role="rate"],
+      .item-stat [data-role="eta"] {
+        margin-top: 2px;
+        overflow: hidden;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .item-actions {
+        align-self: end;
+        justify-self: end;
+      }
+      .item-actions .danger-button {
+        min-height: 40px;
+        padding: 7px 9px;
+        font-size: 11px;
+      }
+      .drag-handle { width: 36px; }
     }

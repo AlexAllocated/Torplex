@@ -793,11 +793,11 @@ function renderItems(items) {
   const priority = { active: 0, organizing: 0, pending: 1, failed: 2, completed: 3 };
   const rowMarkup =
     '<button data-role="drag-handle" class="drag-handle" type="button" aria-label="Drag to reprioritize" title="Drag to reprioritize"><span aria-hidden="true"></span></button>' +
-    '<div class="title"><span data-role="torrent-marker" class="torrent-marker"></span><div class="title-copy"><span data-role="title"></span><div class="mono" data-role="size"></div></div></div>' +
-    '<div><span data-role="status" class="chip"></span></div>' +
-    '<div><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
-    '<div><div class="label">Rate</div><div data-role="rate"></div></div>' +
-    '<div><div class="label">ETA</div><div data-role="eta"></div></div>' +
+    '<div class="title item-title"><span data-role="torrent-marker" class="torrent-marker"></span><div class="title-copy"><span data-role="title"></span><span class="mono" data-role="size"></span></div></div>' +
+    '<div class="item-status"><span data-role="status" class="chip"></span></div>' +
+    '<div class="item-progress"><div data-role="progress-label"></div><div class="item-bar"><div data-role="fill" class="item-fill"></div></div><div class="mono" data-role="detail"></div></div>' +
+    '<div class="item-stat item-rate"><div class="label">Rate</div><div data-role="rate"></div></div>' +
+    '<div class="item-stat item-eta"><div class="label">ETA</div><div data-role="eta"></div></div>' +
     '<div class="item-actions"><button data-role="remove" class="danger-button" type="button">Remove</button></div>';
   const orderedItems = items
     .map((item, index) => ({ item, index }))
