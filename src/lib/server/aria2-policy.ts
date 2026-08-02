@@ -13,6 +13,7 @@ export function aria2NetworkPolicyArgs(
 ) {
   const requireVpn = enabled(environment.TORPLEX_REQUIRE_VPN, true);
   const vpnInterface = (environment.TORPLEX_VPN_INTERFACE ?? "").trim();
+  const vpnDns = (environment.TORPLEX_VPN_DNS ?? "").trim();
 
   if (requireVpn && !vpnInterface) {
     throw new Error(
@@ -29,5 +30,6 @@ export function aria2NetworkPolicyArgs(
     "--max-upload-limit=1",
     "--disable-ipv6=true",
     ...(vpnInterface ? [`--interface=${vpnInterface}`] : []),
+    ...(vpnDns ? [`--async-dns-server=${vpnDns}`] : []),
   ];
 }

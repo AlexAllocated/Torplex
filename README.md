@@ -118,6 +118,7 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `ARIA2_CHECK_INTEGRITY` | disabled | Set to `true`, `yes`, or `1` to hash existing partial data before resuming. Recommended after an unclean shutdown or storage disconnect. |
 | `TORPLEX_REQUIRE_VPN` | `true` | Fail closed before starting torrent payload or magnet-metadata networking unless a VPN interface is configured. Set to `false` only as an intentional opt-out. |
 | `TORPLEX_VPN_INTERFACE` | empty | Required interface name used for every aria2 torrent socket, such as `wg-torplex`. Torplex refuses to start torrent networking if the interface is absent. |
+| `TORPLEX_VPN_DNS` | empty | Optional VPN-provided DNS resolver passed directly to aria2, such as Mullvad's `10.64.0.1`, to keep tracker lookups off the LAN resolver. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
 | `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Fixed maximum simultaneous torrent jobs when adaptive scheduling is disabled. |
 | `ADAPTIVE_CONCURRENCY` | `false` | Dynamically open download slots based on aggregate ingress and measured block-device write activity. |

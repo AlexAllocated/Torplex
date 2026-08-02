@@ -12,13 +12,17 @@ describe("aria2 torrent network policy", () => {
   });
 
   test("binds aria2 and prevents post-completion seeding", () => {
-    expect(aria2NetworkPolicyArgs({ TORPLEX_VPN_INTERFACE: "wg-torplex" }, ["lo", "wg-torplex"]))
+    expect(aria2NetworkPolicyArgs({
+      TORPLEX_VPN_INTERFACE: "wg-torplex",
+      TORPLEX_VPN_DNS: "10.64.0.1",
+    }, ["lo", "wg-torplex"]))
       .toEqual([
         "--seed-time=0",
         "--bt-hash-check-seed=false",
         "--max-upload-limit=1",
         "--disable-ipv6=true",
         "--interface=wg-torplex",
+        "--async-dns-server=10.64.0.1",
       ]);
   });
 
