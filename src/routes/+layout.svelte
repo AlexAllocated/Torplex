@@ -11,6 +11,15 @@
   {@render children()}
 </div>
 
+<div id="crtThemeSwitcher" class="crt-theme-switcher" role="group" aria-label="Terminal phosphor color">
+  <button class="crt-theme-dot" type="button" data-theme="red" aria-label="Red phosphor" title="Red phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="orange" aria-label="Orange phosphor" title="Orange phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="yellow" aria-label="Yellow phosphor" title="Yellow phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="green" aria-label="Green phosphor" title="Green phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="blue" aria-label="Blue phosphor" title="Blue phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="purple" aria-label="Purple phosphor" title="Purple phosphor"></button>
+</div>
+
 <button id="crtBootTrigger" class="crt-boot-screen" type="button" aria-label="Power on Torplex terminal">
   <span class="crt-boot-mark" aria-hidden="true">TORPLEX // CRT-01</span>
   <span class="crt-boot-prompt">PRESS ANY KEY TO POWER ON<span class="terminal-cursor" aria-hidden="true">_</span></span>

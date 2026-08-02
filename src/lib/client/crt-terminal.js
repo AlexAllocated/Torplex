@@ -12,7 +12,6 @@ const TYPE_SELECTOR = [
   '[data-role="eta"]',
   '.map-progress-title',
   '.map-progress-meta span',
-  '.map-peer-label span',
   '.status-pill',
   '.step-title',
   '.dialog-title',
@@ -20,12 +19,16 @@ const TYPE_SELECTOR = [
   'a.secondary-button',
 ].join(',');
 
+const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purple']);
+const CRT_THEME_STORAGE_KEY = 'torplex:crt-theme';
+
 const hasReadableText = (node) => Boolean(node?.textContent?.trim());
 
 export function startCrtTerminal() {
   const body = document.body;
   const boot = document.getElementById('crtBootTrigger');
   const audioToggle = document.getElementById('crtAudioToggle');
+  const themeButtons = Array.from(document.querySelectorAll('.crt-theme-dot'));
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const revealed = new WeakSet();
   const pendingTargets = new Set();
@@ -33,14 +36,22 @@ export function startCrtTerminal() {
   let audioOutput = null;
   let humNodes = null;
   let typingTimer = 0;
+  let themeTimer = 0;
   let activeTyping = 0;
   let lastKeyClickAt = 0;
   let activated = false;
   let destroyed = false;
   let muted = localStorage.getItem('torplex:crt-muted') === '1';
   const warmStart = sessionStorage.getItem('torplex:crt-powered') === '1';
+  const storedTheme = localStorage.getItem(CRT_THEME_STORAGE_KEY);
+  let activeTheme = CRT_THEMES.has(storedTheme) ? storedTheme : 'green';
 
-  body.classList.add(warmStart ? 'crt-powered-on' : 'crt-awaiting-power');
+  document.documentElement.dataset.crtTheme = activeTheme;
+  themeButtons.forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.theme === activeTheme));
+  });
+
+  body.classList.add(warmStart ? 'crt-powering-on' : 'crt-awaiting-power');
   body.classList.toggle('crt-audio-muted', muted);
 
   const setAudioUi = () => {
@@ -177,6 +188,44 @@ export function startCrtTerminal() {
     oscillator.stop(now + .04);
   };
 
+  const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
+    if (!CRT_THEMES.has(theme)) return;
+    const changed = activeTheme !== theme;
+    activeTheme = theme;
+    document.documentElement.dataset.crtTheme = theme;
+    themeButtons.forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.theme === theme));
+    });
+    if (persist) localStorage.setItem(CRT_THEME_STORAGE_KEY, theme);
+    if (changed && animate && !reducedMotion) {
+      if (themeTimer) clearTimeout(themeTimer);
+      body.classList.remove('crt-theme-switching');
+      void body.offsetWidth;
+      body.classList.add('crt-theme-switching');
+      themeTimer = window.setTimeout(() => {
+        themeTimer = 0;
+        body.classList.remove('crt-theme-switching');
+      }, 220);
+    }
+    if (changed && sound) void playKeyClick();
+  };
+
+  const onThemeClick = (event) => {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLElement)) return;
+    applyTheme(button.dataset.theme);
+  };
+  themeButtons.forEach((button) => button.addEventListener('click', onThemeClick));
+
+  const onThemeStorage = (event) => {
+    if (event.key === CRT_THEME_STORAGE_KEY && CRT_THEMES.has(event.newValue)) {
+      applyTheme(event.newValue, { persist: false, sound: false });
+    }
+  };
+  window.addEventListener('storage', onThemeStorage);
+  const onTerminalKey = () => void playKeyClick();
+  window.addEventListener('torplex:terminal-key', onTerminalKey);
+
   const runTypingMotor = () => {
     if (typingTimer || activeTyping <= 0 || muted) return;
     const tick = () => {
@@ -285,8 +334,14 @@ export function startCrtTerminal() {
   };
   if (warmStart) {
     activated = true;
-    requestAnimationFrame(() => queueTargets(document.body));
-    if (!muted) void startHum();
+    if (boot) boot.setAttribute('aria-hidden', 'true');
+    window.setTimeout(() => {
+      if (destroyed) return;
+      body.classList.remove('crt-powering-on');
+      body.classList.add('crt-powered-on');
+      queueTargets(document.body);
+      if (!muted) void startHum();
+    }, reducedMotion ? 0 : 720);
   } else {
     boot?.addEventListener('click', activate);
     window.addEventListener('keydown', onBootKey, { once: true });
@@ -321,10 +376,14 @@ export function startCrtTerminal() {
     boot?.removeEventListener('click', activate);
     window.removeEventListener('keydown', onBootKey);
     audioToggle?.removeEventListener('click', toggleAudio);
+    themeButtons.forEach((button) => button.removeEventListener('click', onThemeClick));
+    window.removeEventListener('storage', onThemeStorage);
+    window.removeEventListener('torplex:terminal-key', onTerminalKey);
     document.removeEventListener('animationstart', onAnimationStart);
     document.removeEventListener('animationend', onAnimationEnd);
     document.removeEventListener('visibilitychange', onVisibility);
     if (typingTimer) clearTimeout(typingTimer);
+    if (themeTimer) clearTimeout(themeTimer);
     stopHum();
     audioContext?.close().catch(() => {});
   };

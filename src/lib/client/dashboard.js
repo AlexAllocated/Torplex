@@ -35,6 +35,7 @@ const swarmMap = {
   peers: [],
   displayPeers: [],
   labelNodes: new Map(),
+  labelTyping: new WeakMap(),
   raf: 0,
   lastFrame: 0,
   updatedAt: '',
@@ -90,10 +91,8 @@ const shapePalette = [
   'ring',
   'plus',
 ];
-const phosphorRgb = '74, 222, 128';
-const phosphorColor = '#4ade80';
-const nodeLimeRgb = phosphorRgb;
-const tunnelLimeRgb = phosphorRgb;
+const defaultPhosphorRgb = '74, 222, 128';
+let phosphorCache = { theme: '', rgb: defaultPhosphorRgb };
 let latestItems = [];
 let queueDragId = '';
 let queueOrderSaving = false;
@@ -594,6 +593,21 @@ function hashString(value) {
   return hash >>> 0;
 }
 
+function currentPhosphorRgb() {
+  const theme = document.documentElement.dataset.crtTheme || 'green';
+  if (phosphorCache.theme === theme) return phosphorCache.rgb;
+  const channels = getComputedStyle(document.documentElement)
+    .getPropertyValue('--phosphor-main')
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  const rgb = channels.length === 3 && channels.every(Number.isFinite)
+    ? channels.join(', ')
+    : defaultPhosphorRgb;
+  phosphorCache = { theme, rgb };
+  return rgb;
+}
+
 function itemVisual(itemId) {
   const id = String(itemId || 'unknown');
   const activeIds = latestItems
@@ -602,15 +616,13 @@ function itemVisual(itemId) {
   const activeIndex = activeIds.indexOf(id);
   if (activeIndex >= 0) {
     return {
-      color: phosphorColor,
-      rgb: phosphorRgb,
+      rgb: currentPhosphorRgb(),
       shape: shapePalette[activeIndex % shapePalette.length],
     };
   }
   const hash = hashString(id);
   return {
-    color: phosphorColor,
-    rgb: phosphorRgb,
+    rgb: currentPhosphorRgb(),
     shape: shapePalette[hash % shapePalette.length],
   };
 }
@@ -801,6 +813,31 @@ function syncDisplayPeers(peers) {
   swarmMap.displayPeers = next;
 }
 
+function animatePeerLabelDetail(node, expanded) {
+  const detail = node.querySelector('.map-peer-detail');
+  if (!detail) return;
+  let state = swarmMap.labelTyping.get(node);
+  if (!state) {
+    state = { timer: 0, target: '' };
+    swarmMap.labelTyping.set(node, state);
+  }
+  node.dataset.expanded = String(expanded);
+  state.target = expanded ? detail.dataset.fullText || '' : '';
+  if (state.timer) clearTimeout(state.timer);
+  const step = () => {
+    state.timer = 0;
+    if (!node.isConnected) return;
+    const current = detail.textContent || '';
+    if (current === state.target) return;
+    detail.textContent = state.target.startsWith(current)
+      ? state.target.slice(0, current.length + 1)
+      : current.slice(0, -1);
+    window.dispatchEvent(new CustomEvent('torplex:terminal-key'));
+    state.timer = window.setTimeout(step, state.target ? 24 : 13);
+  };
+  step();
+}
+
 function renderMapPeerLabels(width, height) {
   const layer = document.getElementById('mapPeerLabels');
   if (!layer) return;
@@ -833,13 +870,25 @@ function renderMapPeerLabels(width, height) {
       const detail = document.createElement('span');
       detail.className = 'map-peer-detail';
       node.append(marker, img, text, detail);
+      node.dataset.expanded = 'false';
+      node.addEventListener('pointerenter', (event) => {
+        if (event.pointerType !== 'touch') animatePeerLabelDetail(node, true);
+      });
+      node.addEventListener('pointerleave', (event) => {
+        if (event.pointerType !== 'touch') animatePeerLabelDetail(node, false);
+      });
+      node.addEventListener('pointerup', (event) => {
+        if (event.pointerType === 'touch') {
+          animatePeerLabelDetail(node, node.dataset.expanded !== 'true');
+        }
+      });
       layer.appendChild(node);
       swarmMap.labelNodes.set(key, node);
     }
     const rateText = formatPeerRate(item.peer.receiveRateBps);
     const text = item.peer.label ? item.peer.label + ' ' + rateText : rateText;
     const country = item.peer.country || item.peer.countryCode || 'Unknown country';
-    const detailText = (item.peer.label ? item.peer.label + ' - ' : '') + country + ' - ' + item.peer.ip + ':' + item.peer.port;
+    const detailText = ' / ' + country + ' / ' + item.peer.ip + ':' + item.peer.port;
     const flagUrl = flagUrlForCountry(item.peer.countryCode);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
     const marker = node.querySelector('.map-peer-marker');
@@ -855,7 +904,13 @@ function renderMapPeerLabels(width, height) {
     }
     if (marker) marker.dataset.shape = visual.shape;
     if (span) span.textContent = text;
-    if (detail) detail.textContent = detailText;
+    if (detail) {
+      const detailChanged = detail.dataset.fullText !== detailText;
+      detail.dataset.fullText = detailText;
+      if (node.dataset.expanded === 'true' && detailChanged) {
+        animatePeerLabelDetail(node, true);
+      }
+    }
     const collapsedWidth = Math.min(176, Math.max(98, 42 + (flagUrl ? 28 : 0) + text.length * 7.2));
     const labelHeight = 24;
     const point = cameraPoint({ x: item.x, y: item.y });
@@ -899,6 +954,8 @@ function renderMapPeerLabels(width, height) {
   });
   swarmMap.labelNodes.forEach((node, key) => {
     if (!seen.has(key)) {
+      const state = swarmMap.labelTyping.get(node);
+      if (state?.timer) clearTimeout(state.timer);
       node.remove();
       swarmMap.labelNodes.delete(key);
     }
@@ -930,14 +987,15 @@ function drawWorldFrame(now) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
+  const themeRgb = currentPhosphorRgb();
   const vignette = ctx.createRadialGradient(width / 2, height / 2, height * .1, width / 2, height / 2, width * .62);
-  vignette.addColorStop(0, 'rgba(87, 224, 194, .10)');
+  vignette.addColorStop(0, 'rgba(' + themeRgb + ', .10)');
   vignette.addColorStop(.55, 'rgba(7, 12, 19, 0)');
   vignette.addColorStop(1, 'rgba(7, 12, 19, .40)');
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.strokeStyle = 'rgba(150, 167, 190, .13)';
+  ctx.strokeStyle = 'rgba(' + themeRgb + ', .13)';
   ctx.lineWidth = 1;
   for (let lon = -150; lon <= 150; lon += 30) {
     const x = projectWorldScreen(0, lon, width, height).x;
@@ -966,9 +1024,9 @@ function drawWorldFrame(now) {
   const relay = relayWorld ? cameraPoint(relayWorld) : null;
   const routeTarget = relay || origin;
   const nodePulse = pulseForSpeed(now, totalIngestBps);
-  const nodeColor = nodeLimeRgb;
+  const nodeColor = themeRgb;
   const nodeRadius = 4.5 * (1 + nodePulse.value);
-  const tunnelRgb = tunnelLimeRgb;
+  const tunnelRgb = themeRgb;
 
   if (relay) {
     const tunnelStart = { x: origin.x, y: origin.y };
@@ -1058,14 +1116,14 @@ function drawWorldFrame(now) {
     if (item.peer.infrastructure) {
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, outerRadius + 3, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(' + nodeLimeRgb + ', ' + (.9 * alpha) + ')';
+      ctx.strokeStyle = 'rgba(' + themeRgb + ', ' + (.9 * alpha) + ')';
       ctx.lineWidth = 1.6;
       ctx.stroke();
     }
   });
   if (relay) {
     const relayPulse = pulseForSpeed(now, totalIngestBps, Math.PI);
-    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, tunnelRgb, swarmMap.relay.label, '165, 195, 255', true);
+    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, tunnelRgb, swarmMap.relay.label, themeRgb, true);
   }
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);

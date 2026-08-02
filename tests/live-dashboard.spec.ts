@@ -20,10 +20,35 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(baseUrl!);
+  await expect(page.locator('.theme-dot')).toHaveCount(6);
+  await page.getByRole('button', { name: 'Purple phosphor' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await powerOn(page);
   await expect(page).toHaveTitle("Torplex");
+  await expect(page.locator('.crt-theme-dot')).toHaveCount(6);
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
+  const themes = {
+    red: '248 72 72',
+    orange: '251 146 60',
+    yellow: '250 204 21',
+    green: '74 222 128',
+    blue: '59 130 246',
+    purple: '168 85 247',
+  };
+  for (const [theme, expectedRgb] of Object.entries(themes)) {
+    await page.locator(`.crt-theme-dot[data-theme="${theme}"]`).click();
+    await expect(page.locator('html')).toHaveAttribute('data-crt-theme', theme);
+    const rgb = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--phosphor-main').trim());
+    expect(rgb).toBe(expectedRgb);
+  }
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
+  await expect(page.locator('body')).toHaveClass(/crt-powering-on/);
+  await expect(page.locator('body')).toHaveClass(/crt-powered-on/);
+  await page.locator('.crt-theme-dot[data-theme="green"]').click();
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'green');
   const font = await page.evaluate(async () => {
     await document.fonts.ready;
     return {
@@ -87,6 +112,16 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   });
   await expect.poll(() => paintedSamples("#worldMapRaster"), { timeout: 15_000 }).toBeGreaterThan(100);
   await expect.poll(() => paintedSamples("#worldCanvas"), { timeout: 15_000 }).toBeGreaterThan(100);
+  if (requirePeers) {
+    const peerLabel = page.locator('.map-peer-label').first();
+    await expect(peerLabel).toBeVisible({ timeout: 15_000 });
+    const transitionProperty = await peerLabel.evaluate((label) => getComputedStyle(label).transitionProperty);
+    expect(transitionProperty).not.toContain('max-width');
+    await peerLabel.hover();
+    await expect.poll(async () => (await peerLabel.locator('.map-peer-detail').textContent())?.length || 0).toBeGreaterThan(8);
+    await page.mouse.move(0, 0);
+    await expect.poll(async () => await peerLabel.locator('.map-peer-detail').textContent()).toBe('');
+  }
 
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-desktop.png` });
   const firstPendingItem = page.locator("#items .item.pending").first();
@@ -174,6 +209,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.locator("#fullscreenMap").click();
   await expect(mapFrame).toHaveClass(/pseudo-fullscreen/);
   await expect(page.locator("body")).toHaveClass(/map-fullscreen-open/);
+  await expect(page.locator('.crt-theme-switcher')).toBeHidden();
   await expect(page.locator("#fullscreenMap")).toHaveAttribute("aria-label", "Exit fullscreen map");
   const fullscreenGeometry = await mapFrame.evaluate((frame) => {
     const frameRect = frame.getBoundingClientRect();
