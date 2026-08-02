@@ -16,8 +16,9 @@
   <button class="crt-theme-dot" type="button" data-theme="orange" aria-label="Orange phosphor" title="Orange phosphor"></button>
   <button class="crt-theme-dot" type="button" data-theme="yellow" aria-label="Yellow phosphor" title="Yellow phosphor"></button>
   <button class="crt-theme-dot" type="button" data-theme="green" aria-label="Green phosphor" title="Green phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="cyan" aria-label="Cyan phosphor" title="Cyan phosphor"></button>
   <button class="crt-theme-dot" type="button" data-theme="blue" aria-label="Blue phosphor" title="Blue phosphor"></button>
-  <button class="crt-theme-dot" type="button" data-theme="purple" aria-label="Purple phosphor" title="Purple phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="magenta" aria-label="Magenta phosphor" title="Magenta phosphor"></button>
 </div>
 
 <button id="crtBootTrigger" class="crt-boot-screen" type="button" aria-label="Power on Torplex terminal">

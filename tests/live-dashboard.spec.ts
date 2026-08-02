@@ -19,23 +19,28 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   test.skip(!baseUrl || !password, "TORPLEX_E2E_URL and TORPLEX_E2E_PASSWORD are required");
 
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.addInitScript(() => localStorage.setItem('torplex:crt-theme', 'purple'));
   await page.goto(baseUrl!);
-  await expect(page.locator('.theme-dot')).toHaveCount(6);
-  await page.getByRole('button', { name: 'Purple phosphor' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
+  await expect(page.locator('.theme-dot')).toHaveCount(7);
+  expect(await page.locator('.theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
+    'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta',
+  ]);
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
+  await expect(page.getByRole('button', { name: 'Magenta phosphor' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await powerOn(page);
   await expect(page).toHaveTitle("Torplex");
-  await expect(page.locator('.crt-theme-dot')).toHaveCount(6);
-  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
+  await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   const themes = {
     red: '248 72 72',
     orange: '251 146 60',
     yellow: '250 204 21',
     green: '74 222 128',
+    cyan: '34 211 238',
     blue: '59 130 246',
-    purple: '168 85 247',
+    magenta: '245 62 200',
   };
   for (const [theme, expectedRgb] of Object.entries(themes)) {
     await page.locator(`.crt-theme-dot[data-theme="${theme}"]`).click();
@@ -43,8 +48,15 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     const rgb = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--phosphor-main').trim());
     expect(rgb).toBe(expectedRgb);
   }
+  await page.locator('.crt-theme-dot[data-theme="green"]').click();
+  await page.waitForTimeout(280);
+  await page.locator('.crt-theme-dot[data-theme="magenta"]').click();
+  await page.waitForTimeout(320);
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
+  expect(await page.locator('#vpnStatus').evaluate((element) => getComputedStyle(element).color)).toBe('rgb(253, 232, 247)');
+  expect(await page.locator('#fullscreenMap').evaluate((element) => getComputedStyle(element).borderColor)).toContain('245, 62, 200');
   await page.reload();
-  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'purple');
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   await expect(page.locator('body')).toHaveClass(/crt-powering-on/);
   await expect(page.locator('body')).toHaveClass(/crt-powered-on/);
   await page.locator('.crt-theme-dot[data-theme="green"]').click();

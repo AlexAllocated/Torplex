@@ -55,10 +55,15 @@ function loginPage(message = "") {
         --phosphor-deep: 37 99 235; --phosphor-main: 59 130 246; --phosphor-soft: 147 197 253;
         --phosphor-text: 191 219 254; --phosphor-bright: 219 234 254;
       }
-      :root[data-crt-theme="purple"] {
-        --phosphor-screen: 18 5 28; --phosphor-black: 7 0 12; --phosphor-shadow: 70 20 105;
-        --phosphor-deep: 126 34 206; --phosphor-main: 168 85 247; --phosphor-soft: 216 180 254;
-        --phosphor-text: 233 213 255; --phosphor-bright: 243 232 255;
+      :root[data-crt-theme="cyan"] {
+        --phosphor-screen: 2 21 27; --phosphor-black: 0 8 11; --phosphor-shadow: 8 78 92;
+        --phosphor-deep: 8 145 178; --phosphor-main: 34 211 238; --phosphor-soft: 103 232 249;
+        --phosphor-text: 165 243 252; --phosphor-bright: 207 250 254;
+      }
+      :root[data-crt-theme="magenta"] {
+        --phosphor-screen: 26 3 21; --phosphor-black: 11 0 8; --phosphor-shadow: 99 17 79;
+        --phosphor-deep: 190 24 141; --phosphor-main: 245 62 200; --phosphor-soft: 249 120 217;
+        --phosphor-text: 251 182 228; --phosphor-bright: 253 232 247;
       }
       body {
         color: rgb(var(--phosphor-text));
@@ -83,8 +88,9 @@ function loginPage(message = "") {
       .theme-dot[data-theme="orange"] { --theme-swatch: #fb923c; }
       .theme-dot[data-theme="yellow"] { --theme-swatch: #facc15; }
       .theme-dot[data-theme="green"] { --theme-swatch: #4ade80; }
+      .theme-dot[data-theme="cyan"] { --theme-swatch: #22d3ee; }
       .theme-dot[data-theme="blue"] { --theme-swatch: #3b82f6; }
-      .theme-dot[data-theme="purple"] { --theme-swatch: #a855f7; }
+      .theme-dot[data-theme="magenta"] { --theme-swatch: #f53ec8; }
     </style>
   </head>
   <body>
@@ -93,8 +99,9 @@ function loginPage(message = "") {
       <button class="theme-dot" type="button" data-theme="orange" aria-label="Orange phosphor"></button>
       <button class="theme-dot" type="button" data-theme="yellow" aria-label="Yellow phosphor"></button>
       <button class="theme-dot" type="button" data-theme="green" aria-label="Green phosphor"></button>
+      <button class="theme-dot" type="button" data-theme="cyan" aria-label="Cyan phosphor"></button>
       <button class="theme-dot" type="button" data-theme="blue" aria-label="Blue phosphor"></button>
-      <button class="theme-dot" type="button" data-theme="purple" aria-label="Purple phosphor"></button>
+      <button class="theme-dot" type="button" data-theme="magenta" aria-label="Magenta phosphor"></button>
     </div>
     <form id="login-form" method="post" action="/auth/login">
       <h1>Torplex</h1>
@@ -108,9 +115,10 @@ function loginPage(message = "") {
       const form = document.getElementById("login-form");
       const error = document.getElementById("login-error");
       const button = form.querySelector("button");
-      const themes = new Set(["red", "orange", "yellow", "green", "blue", "purple"]);
+      const themes = new Set(["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]);
       const themeButtons = Array.from(document.querySelectorAll(".theme-dot"));
       const applyTheme = (theme) => {
+        if (theme === "purple") theme = "magenta";
         const selected = themes.has(theme) ? theme : "green";
         document.documentElement.dataset.crtTheme = selected;
         localStorage.setItem("torplex:crt-theme", selected);

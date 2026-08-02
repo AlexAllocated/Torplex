@@ -19,8 +19,9 @@ const TYPE_SELECTOR = [
   'a.secondary-button',
 ].join(',');
 
-const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purple']);
+const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta']);
 const CRT_THEME_STORAGE_KEY = 'torplex:crt-theme';
+const normalizeTheme = (theme) => theme === 'purple' ? 'magenta' : theme;
 
 const hasReadableText = (node) => Boolean(node?.textContent?.trim());
 
@@ -43,10 +44,11 @@ export function startCrtTerminal() {
   let destroyed = false;
   let muted = localStorage.getItem('torplex:crt-muted') === '1';
   const warmStart = sessionStorage.getItem('torplex:crt-powered') === '1';
-  const storedTheme = localStorage.getItem(CRT_THEME_STORAGE_KEY);
+  const storedTheme = normalizeTheme(localStorage.getItem(CRT_THEME_STORAGE_KEY));
   let activeTheme = CRT_THEMES.has(storedTheme) ? storedTheme : 'green';
 
   document.documentElement.dataset.crtTheme = activeTheme;
+  localStorage.setItem(CRT_THEME_STORAGE_KEY, activeTheme);
   themeButtons.forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.theme === activeTheme));
   });
@@ -189,6 +191,7 @@ export function startCrtTerminal() {
   };
 
   const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
+    theme = normalizeTheme(theme);
     if (!CRT_THEMES.has(theme)) return;
     const changed = activeTheme !== theme;
     activeTheme = theme;
@@ -218,8 +221,9 @@ export function startCrtTerminal() {
   themeButtons.forEach((button) => button.addEventListener('click', onThemeClick));
 
   const onThemeStorage = (event) => {
-    if (event.key === CRT_THEME_STORAGE_KEY && CRT_THEMES.has(event.newValue)) {
-      applyTheme(event.newValue, { persist: false, sound: false });
+    const theme = normalizeTheme(event.newValue);
+    if (event.key === CRT_THEME_STORAGE_KEY && CRT_THEMES.has(theme)) {
+      applyTheme(theme, { persist: false, sound: false });
     }
   };
   window.addEventListener('storage', onThemeStorage);
