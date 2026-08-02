@@ -717,7 +717,7 @@ function drawPacketGlyph(ctx, start, control, end, t, shape, rgb, alpha) {
   ctx.strokeStyle = 'rgba(' + rgb + ', ' + (.62 * alpha) + ')';
   ctx.lineWidth = 4.5;
   ctx.stroke();
-  drawGlyph(ctx, head, shape, 5.6, rgb, alpha, 5);
+  drawGlyph(ctx, head, shape, 8.4, rgb, alpha, 7);
 }
 
 function drawTunnelLock(ctx, start, control, end, t, rgb, alpha) {
@@ -856,7 +856,7 @@ function renderMapPeerLabels(width, height) {
     if (marker) marker.dataset.shape = visual.shape;
     if (span) span.textContent = text;
     if (detail) detail.textContent = detailText;
-    const collapsedWidth = Math.min(168, Math.max(90, 34 + (flagUrl ? 28 : 0) + text.length * 7.2));
+    const collapsedWidth = Math.min(176, Math.max(98, 42 + (flagUrl ? 28 : 0) + text.length * 7.2));
     const labelHeight = 24;
     const point = cameraPoint({ x: item.x, y: item.y });
     if (point.x < -24 || point.x > width + 24 || point.y < -24 || point.y > height + 24) {
@@ -1050,9 +1050,9 @@ function drawWorldFrame(now) {
       }
     }
 
-    const activePeerRadius = 2.25 + (1 - peerPulse.value) * 2.25;
-    const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
-    const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
+    const activePeerRadius = 3.375 + (1 - peerPulse.value) * 3.375;
+    const outerRadius = item.peer.active ? activePeerRadius + 4.5 : item.peer.probing ? 7.5 : 6;
+    const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 4.65 : 3.9;
     drawGlyph(ctx, screen, visual.shape, outerRadius, activeColor, (item.peer.active ? .17 : .07) * alpha, 4);
     drawGlyph(ctx, screen, visual.shape, innerRadius, activeColor, (item.peer.active ? 1 : .68) * alpha, item.peer.active ? 7 : 2);
     if (item.peer.infrastructure) {

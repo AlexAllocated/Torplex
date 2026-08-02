@@ -1466,8 +1466,8 @@
       --torrent-color: var(--teal);
       position: relative;
       display: inline-block;
-      width: 14px;
-      height: 14px;
+      width: 21px;
+      height: 21px;
       flex: 0 0 auto;
       border-radius: 50%;
       background: var(--torrent-color);
@@ -1634,8 +1634,8 @@
       }
       .title-copy [data-role="size"] { font-size: 10px; }
       .torrent-marker {
-        width: 12px;
-        height: 12px;
+        width: 18px;
+        height: 18px;
         margin-top: 2px;
       }
       .item-status { align-self: start; }
@@ -2394,8 +2394,8 @@
     }
     .map-peer-marker {
       display: inline-block;
-      width: 11px;
-      height: 11px;
+      width: 16.5px;
+      height: 16.5px;
       flex: 0 0 auto;
     }
     [data-shape="circle"] { border-radius: 50%; }

@@ -64,6 +64,14 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   );
   expect(activeShapes).toHaveLength(activeCount);
   expect(new Set(activeShapes).size).toBe(Math.min(activeShapes.length, 12));
+  if (activeShapes.length) {
+    const markerSize = await page.locator('.item.active .torrent-marker, .item.organizing .torrent-marker').first().evaluate((marker) => {
+      const rect = marker.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    });
+    expect(markerSize.width).toBeGreaterThanOrEqual(20);
+    expect(markerSize.height).toBeGreaterThanOrEqual(20);
+  }
   if (pendingCount) await expect(page.locator('.item.pending [data-role="drag-handle"]').first()).toHaveAttribute("draggable", "true");
 
   await expect(page.locator("#worldCanvas")).toBeVisible();
@@ -192,6 +200,11 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile-fullscreen.png` });
   await page.locator("#fullscreenMap").click();
   await expect(mapFrame).not.toHaveClass(/map-fullscreen-active/);
+
+  await page.locator("#logoutButton").click();
+  await page.waitForURL(/\/auth\/login$/);
+  const sessionCookie = (await page.context().cookies()).find((cookie) => cookie.name === "plex_batch_session");
+  expect(sessionCookie).toBeUndefined();
 });
 
 test("pending rows can be reprioritized across multiple positions", async ({ page }) => {

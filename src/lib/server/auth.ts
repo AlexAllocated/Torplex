@@ -75,8 +75,12 @@ export function setSession(cookies: Cookies, origin: string) {
   });
 }
 
-export function clearSession(cookies: Cookies) {
-  cookies.delete(sessionCookie, { path: "/" });
+export function clearSession(cookies: Cookies, origin: string) {
+  cookies.set(sessionCookie, "", {
+    ...cookieOptions(origin),
+    expires: new Date(0),
+    maxAge: 0,
+  });
 }
 
 export function getSession(cookies: Cookies): SessionUser | null {
