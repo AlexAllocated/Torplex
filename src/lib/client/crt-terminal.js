@@ -85,6 +85,23 @@ function createTerminalMediaBank() {
       const pulse = Math.sin(Math.PI * ((progress * 2) % 1)) ** .7;
       return Math.sin(tau * 145 * time) * pulse * .3;
     }),
+    ambientPing: createWavUrl(.46, (time, index, count) => {
+      const progress = index / count;
+      const step = Math.min(2, Math.floor(progress * 3));
+      const localProgress = (progress * 3) % 1;
+      const frequency = [210, 280, 235][step];
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * localProgress) ** 1.35 * .19;
+    }),
+    ambientSweep: createWavUrl(.68, (time, index, count) => {
+      const progress = index / count;
+      const frequency = 115 + progress * 105;
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** 1.6 * .2;
+    }),
+    ambientBloop: createWavUrl(.38, (time, index, count) => {
+      const progress = index / count;
+      const frequency = 255 - progress * 120;
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** 1.15 * .2;
+    }),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 78.233) * 43758.5453) % 1) * 2 - 1;
@@ -113,6 +130,7 @@ function createTerminalMediaBank() {
       name,
       Array.from({ length: 4 }, () => audio(urls[name], .5)),
     ])),
+    ambient: ['ambientPing', 'ambientSweep', 'ambientBloop'].map((name) => audio(urls[name], .24)),
   };
 }
 
@@ -130,6 +148,8 @@ export function startCrtTerminal() {
   const controlVoices = new Map();
   let themeTimer = 0;
   let themeSwapTimer = 0;
+  let ambientTimer = 0;
+  let ambientIndex = 0;
   let lastKeyClickAt = 0;
   let activated = false;
   let destroyed = false;
@@ -147,7 +167,7 @@ export function startCrtTerminal() {
   body.classList.add('crt-awaiting-power');
   body.classList.toggle('crt-audio-muted', muted);
 
-  const allMedia = () => [media.enabled, media.power, media.hum, ...Object.values(media.controls).flat()];
+  const allMedia = () => [media.enabled, media.power, media.hum, ...Object.values(media.controls).flat(), ...media.ambient];
 
   const setAudioUi = () => {
     const state = muted ? 'muted' : audioError ? 'error' : mediaUnlocked ? 'running' : 'armed';
@@ -196,6 +216,18 @@ export function startCrtTerminal() {
     void playElement(media.hum, { restart: false });
   };
 
+  const scheduleAmbient = (delay = 7000 + Math.random() * 9000) => {
+    if (ambientTimer || destroyed || muted || !mediaUnlocked || document.hidden) return;
+    ambientTimer = window.setTimeout(() => {
+      ambientTimer = 0;
+      if (destroyed || muted || !mediaUnlocked || document.hidden) return;
+      const sound = media.ambient[ambientIndex % media.ambient.length];
+      ambientIndex += 1;
+      void playElement(sound);
+      scheduleAmbient();
+    }, delay);
+  };
+
   const playPowerOn = () => {
     if (!mediaUnlocked) return;
     void playElement(media.power);
@@ -229,7 +261,10 @@ export function startCrtTerminal() {
       audioError = '';
       body.dataset.audioProbe = 'played';
       setAudioUi();
-      if (activated) startHum();
+      if (activated) {
+        startHum();
+        scheduleAmbient(3500 + Math.random() * 3500);
+      }
     }).catch(reportAudioError);
   };
   setAudioUi();
@@ -363,7 +398,10 @@ export function startCrtTerminal() {
       body.classList.remove('crt-powering-on');
       body.classList.add('crt-powered-on');
       queueTargets(document.body);
-      if (!muted) void startHum();
+      if (!muted) {
+        void startHum();
+        scheduleAmbient(3500 + Math.random() * 3500);
+      }
     }, reducedMotion ? 0 : 720);
   };
 
@@ -404,6 +442,8 @@ export function startCrtTerminal() {
     localStorage.setItem('torplex:crt-muted', '1');
     body.classList.add('crt-audio-muted');
     allMedia().forEach((element) => element.pause());
+    if (ambientTimer) clearTimeout(ambientTimer);
+    ambientTimer = 0;
     stopHum();
     setAudioUi();
   };
@@ -411,8 +451,14 @@ export function startCrtTerminal() {
 
   const onVisibility = () => {
     if (muted || !mediaUnlocked) return;
-    if (document.hidden) media.hum.pause();
-    else startHum();
+    if (document.hidden) {
+      media.hum.pause();
+      if (ambientTimer) clearTimeout(ambientTimer);
+      ambientTimer = 0;
+    } else {
+      startHum();
+      scheduleAmbient(2500 + Math.random() * 2500);
+    }
   };
   document.addEventListener('visibilitychange', onVisibility);
 
@@ -431,6 +477,7 @@ export function startCrtTerminal() {
     document.removeEventListener('visibilitychange', onVisibility);
     if (themeTimer) clearTimeout(themeTimer);
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
+    if (ambientTimer) clearTimeout(ambientTimer);
     stopHum();
     allMedia().forEach((element) => {
       element.pause();

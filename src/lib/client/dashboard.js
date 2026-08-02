@@ -509,8 +509,12 @@ function initMapVisibility() {
   observer.observe(panel);
   const themeObserver = new MutationObserver(() => {
     phosphorCache.theme = '';
+    swarmMap.geometryDirty = true;
+    swarmMap.labelsDirty = true;
+    swarmMap.lastFrame = 0;
     mapStatic.dirty = true;
     scheduleMapStatic();
+    startMapAnimation();
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-crt-theme'] });
   document.addEventListener('visibilitychange', () => syncVisibility(swarmMap.inViewport));

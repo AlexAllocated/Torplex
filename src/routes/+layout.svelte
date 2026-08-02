@@ -32,6 +32,16 @@
 
 <div id="crtPowerFx" class="crt-power-fx" aria-hidden="true"><span></span></div>
 
+<div class="crt-artifacts" aria-hidden="true">
+  <span class="crt-signal-tear crt-signal-tear-a"></span>
+  <span class="crt-signal-tear crt-signal-tear-b"></span>
+  <span class="crt-signal-tear crt-signal-tear-c"></span>
+  <span class="crt-signal-block crt-signal-block-a"></span>
+  <span class="crt-signal-block crt-signal-block-b"></span>
+  <span class="crt-glitch-readout crt-glitch-readout-a">SYNC_LOSS // 0x17</span>
+  <span class="crt-glitch-readout crt-glitch-readout-b">FRAME_BUF // RECOVER</span>
+</div>
+
 <button id="crtAudioToggle" class="crt-audio-toggle icon-button" type="button" aria-label="Mute terminal audio" title="Mute terminal audio">
   <svg class="audio-on-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M11 5 6 9H2v6h4l5 4V5Z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path><path d="M18.5 5.5a9 9 0 0 1 0 13"></path>

@@ -37,6 +37,8 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(page.locator('body')).toHaveAttribute('data-audio-backend', 'html-media');
   await expect(page.locator('body')).toHaveAttribute('data-audio-probe', 'played');
   await expect(page.locator('body')).not.toHaveAttribute('data-audio-state', 'error');
+  await expect(page.locator('.crt-artifacts')).toHaveCount(1);
+  await expect(page.locator('.crt-signal-tear')).toHaveCount(3);
   await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
   expect(await page.locator('.crt-theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
     'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta',
