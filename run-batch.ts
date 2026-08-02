@@ -260,6 +260,14 @@ async function selectedVideoFiles(item: ManifestItem, staging: string) {
   if (item.selectedPaths?.length) {
     const rootSource = await resolveSourceRoot(item);
     const requested = item.selectedPaths.filter(isVideo);
+    const rootDetails = await stat(rootSource);
+    if (rootDetails.isFile()) {
+      const selectedName = requested.length === 1 ? basename(safeRelativePath(requested[0])) : "";
+      if (selectedName !== basename(rootSource)) {
+        throw new Error(`${requested.length} selected video file(s) are missing for ${item.title}`);
+      }
+      return [rootSource];
+    }
     const videos: string[] = [];
     for (const relativePath of requested) {
       const file = join(rootSource, safeRelativePath(relativePath));
