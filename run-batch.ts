@@ -177,6 +177,12 @@ async function pathExists(path: string) {
   return existsSync(path);
 }
 
+async function stagingHasPayload(staging: string) {
+  if (!(await pathExists(staging))) return false;
+  const entries = await readdir(staging);
+  return entries.some((entry) => !entry.endsWith(".aria2"));
+}
+
 async function movePath(source: string, destination: string) {
   await ensureDir(dirname(destination));
   await rename(source, destination);
@@ -909,37 +915,46 @@ async function processItem(item: ManifestItem) {
     return parts;
   }, []).join(",");
 
-  const exitCode = await runCommand(
-    [
-      "aria2c",
-      `--dir=${staging}`,
-      "--continue=true",
-      ...(checkIntegrity ? ["--check-integrity=true"] : []),
-      "--file-allocation=none",
-      "--seed-time=0",
-      "--seed-ratio=0.0",
-      "--max-upload-limit=1K",
-      "--bt-max-peers=80",
-      "--bt-enable-lpd=false",
-      "--enable-peer-exchange=true",
-      "--summary-interval=30",
-      "--console-log-level=notice",
-      ...(compactSelection ? [`--select-file=${compactSelection}`] : []),
-      torrentSource,
-    ],
-    logPath,
-  );
-  if (exitCode !== 0) {
-    const preemptPath = join(root, "control", "preempt", item.id);
-    if (await pathExists(preemptPath)) {
-      await rm(preemptPath, { force: true });
-      await setItemState(item.id, { status: "pending", startedAt: null, failedAt: null, error: null });
-      await appendBatch(`Paused ${item.title}: queue priority changed`);
-      return;
+  const payloadAlreadyComplete = state.items[item.id]?.payloadStatus === "complete" && await stagingHasPayload(staging);
+  if (payloadAlreadyComplete) {
+    await writeFile(logPath, "");
+    await appendFile(logPath, "--- Download ---\nReusing the completed staged payload.\n");
+    await appendBatch(`Reusing completed staged payload for ${item.title}`);
+  } else {
+    await setItemState(item.id, { payloadStatus: "downloading", payloadCompletedAt: null });
+    const exitCode = await runCommand(
+      [
+        "aria2c",
+        `--dir=${staging}`,
+        "--continue=true",
+        ...(checkIntegrity ? ["--check-integrity=true"] : []),
+        "--file-allocation=none",
+        "--seed-time=0",
+        "--seed-ratio=0.0",
+        "--max-upload-limit=1K",
+        "--bt-max-peers=80",
+        "--bt-enable-lpd=false",
+        "--enable-peer-exchange=true",
+        "--summary-interval=30",
+        "--console-log-level=notice",
+        ...(compactSelection ? [`--select-file=${compactSelection}`] : []),
+        torrentSource,
+      ],
+      logPath,
+    );
+    if (exitCode !== 0) {
+      const preemptPath = join(root, "control", "preempt", item.id);
+      if (await pathExists(preemptPath)) {
+        await rm(preemptPath, { force: true });
+        await setItemState(item.id, { status: "pending", startedAt: null, failedAt: null, error: null });
+        await appendBatch(`Paused ${item.title}: queue priority changed`);
+        return;
+      }
+      await setItemState(item.id, { status: "failed", failedAt: now(), error: `aria2c exited ${exitCode}` });
+      await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
+      throw new Error(`${item.title}: aria2c exited ${exitCode}`);
     }
-    await setItemState(item.id, { status: "failed", failedAt: now(), error: `aria2c exited ${exitCode}` });
-    await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
-    throw new Error(`${item.title}: aria2c exited ${exitCode}`);
+    await setItemState(item.id, { payloadStatus: "complete", payloadCompletedAt: now() });
   }
 
   await pruneUnselectedDownloadArtifacts(item, logPath);
