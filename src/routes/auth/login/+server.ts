@@ -91,6 +91,20 @@ function loginPage(message = "") {
       .theme-dot[data-theme="cyan"] { --theme-swatch: #22d3ee; }
       .theme-dot[data-theme="blue"] { --theme-swatch: #3b82f6; }
       .theme-dot[data-theme="magenta"] { --theme-swatch: #f53ec8; }
+      body.theme-switching { animation: themeOff 150ms cubic-bezier(.55, 0, 1, .45) both; }
+      body.theme-restoring { animation: themeOn 230ms cubic-bezier(.16, 1, .3, 1) both; }
+      @keyframes themeOff {
+        0% { opacity: 1; filter: brightness(1); transform: scale(1); }
+        45% { opacity: .94; filter: brightness(1.8); transform: scale(1, .96); }
+        100% { opacity: 0; filter: brightness(4); transform: scale(1, .004); }
+      }
+      @keyframes themeOn {
+        0%, 24% { opacity: 0; filter: brightness(4); transform: scale(1, .004); }
+        44% { opacity: .82; filter: brightness(3); transform: scale(1, .025); }
+        76% { opacity: 1; filter: brightness(1.4); transform: scale(1, 1.015); }
+        100% { opacity: 1; filter: brightness(1); transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) { body.theme-switching, body.theme-restoring { animation: none; } }
     </style>
   </head>
   <body>
@@ -117,16 +131,46 @@ function loginPage(message = "") {
       const button = form.querySelector("button");
       const themes = new Set(["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]);
       const themeButtons = Array.from(document.querySelectorAll(".theme-dot"));
-      const applyTheme = (theme) => {
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      let themeTimer = 0;
+      let themeSwapTimer = 0;
+      let activeTheme = "green";
+      let pendingTheme = activeTheme;
+      const commitTheme = (theme) => {
+        activeTheme = theme;
+        pendingTheme = theme;
+        document.documentElement.dataset.crtTheme = theme;
+      };
+      const applyTheme = (theme, animate = true) => {
         if (theme === "purple") theme = "magenta";
         const selected = themes.has(theme) ? theme : "green";
-        document.documentElement.dataset.crtTheme = selected;
+        const changed = pendingTheme !== selected || activeTheme !== selected || document.documentElement.dataset.crtTheme !== selected;
+        pendingTheme = selected;
         localStorage.setItem("torplex:crt-theme", selected);
         themeButtons.forEach((themeButton) => {
           themeButton.setAttribute("aria-pressed", String(themeButton.dataset.theme === selected));
         });
+        if (!changed) return;
+        clearTimeout(themeTimer);
+        clearTimeout(themeSwapTimer);
+        if (!animate || reducedMotion) {
+          document.body.classList.remove("theme-switching");
+          document.body.classList.remove("theme-restoring");
+          commitTheme(selected);
+          return;
+        }
+        document.body.classList.remove("theme-switching");
+        document.body.classList.remove("theme-restoring");
+        void document.body.offsetWidth;
+        document.body.classList.add("theme-switching");
+        themeSwapTimer = window.setTimeout(() => {
+          commitTheme(pendingTheme);
+          document.body.classList.remove("theme-switching");
+          document.body.classList.add("theme-restoring");
+          themeTimer = window.setTimeout(() => document.body.classList.remove("theme-restoring"), 230);
+        }, 150);
       };
-      applyTheme(localStorage.getItem("torplex:crt-theme"));
+      applyTheme(localStorage.getItem("torplex:crt-theme"), false);
       themeButtons.forEach((themeButton) => {
         themeButton.addEventListener("click", () => applyTheme(themeButton.dataset.theme));
       });

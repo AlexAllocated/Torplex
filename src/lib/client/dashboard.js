@@ -65,6 +65,8 @@ const mapRaster = {
   ready: false,
   raf: 0,
 };
+const MAP_COLLAPSED_STORAGE_KEY = 'torplex:map-collapsed';
+let mapCollapsed = false;
 let fullscreenBusy = false;
 const completedSeen = new Set();
 const tweens = new Map();
@@ -297,7 +299,7 @@ function renderSwarmMap(swarm) {
       ' - ' + mapped.length + '/' + peers.length + ' mapped' +
       (swarmMap.relay ? ' · routed via ' + ([swarmMap.relay.city, swarmMap.relay.country].filter(Boolean).join(', ') || 'VPN') : '')
     : swarmMap.relay ? 'VPN route ready · no connected aria2c peers visible yet' : 'No connected aria2c peers visible yet';
-  if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+  startMapAnimation();
 }
 
 function worldLayout(width, height) {
@@ -350,6 +352,7 @@ function applyMapTransform() {
 
 function drawMapRaster() {
   mapRaster.raf = 0;
+  if (mapCollapsed) return;
   const canvas = document.getElementById('worldMapRaster');
   const viewport = document.getElementById('worldMapViewport');
   const image = mapRaster.image;
@@ -379,7 +382,51 @@ function drawMapRaster() {
 }
 
 function scheduleMapRaster() {
+  if (mapCollapsed) return;
   if (!mapRaster.raf) mapRaster.raf = requestAnimationFrame(drawMapRaster);
+}
+
+function startMapAnimation() {
+  if (!mapCollapsed && !swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+}
+
+function setMapCollapsed(collapsed, { persist = true } = {}) {
+  mapCollapsed = Boolean(collapsed);
+  const panel = document.querySelector('.transfer-map');
+  const shell = document.getElementById('worldShell');
+  const button = document.getElementById('toggleMap');
+  panel?.classList.toggle('map-collapsed', mapCollapsed);
+  panel?.setAttribute('data-map-rendering', mapCollapsed ? 'paused' : 'running');
+  shell?.setAttribute('aria-hidden', String(mapCollapsed));
+  if (button) {
+    button.title = mapCollapsed ? 'Expand swarm map' : 'Collapse swarm map';
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-expanded', String(!mapCollapsed));
+  }
+  if (persist) localStorage.setItem(MAP_COLLAPSED_STORAGE_KEY, mapCollapsed ? '1' : '0');
+
+  if (mapCollapsed) {
+    if (swarmMap.raf) cancelAnimationFrame(swarmMap.raf);
+    if (mapRaster.raf) cancelAnimationFrame(mapRaster.raf);
+    swarmMap.raf = 0;
+    mapRaster.raf = 0;
+    swarmMap.lastFrame = 0;
+    return;
+  }
+
+  swarmMap.lastFrame = 0;
+  swarmMap.labelsDirty = true;
+  requestAnimationFrame(() => {
+    applyMapTransform();
+    scheduleMapRaster();
+    startMapAnimation();
+  });
+}
+
+function initMapCollapse() {
+  const button = document.getElementById('toggleMap');
+  button?.addEventListener('click', () => setMapCollapsed(!mapCollapsed));
+  setMapCollapsed(localStorage.getItem(MAP_COLLAPSED_STORAGE_KEY) === '1', { persist: false });
 }
 
 function initMapRaster() {
@@ -964,6 +1011,8 @@ function renderMapPeerLabels(width, height) {
 }
 
 function drawWorldFrame(now) {
+  swarmMap.raf = 0;
+  if (mapCollapsed) return;
   swarmMap.raf = requestAnimationFrame(drawWorldFrame);
   const canvas = document.getElementById('worldCanvas');
   if (!canvas) return;
@@ -2344,6 +2393,7 @@ if ('EventSource' in window) {
   setInterval(refreshFallback, 1000);
 }
 initWarp();
+initMapCollapse();
 initMapControls();
 initIntakeNavigation();
 initQueueControls();

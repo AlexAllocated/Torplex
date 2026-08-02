@@ -38,6 +38,7 @@ export function startCrtTerminal() {
   let humNodes = null;
   let typingTimer = 0;
   let themeTimer = 0;
+  let themeSwapTimer = 0;
   let activeTyping = 0;
   let lastKeyClickAt = 0;
   let activated = false;
@@ -46,6 +47,7 @@ export function startCrtTerminal() {
   const warmStart = sessionStorage.getItem('torplex:crt-powered') === '1';
   const storedTheme = normalizeTheme(localStorage.getItem(CRT_THEME_STORAGE_KEY));
   let activeTheme = CRT_THEMES.has(storedTheme) ? storedTheme : 'green';
+  let pendingTheme = activeTheme;
 
   document.documentElement.dataset.crtTheme = activeTheme;
   localStorage.setItem(CRT_THEME_STORAGE_KEY, activeTheme);
@@ -193,22 +195,40 @@ export function startCrtTerminal() {
   const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
     theme = normalizeTheme(theme);
     if (!CRT_THEMES.has(theme)) return;
-    const changed = activeTheme !== theme;
-    activeTheme = theme;
-    document.documentElement.dataset.crtTheme = theme;
+    const changed = pendingTheme !== theme || activeTheme !== theme;
+    pendingTheme = theme;
     themeButtons.forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.theme === theme));
     });
     if (persist) localStorage.setItem(CRT_THEME_STORAGE_KEY, theme);
     if (changed && animate && !reducedMotion) {
       if (themeTimer) clearTimeout(themeTimer);
+      if (themeSwapTimer) clearTimeout(themeSwapTimer);
       body.classList.remove('crt-theme-switching');
+      body.classList.remove('crt-theme-restoring');
       void body.offsetWidth;
       body.classList.add('crt-theme-switching');
-      themeTimer = window.setTimeout(() => {
-        themeTimer = 0;
+      themeSwapTimer = window.setTimeout(() => {
+        themeSwapTimer = 0;
+        activeTheme = pendingTheme;
+        document.documentElement.dataset.crtTheme = activeTheme;
         body.classList.remove('crt-theme-switching');
-      }, 220);
+        body.classList.add('crt-theme-restoring');
+        themeTimer = window.setTimeout(() => {
+          themeTimer = 0;
+          body.classList.remove('crt-theme-restoring');
+        }, 230);
+      }, 150);
+    } else if (changed) {
+      if (themeTimer) clearTimeout(themeTimer);
+      if (themeSwapTimer) clearTimeout(themeSwapTimer);
+      themeTimer = 0;
+      themeSwapTimer = 0;
+      body.classList.remove('crt-theme-switching');
+      body.classList.remove('crt-theme-restoring');
+      activeTheme = theme;
+      pendingTheme = theme;
+      document.documentElement.dataset.crtTheme = theme;
     }
     if (changed && sound) void playKeyClick();
   };
@@ -388,6 +408,7 @@ export function startCrtTerminal() {
     document.removeEventListener('visibilitychange', onVisibility);
     if (typingTimer) clearTimeout(typingTimer);
     if (themeTimer) clearTimeout(themeTimer);
+    if (themeSwapTimer) clearTimeout(themeSwapTimer);
     stopHum();
     audioContext?.close().catch(() => {});
   };

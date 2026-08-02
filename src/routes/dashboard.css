@@ -1023,6 +1023,23 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .map-collapse-button {
+      flex: 0 0 auto;
+    }
+    .map-collapse-button svg {
+      transition: transform .18s ease;
+    }
+    .transfer-map.map-collapsed .map-collapse-button svg {
+      transform: rotate(180deg);
+    }
+    .transfer-map.map-collapsed .map-title {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+    .transfer-map.map-collapsed .world-shell {
+      display: none;
+    }
     .vpn-status {
       display: inline-flex;
       flex: 0 0 auto;
@@ -1596,8 +1613,9 @@
       main { padding: 16px; }
       header { align-items: flex-start; flex-direction: column; }
       .map-title { align-items: flex-start; flex-direction: column; }
-      .map-status-group { width: 100%; align-items: flex-start; flex-direction: column; }
+      .map-status-group { position: relative; width: 100%; padding-right: 44px; align-items: flex-start; flex-direction: column; }
       .map-status-group #routeStatus { width: 100%; text-align: left; white-space: normal; }
+      .map-collapse-button { position: absolute; top: 0; right: 0; }
       .dialog-head { flex-direction: column; }
       .dialog-actions { justify-content: flex-start; width: 100%; }
       .status-pill { max-width: 100%; }
@@ -2600,7 +2618,10 @@
     .crt-theme-dot[data-theme="blue"] { --theme-swatch: #3b82f6; }
     .crt-theme-dot[data-theme="magenta"] { --theme-swatch: #f53ec8; }
     body.map-fullscreen-open .crt-theme-switcher { display: none; }
-    body.crt-theme-switching .crt-picture { animation: phosphorThemeRetune 180ms steps(3, end); }
+    body.crt-theme-switching .crt-picture { animation: phosphorThemeOff 150ms cubic-bezier(.55, 0, 1, .45) both; }
+    body.crt-theme-restoring .crt-picture { animation: phosphorThemeOn 230ms cubic-bezier(.16, 1, .3, 1) both; }
+    body.crt-theme-switching .crt-picture *,
+    body.crt-theme-restoring .crt-picture * { transition-duration: 0s !important; }
 
     #warpCanvas {
       filter: grayscale(1) sepia(1) saturate(7.5) hue-rotate(var(--phosphor-hue)) brightness(.72) contrast(1.16)
@@ -2633,11 +2654,16 @@
       box-shadow: 0 0 9px rgb(var(--phosphor-main) / .12) !important;
     }
 
-    @keyframes phosphorThemeRetune {
-      0% { opacity: 1; filter: brightness(1); }
-      35% { opacity: .55; filter: brightness(1.7); }
-      70% { opacity: .82; filter: brightness(.74); }
-      100% { opacity: 1; filter: brightness(1); }
+    @keyframes phosphorThemeOff {
+      0% { opacity: 1; filter: brightness(1); transform: scale(1); }
+      45% { opacity: .94; filter: brightness(1.8); transform: scale(1, .96); }
+      100% { opacity: 0; filter: brightness(4); transform: scale(1, .004); }
+    }
+    @keyframes phosphorThemeOn {
+      0%, 24% { opacity: 0; filter: brightness(4); transform: scale(1, .004); }
+      44% { opacity: .82; filter: brightness(3); transform: scale(1, .025); }
+      76% { opacity: 1; filter: brightness(1.4); transform: scale(1, 1.015); }
+      100% { opacity: 1; filter: brightness(1); transform: scale(1); }
     }
     @media (max-width: 720px) {
       .crt-picture { padding-top: 42px; }

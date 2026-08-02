@@ -69,9 +69,22 @@
           <span id="vpnStatusText">Checking VPN...</span>
         </div>
         <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+        <button
+          id="toggleMap"
+          class="icon-button map-collapse-button"
+          type="button"
+          title="Collapse swarm map"
+          aria-label="Collapse swarm map"
+          aria-controls="worldShell"
+          aria-expanded="true"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m18 15-6-6-6 6"></path>
+          </svg>
+        </button>
       </div>
     </div>
-    <div class="world-shell">
+    <div id="worldShell" class="world-shell">
       <div class="world-map-frame">
         <div id="worldMapViewport" class="world-map-viewport">
           <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">

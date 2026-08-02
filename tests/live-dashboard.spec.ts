@@ -16,10 +16,16 @@ async function powerOn(page: import("@playwright/test").Page) {
 }
 
 test("authenticated dashboard renders live swarm telemetry", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
   test.skip(!baseUrl || !password, "TORPLEX_E2E_URL and TORPLEX_E2E_PASSWORD are required");
 
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.addInitScript(() => localStorage.setItem('torplex:crt-theme', 'purple'));
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('torplex:e2e-initialized') === '1') return;
+    sessionStorage.setItem('torplex:e2e-initialized', '1');
+    localStorage.setItem('torplex:crt-theme', 'purple');
+    localStorage.removeItem('torplex:map-collapsed');
+  });
   await page.goto(baseUrl!);
   await expect(page.locator('.theme-dot')).toHaveCount(7);
   expect(await page.locator('.theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
@@ -42,16 +48,35 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     blue: '59 130 246',
     magenta: '245 62 200',
   };
-  for (const [theme, expectedRgb] of Object.entries(themes)) {
+  await page.evaluate(() => {
+    (window as Window & { __themeSwapOpacity?: number | null }).__themeSwapOpacity = null;
+    const picture = document.querySelector('.crt-picture');
+    const observer = new MutationObserver(() => {
+      if (document.documentElement.dataset.crtTheme !== 'red' || !picture) return;
+      (window as Window & { __themeSwapOpacity?: number | null }).__themeSwapOpacity = Number(getComputedStyle(picture).opacity);
+      observer.disconnect();
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-crt-theme'] });
+  });
+  await page.locator('.crt-theme-dot[data-theme="red"]').click();
+  await expect(page.locator('body')).toHaveClass(/crt-theme-switching/);
+  await expect.poll(() => page.evaluate(() => (window as Window & { __themeSwapOpacity?: number | null }).__themeSwapOpacity)).not.toBeNull();
+  expect(Number(await page.evaluate(() => (window as Window & { __themeSwapOpacity?: number | null }).__themeSwapOpacity))).toBeLessThan(.05);
+  await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'red');
+  await expect(page.locator('body')).not.toHaveClass(/crt-theme-switching/);
+  await expect(page.locator('body')).not.toHaveClass(/crt-theme-restoring/);
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--phosphor-main').trim())).toBe(themes.red);
+  for (const [theme, expectedRgb] of Object.entries(themes).slice(1)) {
     await page.locator(`.crt-theme-dot[data-theme="${theme}"]`).click();
-    await expect(page.locator('html')).toHaveAttribute('data-crt-theme', theme);
+    await expect(page.locator('html')).toHaveAttribute('data-crt-theme', theme, { timeout: 1_000 });
+    await expect(page.locator('body')).not.toHaveClass(/crt-theme-switching|crt-theme-restoring/);
     const rgb = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--phosphor-main').trim());
     expect(rgb).toBe(expectedRgb);
   }
   await page.locator('.crt-theme-dot[data-theme="green"]').click();
-  await page.waitForTimeout(280);
+  await expect(page.locator('body')).not.toHaveClass(/crt-theme-switching|crt-theme-restoring/);
   await page.locator('.crt-theme-dot[data-theme="magenta"]').click();
-  await page.waitForTimeout(320);
+  await expect(page.locator('body')).not.toHaveClass(/crt-theme-switching|crt-theme-restoring/);
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   expect(await page.locator('#vpnStatus').evaluate((element) => getComputedStyle(element).color)).toBe('rgb(253, 232, 247)');
   expect(await page.locator('#fullscreenMap').evaluate((element) => getComputedStyle(element).borderColor)).toContain('245, 62, 200');
@@ -110,6 +135,28 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     expect(markerSize.height).toBeGreaterThanOrEqual(20);
   }
   if (pendingCount) await expect(page.locator('.item.pending [data-role="drag-handle"]').first()).toHaveAttribute("draggable", "true");
+
+  const mapPanel = page.locator('.transfer-map');
+  const mapToggle = page.locator('#toggleMap');
+  const worldShell = page.locator('#worldShell');
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'running');
+  await mapToggle.click();
+  await expect(mapPanel).toHaveClass(/map-collapsed/);
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'paused');
+  await expect(mapToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(worldShell).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('torplex:map-collapsed'))).toBe('1');
+  await page.reload();
+  await expect(page.locator('body')).toHaveClass(/crt-powered-on/);
+  await expect(mapPanel).toHaveClass(/map-collapsed/);
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'paused');
+  await expect(worldShell).toBeHidden();
+  await mapToggle.click();
+  await expect(mapPanel).not.toHaveClass(/map-collapsed/);
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'running');
+  await expect(mapToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(worldShell).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('torplex:map-collapsed'))).toBe('0');
 
   await expect(page.locator("#worldCanvas")).toBeVisible();
   const paintedSamples = async (selector: string) => await page.locator(selector).evaluate((canvas: HTMLCanvasElement) => {
