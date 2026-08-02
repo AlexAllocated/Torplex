@@ -8,6 +8,13 @@ const requireMappedOrigin = process.env.TORPLEX_E2E_REQUIRE_MAPPED_ORIGIN === "1
 const requireVpn = process.env.TORPLEX_E2E_REQUIRE_VPN === "1";
 const testReorder = process.env.TORPLEX_E2E_REORDER === "1";
 
+async function powerOn(page: import("@playwright/test").Page) {
+  const boot = page.locator("#crtBootTrigger");
+  await expect(boot).toBeVisible();
+  await boot.click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
+}
+
 test("authenticated dashboard renders live swarm telemetry", async ({ page }, testInfo) => {
   test.skip(!baseUrl || !password, "TORPLEX_E2E_URL and TORPLEX_E2E_PASSWORD are required");
 
@@ -15,7 +22,17 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.goto(baseUrl!);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
+  await powerOn(page);
   await expect(page).toHaveTitle("Torplex");
+  const font = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      loaded: document.fonts.check('16px "BigBlue TerminalPlus"'),
+      family: getComputedStyle(document.body).fontFamily,
+    };
+  });
+  expect(font.loaded).toBe(true);
+  expect(font.family).toContain("BigBlue TerminalPlus");
   if (requirePeers) await expect(page.locator("#routeStatus")).toContainText("mapped", { timeout: 20_000 });
   else await expect(page.locator("#routeStatus")).not.toContainText("Waiting for peer telemetry", { timeout: 20_000 });
 
@@ -40,7 +57,13 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   }
   expect(status.swarm.activeCount + status.swarm.probingCount + status.swarm.inactiveCount).toBe(status.swarm.peers.length);
   const pendingCount = status.items.filter((item: { status?: string }) => item.status === "pending").length;
+  const activeCount = status.items.filter((item: { status?: string }) => item.status === "active" || item.status === "organizing").length;
   await expect(page.locator('.item.pending [data-role="drag-handle"]')).toHaveCount(pendingCount);
+  const activeShapes = await page.locator('.item.active .torrent-marker, .item.organizing .torrent-marker').evaluateAll((markers) =>
+    markers.map((marker) => (marker as HTMLElement).dataset.shape),
+  );
+  expect(activeShapes).toHaveLength(activeCount);
+  expect(new Set(activeShapes).size).toBe(Math.min(activeShapes.length, 12));
   if (pendingCount) await expect(page.locator('.item.pending [data-role="drag-handle"]').first()).toHaveAttribute("draggable", "true");
 
   await expect(page.locator("#worldCanvas")).toBeVisible();
@@ -148,12 +171,20 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     const frameRect = frame.getBoundingClientRect();
     const viewportRect = frame.querySelector(".world-map-viewport")!.getBoundingClientRect();
     return {
+      frameLeft: frameRect.left,
+      frameTop: frameRect.top,
       frameWidth: frameRect.width,
       frameHeight: frameRect.height,
+      viewportLeft: viewportRect.left,
+      viewportTop: viewportRect.top,
       viewportWidth: viewportRect.width,
       viewportHeight: viewportRect.height,
     };
   });
+  expect(Math.abs(fullscreenGeometry.frameLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(fullscreenGeometry.frameTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(fullscreenGeometry.viewportLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(fullscreenGeometry.viewportTop)).toBeLessThanOrEqual(1);
   expect(fullscreenGeometry.frameWidth).toBeGreaterThanOrEqual(389);
   expect(fullscreenGeometry.frameHeight).toBeGreaterThanOrEqual(843);
   expect(fullscreenGeometry.viewportWidth).toBeGreaterThanOrEqual(389);
@@ -170,6 +201,7 @@ test("pending rows can be reprioritized across multiple positions", async ({ pag
   await page.goto(baseUrl!);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
+  await powerOn(page);
 
   const originalIds = await page.evaluate(async () => {
     const status = await (await fetch("/api/status")).json();

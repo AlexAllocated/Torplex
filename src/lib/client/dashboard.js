@@ -76,22 +76,24 @@ const sessionState = {
   loginUrl: '/auth/login',
   logoutUrl: '/auth/logout',
 };
-const colorPalette = [
-  '#57e0c2',
-  '#8ab4ff',
-  '#ffcf5a',
-  '#f47086',
-  '#c084fc',
-  '#22d3ee',
-  '#fb923c',
-  '#a3e635',
-  '#f9a8d4',
-  '#facc15',
-  '#38bdf8',
-  '#f87171',
+const shapePalette = [
+  'circle',
+  'square',
+  'triangle',
+  'diamond',
+  'pentagon',
+  'hexagon',
+  'star',
+  'cross',
+  'chevron',
+  'hourglass',
+  'ring',
+  'plus',
 ];
-const nodeLimeRgb = '191, 255, 0';
-const tunnelLimeRgb = '132, 204, 0';
+const phosphorRgb = '74, 222, 128';
+const phosphorColor = '#4ade80';
+const nodeLimeRgb = phosphorRgb;
+const tunnelLimeRgb = phosphorRgb;
 let latestItems = [];
 let queueDragId = '';
 let queueOrderSaving = false;
@@ -592,16 +594,6 @@ function hashString(value) {
   return hash >>> 0;
 }
 
-function hexToRgb(hex) {
-  const clean = String(hex || '').replace('#', '');
-  if (clean.length !== 6) return '87, 224, 194';
-  return [
-    parseInt(clean.slice(0, 2), 16),
-    parseInt(clean.slice(2, 4), 16),
-    parseInt(clean.slice(4, 6), 16),
-  ].join(', ');
-}
-
 function itemVisual(itemId) {
   const id = String(itemId || 'unknown');
   const activeIds = latestItems
@@ -609,41 +601,110 @@ function itemVisual(itemId) {
     .map((item) => String(item.id));
   const activeIndex = activeIds.indexOf(id);
   if (activeIndex >= 0) {
-    const color = colorPalette[activeIndex % colorPalette.length];
     return {
-      color,
-      rgb: hexToRgb(color),
+      color: phosphorColor,
+      rgb: phosphorRgb,
+      shape: shapePalette[activeIndex % shapePalette.length],
     };
   }
   const hash = hashString(id);
-  const color = colorPalette[hash % colorPalette.length];
   return {
-    color,
-    rgb: hexToRgb(color),
+    color: phosphorColor,
+    rgb: phosphorRgb,
+    shape: shapePalette[hash % shapePalette.length],
   };
 }
 
-function mixedPeerRgb(peers) {
-  let totalWeight = 0;
-  const channels = [0, 0, 0];
-  const torrentWeights = new Map();
-  for (const item of peers) {
-    const rate = item.peer?.active ? Math.max(0, Number(item.peer.receiveRateBps) || 0) : 0;
-    if (!rate) continue;
-    const id = String(item.peer.itemId || item.peer.pid || item.peer.ip);
-    torrentWeights.set(id, (torrentWeights.get(id) || 0) + rate);
+function traceGlyph(ctx, shape, radius) {
+  const polygon = (sides, rotation = -Math.PI / 2) => {
+    for (let index = 0; index < sides; index += 1) {
+      const angle = rotation + index * Math.PI * 2 / sides;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      if (index) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  };
+  if (shape === 'circle' || shape === 'ring') {
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  } else if (shape === 'square') {
+    ctx.rect(-radius * .76, -radius * .76, radius * 1.52, radius * 1.52);
+  } else if (shape === 'triangle') {
+    polygon(3);
+  } else if (shape === 'diamond') {
+    polygon(4);
+  } else if (shape === 'pentagon') {
+    polygon(5);
+  } else if (shape === 'hexagon') {
+    polygon(6);
+  } else if (shape === 'star') {
+    for (let index = 0; index < 10; index += 1) {
+      const pointRadius = index % 2 ? radius * .42 : radius;
+      const angle = -Math.PI / 2 + index * Math.PI / 5;
+      const x = Math.cos(angle) * pointRadius;
+      const y = Math.sin(angle) * pointRadius;
+      if (index) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  } else if (shape === 'cross') {
+    const inner = radius * .34;
+    ctx.moveTo(-radius, -inner);
+    ctx.lineTo(-inner, -inner);
+    ctx.lineTo(-inner, -radius);
+    ctx.lineTo(inner, -radius);
+    ctx.lineTo(inner, -inner);
+    ctx.lineTo(radius, -inner);
+    ctx.lineTo(radius, inner);
+    ctx.lineTo(inner, inner);
+    ctx.lineTo(inner, radius);
+    ctx.lineTo(-inner, radius);
+    ctx.lineTo(-inner, inner);
+    ctx.lineTo(-radius, inner);
+    ctx.closePath();
+  } else if (shape === 'chevron') {
+    ctx.moveTo(-radius, -radius * .72);
+    ctx.lineTo(-radius * .25, 0);
+    ctx.lineTo(-radius, radius * .72);
+    ctx.lineTo(-radius * .25, radius);
+    ctx.lineTo(radius, 0);
+    ctx.lineTo(-radius * .25, -radius);
+    ctx.closePath();
+  } else if (shape === 'hourglass') {
+    ctx.moveTo(-radius, -radius);
+    ctx.lineTo(radius, -radius);
+    ctx.lineTo(radius * .28, 0);
+    ctx.lineTo(radius, radius);
+    ctx.lineTo(-radius, radius);
+    ctx.lineTo(-radius * .28, 0);
+    ctx.closePath();
+  } else {
+    const inner = radius * .28;
+    ctx.rect(-inner, -radius, inner * 2, radius * 2);
+    ctx.rect(-radius, -inner, radius * 2, inner * 2);
   }
-  for (const [id, rate] of torrentWeights) {
-    const weight = Math.sqrt(rate);
-    const rgb = itemVisual(id).rgb.split(',').map((value) => Number(value.trim()));
-    for (let channel = 0; channel < 3; channel += 1) channels[channel] += rgb[channel] ** 2 * weight;
-    totalWeight += weight;
-  }
-  if (!totalWeight) return tunnelLimeRgb;
-  return channels.map((value) => Math.round(Math.sqrt(value / totalWeight))).join(', ');
 }
 
-function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
+function drawGlyph(ctx, point, shape, radius, rgb, alpha, glow = 0) {
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.beginPath();
+  traceGlyph(ctx, shape, radius);
+  ctx.fillStyle = 'rgba(' + rgb + ', ' + alpha + ')';
+  ctx.strokeStyle = 'rgba(' + rgb + ', ' + alpha + ')';
+  ctx.shadowColor = 'rgba(' + rgb + ', ' + alpha + ')';
+  ctx.shadowBlur = glow;
+  if (shape === 'ring') {
+    ctx.lineWidth = Math.max(1.5, radius * .38);
+    ctx.stroke();
+  } else {
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawPacketGlyph(ctx, start, control, end, t, shape, rgb, alpha) {
   const head = quadPoint(start, control, end, t);
   const tail = quadPoint(start, control, end, Math.min(1, t + .045));
   ctx.beginPath();
@@ -656,10 +717,7 @@ function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
   ctx.strokeStyle = 'rgba(' + rgb + ', ' + (.62 * alpha) + ')';
   ctx.lineWidth = 4.5;
   ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(head.x, head.y, 4.8, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(' + rgb + ', ' + alpha + ')';
-  ctx.fill();
+  drawGlyph(ctx, head, shape, 5.6, rgb, alpha, 5);
 }
 
 function drawTunnelLock(ctx, start, control, end, t, rgb, alpha) {
@@ -765,6 +823,8 @@ function renderMapPeerLabels(width, height) {
     if (!node) {
       node = document.createElement('div');
       node.className = 'map-peer-label';
+      const marker = document.createElement('span');
+      marker.className = 'map-peer-marker';
       const img = document.createElement('img');
       img.loading = 'eager';
       img.decoding = 'async';
@@ -772,7 +832,7 @@ function renderMapPeerLabels(width, height) {
       text.className = 'map-peer-speed';
       const detail = document.createElement('span');
       detail.className = 'map-peer-detail';
-      node.append(img, text, detail);
+      node.append(marker, img, text, detail);
       layer.appendChild(node);
       swarmMap.labelNodes.set(key, node);
     }
@@ -782,6 +842,7 @@ function renderMapPeerLabels(width, height) {
     const detailText = (item.peer.label ? item.peer.label + ' - ' : '') + country + ' - ' + item.peer.ip + ':' + item.peer.port;
     const flagUrl = flagUrlForCountry(item.peer.countryCode);
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
+    const marker = node.querySelector('.map-peer-marker');
     const img = node.querySelector('img');
     const span = node.querySelector('.map-peer-speed');
     const detail = node.querySelector('.map-peer-detail');
@@ -792,15 +853,10 @@ function renderMapPeerLabels(width, height) {
         img.alt = item.peer.countryCode || '';
       }
     }
-    if (span) {
-      span.textContent = text;
-      span.style.color = visual.color;
-    }
-    if (detail) {
-      detail.textContent = detailText;
-      detail.style.color = visual.color;
-    }
-    const collapsedWidth = Math.min(150, Math.max(76, 18 + (flagUrl ? 28 : 0) + text.length * 7.2));
+    if (marker) marker.dataset.shape = visual.shape;
+    if (span) span.textContent = text;
+    if (detail) detail.textContent = detailText;
+    const collapsedWidth = Math.min(168, Math.max(90, 34 + (flagUrl ? 28 : 0) + text.length * 7.2));
     const labelHeight = 24;
     const point = cameraPoint({ x: item.x, y: item.y });
     if (point.x < -24 || point.x > width + 24 || point.y < -24 || point.y > height + 24) {
@@ -912,7 +968,7 @@ function drawWorldFrame(now) {
   const nodePulse = pulseForSpeed(now, totalIngestBps);
   const nodeColor = nodeLimeRgb;
   const nodeRadius = 4.5 * (1 + nodePulse.value);
-  const tunnelRgb = mixedPeerRgb(swarmMap.displayPeers);
+  const tunnelRgb = tunnelLimeRgb;
 
   if (relay) {
     const tunnelStart = { x: origin.x, y: origin.y };
@@ -990,21 +1046,15 @@ function drawWorldFrame(now) {
         const travel = ((now / (2600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
         const packetAlpha = alpha * (.42 + .58 * Math.sin(travel * Math.PI));
-        drawPacketDot(ctx, start, control, end, t, activeColor, packetAlpha);
+        drawPacketGlyph(ctx, start, control, end, t, visual.shape, activeColor, packetAlpha);
       }
     }
 
-    ctx.beginPath();
     const activePeerRadius = 2.25 + (1 - peerPulse.value) * 2.25;
     const outerRadius = item.peer.active ? activePeerRadius + 3 : item.peer.probing ? 5 : 4;
-    ctx.arc(screen.x, screen.y, outerRadius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? .17 : .07) * alpha) + ')';
-    ctx.fill();
-    ctx.beginPath();
     const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 3.1 : 2.6;
-    ctx.arc(screen.x, screen.y, innerRadius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(' + activeColor + ', ' + ((item.peer.active ? 1 : .68) * alpha) + ')';
-    ctx.fill();
+    drawGlyph(ctx, screen, visual.shape, outerRadius, activeColor, (item.peer.active ? .17 : .07) * alpha, 4);
+    drawGlyph(ctx, screen, visual.shape, innerRadius, activeColor, (item.peer.active ? 1 : .68) * alpha, item.peer.active ? 7 : 2);
     if (item.peer.infrastructure) {
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, outerRadius + 3, 0, Math.PI * 2);
@@ -1071,7 +1121,7 @@ function renderItems(items) {
         marker.remove();
       } else {
         marker.className = 'torrent-marker';
-        marker.style.setProperty('--torrent-color', visual.color);
+        marker.dataset.shape = visual.shape;
       }
     }
 

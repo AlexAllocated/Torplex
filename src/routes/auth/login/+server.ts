@@ -9,16 +9,26 @@ function loginPage(message = "") {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Torplex Login</title>
     <style>
-      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { min-height: 100vh; margin: 0; display: grid; place-items: center; color: #e7edf5; background: radial-gradient(circle at 50% -10%, rgba(87,224,194,.22), transparent 42%), #0c1017; }
-      form { width: min(380px, calc(100vw - 32px)); display: grid; gap: 14px; padding: 22px; border: 1px solid rgba(150,167,190,.22); border-radius: 8px; background: rgba(19,25,35,.90); box-shadow: 0 16px 42px rgba(0,0,0,.28); }
-      h1 { margin: 0; font-size: 28px; line-height: 1; }
-      p { margin: 0; color: #95a3b7; }
-      label { color: #95a3b7; font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-      input, button { min-height: 42px; border-radius: 8px; font: inherit; }
-      input { border: 1px solid rgba(150,167,190,.26); padding: 8px 10px; color: #e7edf5; background: rgba(5,10,16,.74); }
-      button { border: 1px solid rgba(87,224,194,.50); color: #d9fff6; background: rgba(87,224,194,.14); font-weight: 850; cursor: pointer; }
-      .error { min-height: 20px; color: #f47086; font-size: 13px; }
+      @font-face { font-family: "BigBlue TerminalPlus"; src: url("/fonts/big-blue-terminal/BigBlue_TerminalPlus.ttf") format("truetype"); font-display: swap; }
+      :root { color-scheme: dark; font-family: "BigBlue TerminalPlus", ui-monospace, monospace; background: #000b06; color: #bbf7d0; }
+      * { box-sizing: border-box; letter-spacing: 0; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; overflow: hidden; color: #bbf7d0; background: radial-gradient(ellipse at center, rgba(3,24,13,.96), #000b06 72%); text-shadow: 0 0 4px rgba(134,239,172,.42), 0 0 11px rgba(34,197,94,.18); }
+      body::before, body::after { position: fixed; inset: 0; z-index: 3; content: ""; pointer-events: none; }
+      body::before { opacity: .62; background: repeating-linear-gradient(to bottom, rgba(187,247,208,.028) 0, rgba(187,247,208,.028) 1px, transparent 1px, transparent 3px, rgba(0,0,0,.22) 3px, rgba(0,0,0,.22) 5px); background-size: 100% 5px; animation: scan 1.6s linear infinite; }
+      body::after { background: radial-gradient(ellipse at center, transparent 46%, rgba(0,0,0,.5) 100%); box-shadow: inset 0 0 72px rgba(0,0,0,.5); }
+      form { position: relative; width: min(430px, calc(100vw - 32px)); display: grid; gap: 14px; padding: 22px; border: 1px solid rgba(74,222,128,.34); border-radius: 2px; background: rgba(3,24,13,.82); box-shadow: inset 0 0 12px rgba(74,222,128,.055), 0 0 10px rgba(34,197,94,.08); }
+      form::before { content: "> AUTH_GATE / TORPLEX"; color: rgba(134,239,172,.7); font-size: 11px; }
+      h1 { margin: 0; color: #dcfce7; font-size: 30px; line-height: 1; text-shadow: 0 0 6px rgba(134,239,172,.72); }
+      p { margin: 0; color: rgba(134,239,172,.66); }
+      label { color: #86efac; font-size: 12px; text-transform: uppercase; }
+      input, button { min-height: 42px; border-radius: 2px; font: inherit; }
+      input { border: 1px solid rgba(74,222,128,.34); padding: 8px 10px; color: #bbf7d0; caret-color: #dcfce7; background: rgba(0,11,6,.88); outline: 0; }
+      input:focus { border-color: rgba(134,239,172,.78); box-shadow: 0 0 12px rgba(34,197,94,.2); }
+      button { border: 1px solid rgba(134,239,172,.62); color: #dcfce7; background: rgba(34,197,94,.18); cursor: pointer; }
+      button:hover { background: rgba(34,197,94,.32); box-shadow: 0 0 10px rgba(74,222,128,.26); }
+      .error { min-height: 20px; color: #dcfce7; font-size: 13px; }
+      @keyframes scan { from { background-position: 0 0; } to { background-position: 0 5px; } }
+      @media (prefers-reduced-motion: reduce) { body::before { animation: none; } }
     </style>
   </head>
   <body>
