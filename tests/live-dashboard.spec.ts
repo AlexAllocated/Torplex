@@ -87,6 +87,23 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(lastQueueItem.locator('[data-role="title"]')).not.toBeEmpty();
   await page.waitForTimeout(300);
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-queue-bottom.png` });
+  await page.addStyleTag({ content: "#items .item { content-visibility: visible !important; }" });
+  const overlappingRows = await page.locator("#items .item").evaluateAll((rows) => rows.flatMap((row) => {
+    const title = row.querySelector('[data-role="title"]')?.getBoundingClientRect();
+    const status = row.querySelector(".item-status")?.getBoundingClientRect();
+    if (!title || !status || title.right <= status.left + 1) return [];
+    return [row.querySelector('[data-role="title"]')?.textContent || "untitled"];
+  }));
+  expect(overlappingRows).toEqual([]);
+  const queueColumns = await page.locator("#items .item").evaluateAll((rows) => rows.map((row) => ({
+    title: row.querySelector(".item-title")!.getBoundingClientRect().left,
+    status: row.querySelector(".item-status")!.getBoundingClientRect().left,
+    progress: row.querySelector(".item-progress")!.getBoundingClientRect().left,
+  })));
+  for (const column of ["title", "status", "progress"] as const) {
+    const positions = queueColumns.map((row) => row[column]);
+    expect(Math.max(...positions) - Math.min(...positions)).toBeLessThanOrEqual(1);
+  }
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
