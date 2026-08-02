@@ -7,10 +7,14 @@ const magnetUri = process.env.TORPLEX_E2E_MAGNET;
 
 async function unlock(page: import("@playwright/test").Page) {
   await page.goto(new URL("/auth/login", baseUrl!).toString());
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await page.getByRole("button", { name: "Add Torrent" }).click();
   await expect(page).toHaveURL(/\/add$/);
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
 }
 
 test("torrent intake uses normal document scrolling on mobile", async ({ page }) => {

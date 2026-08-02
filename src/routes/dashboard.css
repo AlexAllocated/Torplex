@@ -2368,6 +2368,85 @@
       background: rgb(var(--phosphor-screen) / .72);
     }
     .intake-tabs button.active { box-shadow: inset 0 -2px 0 rgb(var(--phosphor-soft)); }
+    .intake-tabs button span {
+      border: 1px solid rgb(var(--phosphor-main) / .38);
+      color: rgb(var(--phosphor-bright));
+      background: rgb(var(--phosphor-deep) / .18);
+    }
+    input[type="file"] { color: rgb(var(--phosphor-text)); }
+    input[type="file"]::file-selector-button {
+      margin-right: 10px;
+      border: 1px solid rgb(var(--phosphor-main) / .48);
+      border-radius: 2px;
+      padding: 7px 10px;
+      color: rgb(var(--phosphor-text));
+      background: rgb(var(--phosphor-screen) / .82);
+      font: inherit;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    input[type="file"]::file-selector-button:hover {
+      border-color: rgb(var(--phosphor-soft) / .82);
+      color: rgb(var(--phosphor-bright));
+      background: rgb(var(--phosphor-deep) / .32);
+    }
+    input[type="checkbox"] {
+      appearance: none;
+      display: inline-grid;
+      place-content: center;
+      border: 1px solid rgb(var(--phosphor-main) / .48);
+      border-radius: 1px;
+      color: rgb(var(--phosphor-bright));
+      background: rgb(var(--phosphor-black) / .88);
+    }
+    input[type="checkbox"]::before {
+      width: .62em;
+      height: .62em;
+      content: "";
+      background: currentColor;
+      box-shadow: 0 0 6px rgb(var(--phosphor-soft) / .62);
+      transform: scale(0);
+      transition: transform 90ms steps(2, end);
+    }
+    input[type="checkbox"]:checked::before { transform: scale(1); }
+    .bulk-submit-actions {
+      border-color: rgb(var(--phosphor-main) / .24);
+      background: rgb(var(--phosphor-black) / .96);
+    }
+    .login-page-shell {
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .login-card {
+      display: grid;
+      width: min(430px, 100%);
+      gap: 14px;
+      padding: 22px;
+      border: 1px solid rgb(var(--phosphor-main) / .34);
+      border-radius: 2px;
+      background: rgb(var(--phosphor-screen) / .82);
+      box-shadow: inset 0 0 12px rgb(var(--phosphor-main) / .055), 0 0 10px rgb(var(--phosphor-deep) / .08);
+    }
+    .login-register { color: rgb(var(--phosphor-soft) / .7); font-size: 11px; }
+    .login-card h1 { margin: 0; font-size: 30px; line-height: 1; }
+    .login-card p { margin: 0; color: rgb(var(--phosphor-soft) / .7); }
+    .login-card label { color: rgb(var(--phosphor-soft)); font-size: 12px; text-transform: uppercase; }
+    .login-card input {
+      min-height: 42px;
+      border: 1px solid rgb(var(--phosphor-main) / .34);
+      border-radius: 2px;
+      padding: 8px 10px;
+      color: rgb(var(--phosphor-text));
+      caret-color: rgb(var(--phosphor-bright));
+      background: rgb(var(--phosphor-black) / .88);
+      font: inherit;
+      outline: 0;
+    }
+    .login-card input:focus { border-color: rgb(var(--phosphor-soft) / .78); box-shadow: 0 0 12px rgb(var(--phosphor-deep) / .2); }
+    .login-card button { min-height: 42px; }
+    .login-error { min-height: 20px; color: rgb(var(--phosphor-bright)); font-size: 13px; }
     .intake-step, .dialog-head, .map-title { border-color: rgb(var(--phosphor-main) / .2); }
     .intake-page-card .dialog-head { background: linear-gradient(to bottom, rgb(var(--phosphor-black)) 76%, transparent); }
 

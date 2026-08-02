@@ -143,9 +143,13 @@ test("AI search proposals become independently planned bulk intake items", async
   });
 
   await page.goto(new URL("/auth/login", baseUrl!).toString());
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await page.getByRole("button", { name: "Add Torrent" }).click();
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
   await page.getByRole("tab", { name: "Find with AI" }).click();
   await page.getByLabel("What do you want to find?").fill("Find both fixture films");
   await page.getByLabel(/I will use these search results only/).check();
@@ -179,9 +183,13 @@ test("an active AI search can be cancelled", async ({ page }) => {
   });
 
   await page.goto(new URL("/auth/login", baseUrl!).toString());
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await page.getByRole("button", { name: "Add Torrent" }).click();
+  await page.locator("#crtBootTrigger").click();
+  await expect(page.locator("body")).toHaveClass(/crt-powered-on/);
   await page.getByRole("tab", { name: "Find with AI" }).click();
   await page.getByLabel("What do you want to find?").fill("Find ten science fiction horror films");
   await page.getByLabel(/I will use these search results only/).check();

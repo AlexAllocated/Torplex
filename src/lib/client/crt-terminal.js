@@ -60,14 +60,30 @@ function createTerminalMediaBank() {
   const urls = {
     enabled: createWavUrl(.38, (time, index, count) => {
       const progress = index / count;
-      const frequency = progress < .48 ? 520 : 780;
+      const frequency = progress < .48 ? 220 : 330;
       const envelope = Math.sin(Math.PI * progress) ** .45;
-      return Math.sign(Math.sin(tau * frequency * time)) * envelope * .42;
+      return Math.sin(tau * frequency * time) * envelope * .38;
     }),
-    key: createWavUrl(.055, (time, index, count) => {
+    action: createWavUrl(.085, (time, index, count) => {
       const progress = index / count;
-      const noise = ((Math.sin(index * 12.9898) * 43758.5453) % 1) * 2 - 1;
-      return (Math.sin(tau * 960 * time) * .55 + noise * .45) * (1 - progress) ** 3 * .48;
+      const frequency = 190 + progress * 55;
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** .65 * .3;
+    }),
+    confirm: createWavUrl(.16, (time, index, count) => {
+      const progress = index / count;
+      const frequency = progress < .48 ? 240 : 360;
+      const localProgress = (progress % .5) * 2;
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * localProgress) ** .55 * .31;
+    }),
+    navigate: createWavUrl(.11, (time, index, count) => {
+      const progress = index / count;
+      const frequency = 330 - progress * 110;
+      return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** .7 * .28;
+    }),
+    warning: createWavUrl(.18, (time, index, count) => {
+      const progress = index / count;
+      const pulse = Math.sin(Math.PI * ((progress * 2) % 1)) ** .7;
+      return Math.sin(tau * 145 * time) * pulse * .3;
     }),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
@@ -75,9 +91,11 @@ function createTerminalMediaBank() {
       const sweep = Math.sin(tau * (58 + progress * 520) * time);
       return (noise * .46 + sweep * .54) * Math.sin(Math.PI * progress) ** .8 * .5;
     }),
-    hum: createWavUrl(2, (time) => (
-      Math.sin(tau * 72 * time) * .72 + Math.sin(tau * 144 * time) * .18
-    ) * .13),
+    hum: createWavUrl(60, (time) => (
+      Math.sin(tau * 72 * time) * .72
+      + Math.sin(tau * 144 * time) * .14
+      + Math.sin(tau * 36 * time) * .08
+    ) * .11),
   };
   const audio = (url, volume, loop = false) => {
     const element = new Audio(url);
@@ -90,8 +108,11 @@ function createTerminalMediaBank() {
     urls,
     enabled: audio(urls.enabled, .72),
     power: audio(urls.power, .62),
-    hum: audio(urls.hum, .38, true),
-    keys: Array.from({ length: 8 }, () => audio(urls.key, .48)),
+    hum: audio(urls.hum, .32, true),
+    controls: Object.fromEntries(['action', 'confirm', 'navigate', 'warning'].map((name) => [
+      name,
+      Array.from({ length: 4 }, () => audio(urls[name], .5)),
+    ])),
   };
 }
 
@@ -106,16 +127,13 @@ export function startCrtTerminal() {
   const media = createTerminalMediaBank();
   let mediaUnlocked = false;
   let audioError = '';
-  let keyVoice = 0;
-  let typingTimer = 0;
+  const controlVoices = new Map();
   let themeTimer = 0;
   let themeSwapTimer = 0;
-  let activeTyping = 0;
   let lastKeyClickAt = 0;
   let activated = false;
   let destroyed = false;
   let muted = localStorage.getItem('torplex:crt-muted') === '1';
-  const warmStart = sessionStorage.getItem('torplex:crt-powered') === '1';
   const storedTheme = normalizeTheme(localStorage.getItem(CRT_THEME_STORAGE_KEY));
   let activeTheme = CRT_THEMES.has(storedTheme) ? storedTheme : 'green';
   let pendingTheme = activeTheme;
@@ -126,10 +144,10 @@ export function startCrtTerminal() {
     button.setAttribute('aria-pressed', String(button.dataset.theme === activeTheme));
   });
 
-  body.classList.add(warmStart ? 'crt-powering-on' : 'crt-awaiting-power');
+  body.classList.add('crt-awaiting-power');
   body.classList.toggle('crt-audio-muted', muted);
 
-  const allMedia = () => [media.enabled, media.power, media.hum, ...media.keys];
+  const allMedia = () => [media.enabled, media.power, media.hum, ...Object.values(media.controls).flat()];
 
   const setAudioUi = () => {
     const state = muted ? 'muted' : audioError ? 'error' : mediaUnlocked ? 'running' : 'armed';
@@ -183,13 +201,21 @@ export function startCrtTerminal() {
     void playElement(media.power);
   };
 
-  const playKeyClick = () => {
+  const playControlSound = (target, forcedKind = '') => {
     if (muted || !mediaUnlocked || document.hidden) return;
     const wallClock = performance.now();
-    if (wallClock - lastKeyClickAt < 34) return;
+    if (wallClock - lastKeyClickAt < 45) return;
     lastKeyClickAt = wallClock;
-    const voice = media.keys[keyVoice % media.keys.length];
-    keyVoice += 1;
+    const control = target instanceof Element ? target.closest('button, a, summary, [role="button"], input[type="checkbox"]') : null;
+    const kind = forcedKind
+      || (control?.matches('.danger-button, [data-sound="warning"]') ? 'warning'
+        : control?.matches('.primary-button, [data-sound="confirm"]') ? 'confirm'
+          : control?.matches('a, summary, [role="tab"], .crt-theme-dot, [data-sound="navigate"]') ? 'navigate'
+            : 'action');
+    const voices = media.controls[kind] || media.controls.action;
+    const index = controlVoices.get(kind) || 0;
+    const voice = voices[index % voices.length];
+    controlVoices.set(kind, index + 1);
     void playElement(voice);
   };
 
@@ -208,7 +234,7 @@ export function startCrtTerminal() {
   };
   setAudioUi();
 
-  const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
+  const applyTheme = (theme, { persist = true, animate = true } = {}) => {
     theme = normalizeTheme(theme);
     if (!CRT_THEMES.has(theme)) return;
     const changed = pendingTheme !== theme || activeTheme !== theme;
@@ -246,7 +272,6 @@ export function startCrtTerminal() {
       pendingTheme = theme;
       document.documentElement.dataset.crtTheme = theme;
     }
-    if (changed && sound) void playKeyClick();
   };
 
   const onThemeClick = (event) => {
@@ -259,23 +284,10 @@ export function startCrtTerminal() {
   const onThemeStorage = (event) => {
     const theme = normalizeTheme(event.newValue);
     if (event.key === CRT_THEME_STORAGE_KEY && CRT_THEMES.has(theme)) {
-      applyTheme(theme, { persist: false, sound: false });
+      applyTheme(theme, { persist: false });
     }
   };
   window.addEventListener('storage', onThemeStorage);
-  const onTerminalKey = () => void playKeyClick();
-  window.addEventListener('torplex:terminal-key', onTerminalKey);
-
-  const runTypingMotor = () => {
-    if (typingTimer || activeTyping <= 0 || muted) return;
-    const tick = () => {
-      typingTimer = 0;
-      if (activeTyping <= 0 || muted || destroyed) return;
-      void playKeyClick();
-      typingTimer = window.setTimeout(tick, 42 + Math.random() * 38);
-    };
-    tick();
-  };
 
   const reveal = (node, delay = 0) => {
     if (!(node instanceof HTMLElement) || revealed.has(node) || !hasReadableText(node)) return;
@@ -313,13 +325,6 @@ export function startCrtTerminal() {
     element.classList.remove('terminal-text-refresh');
     void element.offsetWidth;
     element.classList.add('terminal-text-refresh');
-    void playKeyClick();
-  };
-
-  const onAnimationStart = (event) => {
-    if (!(event.target instanceof HTMLElement) || event.animationName !== 'terminalTypeIn') return;
-    activeTyping += 1;
-    runTypingMotor();
   };
   const onAnimationEnd = (event) => {
     if (!(event.target instanceof HTMLElement)) return;
@@ -328,14 +333,8 @@ export function startCrtTerminal() {
       return;
     }
     if (event.animationName !== 'terminalTypeIn') return;
-    activeTyping = Math.max(0, activeTyping - 1);
     event.target.classList.remove('terminal-type-in');
-    if (!activeTyping && typingTimer) {
-      clearTimeout(typingTimer);
-      typingTimer = 0;
-    }
   };
-  document.addEventListener('animationstart', onAnimationStart);
   document.addEventListener('animationend', onAnimationEnd);
 
   const observer = new MutationObserver((mutations) => {
@@ -353,7 +352,8 @@ export function startCrtTerminal() {
   const activate = async () => {
     if (activated) return;
     activated = true;
-    sessionStorage.setItem('torplex:crt-powered', '1');
+    boot?.removeEventListener('click', activate);
+    window.removeEventListener('keydown', onBootKey);
     body.classList.remove('crt-awaiting-power');
     body.classList.add('crt-powering-on');
     if (boot) boot.setAttribute('aria-hidden', 'true');
@@ -372,28 +372,17 @@ export function startCrtTerminal() {
     event.preventDefault();
     void activate();
   };
-  if (warmStart) {
-    activated = true;
-    if (boot) boot.setAttribute('aria-hidden', 'true');
-    window.setTimeout(() => {
-      if (destroyed) return;
-      body.classList.remove('crt-powering-on');
-      body.classList.add('crt-powered-on');
-      queueTargets(document.body);
-      if (!muted) void startHum();
-    }, reducedMotion ? 0 : 720);
-  } else {
-    boot?.addEventListener('click', activate);
-    window.addEventListener('keydown', onBootKey, { once: true });
-  }
+  boot?.addEventListener('click', activate);
+  window.addEventListener('keydown', onBootKey);
 
   const unlockAudio = (event) => {
     if (event?.target instanceof Element && event.target.closest('#crtAudioToggle')) return;
     enableAudio();
   };
   const onUiActivate = (event) => {
-    if (!(event.target instanceof Element) || !event.target.closest('button, a, [role="button"]')) return;
-    void playKeyClick();
+    if (!(event.target instanceof Element) || !event.target.closest('button, a, summary, [role="button"], input[type="checkbox"]')) return;
+    if (event.target.closest('#crtBootTrigger, #crtAudioToggle')) return;
+    void playControlSound(event.target);
   };
   document.addEventListener('pointerdown', unlockAudio, { capture: true });
   document.addEventListener('keydown', unlockAudio, { capture: true });
@@ -438,11 +427,8 @@ export function startCrtTerminal() {
     document.removeEventListener('click', onUiActivate);
     themeButtons.forEach((button) => button.removeEventListener('click', onThemeClick));
     window.removeEventListener('storage', onThemeStorage);
-    window.removeEventListener('torplex:terminal-key', onTerminalKey);
-    document.removeEventListener('animationstart', onAnimationStart);
     document.removeEventListener('animationend', onAnimationEnd);
     document.removeEventListener('visibilitychange', onVisibility);
-    if (typingTimer) clearTimeout(typingTimer);
     if (themeTimer) clearTimeout(themeTimer);
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
     stopHum();

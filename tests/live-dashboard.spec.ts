@@ -32,19 +32,19 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     localStorage.removeItem('torplex:crt-muted');
   });
   await page.goto(baseUrl!);
-  await expect(page.locator('.theme-dot')).toHaveCount(7);
-  expect(await page.locator('.theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
+  await powerOn(page);
+  await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
+  await expect(page.locator('body')).toHaveAttribute('data-audio-backend', 'html-media');
+  await expect(page.locator('body')).toHaveAttribute('data-audio-probe', 'played');
+  await expect(page.locator('body')).not.toHaveAttribute('data-audio-state', 'error');
+  await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
+  expect(await page.locator('.crt-theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
     'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta',
   ]);
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   await expect(page.getByRole('button', { name: 'Magenta phosphor' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
-  await powerOn(page);
-  await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
-  await expect(page.locator('body')).toHaveAttribute('data-audio-backend', 'html-media');
-  await expect(page.locator('body')).toHaveAttribute('data-audio-probe', 'played');
-  await expect(page.locator('body')).not.toHaveAttribute('data-audio-state', 'error');
   const audioToggle = page.locator('#crtAudioToggle');
   await audioToggle.click();
   await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'muted');
@@ -96,8 +96,8 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   expect(await page.locator('#fullscreenMap').evaluate((element) => getComputedStyle(element).borderColor)).toContain('245, 62, 200');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
-  await expect(page.locator('body')).toHaveClass(/crt-powering-on/);
-  await expect(page.locator('body')).toHaveClass(/crt-powered-on/);
+  await expect(page.locator('body')).toHaveClass(/crt-awaiting-power/);
+  await powerOn(page);
   await page.locator('.crt-theme-dot[data-theme="green"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'green');
   const font = await page.evaluate(async () => {
@@ -175,7 +175,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(worldShell).toBeHidden();
   expect(await page.evaluate(() => localStorage.getItem('torplex:map-collapsed'))).toBe('1');
   await page.reload();
-  await expect(page.locator('body')).toHaveClass(/crt-powered-on/);
+  await powerOn(page);
   await expect(mapPanel).toHaveClass(/map-collapsed/);
   await expect(mapPanel).toHaveAttribute('data-map-rendering', 'paused');
   await expect(worldShell).toBeHidden();
@@ -341,9 +341,9 @@ test("pending rows can be reprioritized across multiple positions", async ({ pag
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(baseUrl!);
+  await powerOn(page);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
-  await powerOn(page);
 
   const originalIds = await page.evaluate(async () => {
     const status = await (await fetch("/api/status")).json();
