@@ -16,7 +16,8 @@ Torplex does not provide media. It manages `.torrent` files, magnet links, direc
 - Stores queue state in a runtime `manifest.json`.
 - Runs a long-lived downloader worker that picks up new queue entries without restart.
 - Persists drag-and-drop queue priority changes and safely pauses the active transfer when another item is promoted above it.
-- Uses `aria2c` with seeding disabled by default.
+- Uses `aria2c` with post-completion seeding disabled and torrent networking
+  bound to an explicitly configured VPN interface by default.
 - Moves completed downloads into Movies or TV directories.
 - Refreshes Plex library sections after organizing media.
 - Shows disk usage, queue progress, active peers, peer locations, and transfer speeds.
@@ -115,6 +116,8 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `SHUTDOWN_TIMEOUT` | `30` | Seconds adapter-node waits before closing live connections during shutdown. Torplex recommends `3` for a supervised service. |
 | `BATCH_DIR` | `/media/plex/.downloads/torrent-batch` | Runtime state, torrent files, staging, and logs. |
 | `ARIA2_CHECK_INTEGRITY` | disabled | Set to `true`, `yes`, or `1` to hash existing partial data before resuming. Recommended after an unclean shutdown or storage disconnect. |
+| `TORPLEX_REQUIRE_VPN` | `true` | Fail closed before starting torrent payload or magnet-metadata networking unless a VPN interface is configured. Set to `false` only as an intentional opt-out. |
+| `TORPLEX_VPN_INTERFACE` | empty | Required interface name used for every aria2 torrent socket, such as `wg-torplex`. Torplex refuses to start torrent networking if the interface is absent. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
 | `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Fixed maximum simultaneous torrent jobs when adaptive scheduling is disabled. |
 | `ADAPTIVE_CONCURRENCY` | `false` | Dynamically open download slots based on aggregate ingress and measured block-device write activity. |
@@ -277,6 +280,15 @@ For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent
 
 The worker polls the manifest every two seconds. For each item that is not completed, failed, organizing, or already running, it starts an `aria2c` process and resumes partial downloads with `--continue=true`. Set `MAX_CONCURRENT_DOWNLOADS` for a fixed cap. With `ADAPTIVE_CONCURRENCY=true`, the runner starts the minimum immediately, observes aggregate aria2 ingress plus the media block device's actual write rate and busy time, and opens at most one additional slot per settling window up to `ADAPTIVE_MAX_CONCURRENCY`. Sustained write pressure pauses the lowest-priority active transfer, preserving its partial files and aria2 resume state. Separate pressure and cooldown windows keep the scheduler from oscillating. Set `ARIA2_CHECK_INTEGRITY=true` after an unclean shutdown or storage disconnect to validate existing pieces before resuming.
 
+Torrent payload and magnet-metadata processes use the same fail-closed network
+policy. They bind to `TORPLEX_VPN_INTERFACE`, disable IPv6, disable seeding after
+completion, prevent a completed hash check from entering seed mode, and cap
+uploads during downloading to one byte per second. A host firewall kill switch
+is still required: allow Torplex's torrent process only through the VPN interface
+and allow the WireGuard endpoint itself through the physical interface. A VPN
+does not grant rights to content; the intake rights attestation remains the
+user's responsibility.
+
 Pending rows can be reordered from the dashboard with animated position changes. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 
 When a download finishes, the worker:
@@ -353,6 +365,8 @@ Set `TORPLEX_E2E_REQUIRE_PEERS=1` when active downloads should also be required 
 - Run Torplex behind HTTPS, a firewall, VPN, reverse proxy, or private network if the dashboard is reachable outside your LAN.
 - Do not commit `.env`, `manifest.json`, torrent files, logs, or Plex tokens.
 - Set `AUTH_COOKIE_SECRET` to a strong random value before enabling login.
+- Keep `TORPLEX_REQUIRE_VPN=true`, configure `TORPLEX_VPN_INTERFACE`, and add a
+  host-level kill switch before enabling Torplex on an internet connection.
 
 ## Troubleshooting
 
@@ -363,4 +377,5 @@ Set `TORPLEX_E2E_REQUIRE_PEERS=1` when active downloads should also be required 
 - **Files organize but Plex cannot see them:** check `MEDIA_CHOWN`, `MEDIA_DIR_MODE`, `MEDIA_FILE_MODE`, and Plex library folder permissions.
 - **No peer map data:** make sure `ss` and `ps` are installed and `aria2c` is running on the same host as the web app.
 - **Downloads do not start after upload:** make sure `run-batch.ts` is running and watching the same `BATCH_DIR` as the web app.
+- **Torrent networking is disabled:** connect the VPN interface named by `TORPLEX_VPN_INTERFACE`; Torplex intentionally fails closed while it is missing.
 - **Pasted page URL returns a Cloudflare challenge:** open the page in a browser and paste its magnet link, or download and upload the `.torrent` file. Torplex does not bypass browser challenges.

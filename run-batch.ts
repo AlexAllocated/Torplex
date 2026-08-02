@@ -7,6 +7,7 @@ import {
   type MetadataCuratorPatch,
   type MetadataCuratorRecord,
 } from "./src/lib/server/metadata-curator";
+import { aria2NetworkPolicyArgs } from "./src/lib/server/aria2-policy";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
@@ -1097,9 +1098,7 @@ async function processItem(item: ManifestItem) {
         "--continue=true",
         ...(checkIntegrity ? ["--check-integrity=true"] : []),
         "--file-allocation=none",
-        "--seed-time=0",
-        "--seed-ratio=0.0",
-        "--max-upload-limit=1K",
+        ...aria2NetworkPolicyArgs(),
         "--bt-max-peers=80",
         "--bt-enable-lpd=false",
         "--enable-peer-exchange=true",

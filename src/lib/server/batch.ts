@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "fs";
 import { spawn } from "node:child_process";
+import { aria2NetworkPolicyArgs } from "$lib/server/aria2-policy";
 import { mkdir, readdir, rename, rm, writeFile } from "fs/promises";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -576,9 +577,7 @@ async function resolveMagnetTorrent(
         `--dir=${metadataDir}`,
         "--bt-metadata-only=true",
         "--bt-save-metadata=true",
-        "--seed-time=0",
-        "--seed-ratio=0",
-        "--max-upload-limit=1K",
+        ...aria2NetworkPolicyArgs(),
         "--bt-enable-lpd=false",
         "--enable-dht=true",
         "--enable-peer-exchange=true",
