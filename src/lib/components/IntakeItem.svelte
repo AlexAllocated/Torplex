@@ -36,7 +36,7 @@
   let fallbackHistory = [];
   let fields = {
     title: '', id: '', mediaType: 'show', destinationPath: '', organizeStrategy: 'mergeRoot', targetSubdir: '',
-    verifyStreams: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, refreshPlex: true,
+    verifyStreams: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, validateMetadataWithAi: true, refreshPlex: true,
   };
   let routes = [];
 
@@ -258,6 +258,7 @@
         ensureEnglishSubtitles: Boolean(plan.postDownloadChecks?.ensureEnglishSubtitles),
         verifyCanonicalMetadata: Boolean(plan.postDownloadChecks?.verifyCanonicalMetadata),
         verifyArtwork: Boolean(plan.postDownloadChecks?.verifyArtwork),
+        validateMetadataWithAi: Boolean(plan.postDownloadChecks?.validateMetadataWithAi),
         refreshPlex: Boolean(plan.postDownloadChecks?.refreshPlex),
       };
       status = `${result.model} plan ready`;
@@ -430,6 +431,7 @@
           <label><input type="checkbox" bind:checked={fields.ensureEnglishSubtitles} /><span><strong>Ensure English captions</strong><small>Check embedded, sidecar, and configured lookup.</small></span></label>
           <label><input type="checkbox" bind:checked={fields.verifyCanonicalMetadata} /><span><strong>Verify title and date</strong><small>Reconcile the Plex match.</small></span></label>
           <label><input type="checkbox" bind:checked={fields.verifyArtwork} /><span><strong>Verify artwork</strong><small>Check poster metadata.</small></span></label>
+          <label><input type="checkbox" bind:checked={fields.validateMetadataWithAi} /><span><strong>AI metadata curator</strong><small>Research and correct high-confidence Plex metadata.</small></span></label>
           <label><input type="checkbox" bind:checked={fields.refreshPlex} /><span><strong>Refresh Plex</strong><small>Scan the affected library.</small></span></label>
         </div>
       </div>

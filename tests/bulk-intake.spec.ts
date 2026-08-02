@@ -122,7 +122,7 @@ test("AI search proposals become independently planned bulk intake items", async
           id: beta ? "beta-2002" : "alpha-2001", mediaType: "movie",
           destinationPath: `/tmp/torplex-media/Movies/${title}`, organizeStrategy: "mergeRoot", targetSubdir: "", routes: [],
           decisions: ["Selected the feature and English captions."], warnings: [],
-          postDownloadChecks: { verifyStreams: true, scanForMalware: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, refreshPlex: true },
+          postDownloadChecks: { verifyStreams: true, scanForMalware: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, validateMetadataWithAi: true, refreshPlex: true },
         },
       }),
     });

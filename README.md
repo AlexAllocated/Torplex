@@ -154,6 +154,7 @@ Smart Setup is optional. Without an API key, the normal torrent inspector, per-f
 | --- | --- | --- |
 | `OPENAI_API_KEY` | empty | Enables Smart Setup. Keep the value in an ignored `.env` or service credential file; never commit it. |
 | `TORPLEX_AI_MODEL` | `gpt-5.6-terra` | OpenAI model used for structured intake plans. |
+| `TORPLEX_METADATA_AI_MODEL` | value of `TORPLEX_AI_MODEL` | Optional OpenAI model override for post-download metadata curation. |
 | `TORPLEX_AI_EXTRA_INSTRUCTIONS` | empty | Optional installation-wide rules appended to Torplex's built-in planning policy. |
 
 The intake workspace also accepts per-torrent **Additional instructions**. Those instructions are appended to the fixed Torplex policy; they do not replace its path, selection, validation, or review requirements.
@@ -196,6 +197,10 @@ The **Find with AI** flow works in two review stages:
 Search requires its own rights acknowledgement and never queues or downloads media. Final execution uses the separate batch rights acknowledgement and the same server-side path, payload, malware, and duplicate validation used by manual intake.
 
 ### Post-download checks
+
+Torplex can run a constrained AI metadata curator after Plex scans newly organized media. When **AI metadata curator** is enabled and `OPENAI_API_KEY` is configured, it sends the requested title, destination, filenames, and the matched Plex metadata to the OpenAI Responses API. It does not send media bytes. The curator researches the title with web search and may correct only a high-confidence canonical title, summary, original release date, or year. It respects Plex field locks, requires supporting source URLs, limits each run to 20 record patches, verifies every accepted edit against Plex, and records its result in the item log and queue state.
+
+AI curation is deliberately advisory around the deterministic pipeline. It cannot change files, file selection, paths, media type, season or episode indexes, subtitles, artwork files, malware results, or download state. A model/API error is recorded as a warning and never fails otherwise valid media. Disable the checkbox for an item when its custom metadata should remain untouched.
 
 New queue entries always pass through ClamAV before leaving staging. The **Verify media streams** control uses `ffprobe` to reject unreadable containers, files without a video stream or duration, and executable/script attachments. BitTorrent pieces can cross file boundaries, so aria2 may materialize partial bytes for an unselected sample or text file. Torplex removes every artifact absent from the reviewed selected-path manifest before verification and organization. Verification then probes only selected media; legacy queue entries without a selected-path manifest exclude clearly labeled sample, trailer, and proof videos from the probe set. A durable payload-complete checkpoint separates downloading from post-processing, so retrying a cleanup, verification, organization, or Plex failure reuses intact staging data instead of downloading or checksumming the torrent again. The **Ensure English captions** control recognizes embedded English tracks, renames an exact same-stem sidecar such as `Episode.srt` to Plex's explicit `Episode.en.srt` convention, and can fetch a missing caption only when OpenSubtitles reports an exact file-hash match. A fetched caption is validated as timed text and scanned with ClamAV before it is kept. After the library refresh, the metadata and artwork checks query Plex by the organized file paths and record whether the matched entries contain a title, release date, description, and artwork.
 

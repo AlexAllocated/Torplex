@@ -42,6 +42,7 @@ type Item = {
     ensureEnglishSubtitles: boolean;
     verifyCanonicalMetadata: boolean;
     verifyArtwork: boolean;
+    validateMetadataWithAi?: boolean;
     refreshPlex: boolean;
   };
   destination: { type: "movie" | "show"; path: string };
@@ -64,6 +65,9 @@ type StateItem = {
   completedAt?: string;
   failedAt?: string;
   error?: string;
+  aiMetadataStatus?: string;
+  aiMetadataSummary?: string;
+  aiMetadataModel?: string;
 };
 
 type State = {
@@ -1199,6 +1203,9 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
       completedAt: itemState.completedAt,
       failedAt: itemState.failedAt,
       error: itemState.error,
+      aiMetadataStatus: itemState.aiMetadataStatus,
+      aiMetadataSummary: itemState.aiMetadataSummary,
+      aiMetadataModel: itemState.aiMetadataModel,
       progress,
       destinationExists,
     };
@@ -1517,6 +1524,7 @@ async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promis
       ensureEnglishSubtitles: formBool(form, "ensureEnglishSubtitles"),
       verifyCanonicalMetadata: formBool(form, "verifyCanonicalMetadata"),
       verifyArtwork: formBool(form, "verifyArtwork"),
+      validateMetadataWithAi: formBool(form, "validateMetadataWithAi"),
       refreshPlex: formBool(form, "refreshPlex"),
     },
   };

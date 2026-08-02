@@ -1,6 +1,12 @@
 import { existsSync } from "fs";
 import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
 import { basename, dirname, extname, join, relative } from "path";
+import {
+  createMetadataCuratorPlan,
+  metadataCuratorConfig,
+  type MetadataCuratorPatch,
+  type MetadataCuratorRecord,
+} from "./src/lib/server/metadata-curator";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
@@ -57,6 +63,7 @@ type ManifestItem = {
     ensureEnglishSubtitles: boolean;
     verifyCanonicalMetadata: boolean;
     verifyArtwork: boolean;
+    validateMetadataWithAi?: boolean;
     refreshPlex: boolean;
   };
   destination: { type: "movie" | "show"; path: string };
@@ -808,14 +815,22 @@ async function scanPlex(section: "movie" | "show") {
 }
 
 type PlexMetadata = {
+  ratingKey?: string;
+  type?: string;
   title?: string;
+  parentTitle?: string;
   grandparentTitle?: string;
+  parentIndex?: number;
+  index?: number;
   summary?: string;
   year?: number;
   originallyAvailableAt?: string;
+  guid?: string;
+  Guid?: Array<{ id?: string }>;
   thumb?: string;
   parentThumb?: string;
   grandparentThumb?: string;
+  Field?: Array<{ name?: string; locked?: boolean | number | string }>;
   Media?: Array<{ Part?: Array<{ file?: string }> }>;
 };
 
@@ -856,6 +871,159 @@ async function verifyPlexResult(item: ManifestItem, destinations: string[]) {
       artworkSummary: `${matches.length - missingArtwork.length}/${matches.length} Plex item(s) have artwork`,
     });
   }
+  return matches;
+}
+
+function plexFieldIsLocked(value: boolean | number | string | undefined) {
+  return value === true || value === 1 || value === "1";
+}
+
+function metadataCuratorRecords(matches: PlexMetadata[]): MetadataCuratorRecord[] {
+  return matches.flatMap((entry) => {
+    if (!entry.ratingKey || !/^\d+$/.test(entry.ratingKey)) return [];
+    return [{
+      recordId: entry.ratingKey,
+      type: entry.type ?? "unknown",
+      title: entry.title ?? "",
+      parentTitle: entry.parentTitle ?? "",
+      grandparentTitle: entry.grandparentTitle ?? "",
+      seasonNumber: entry.parentIndex ?? 0,
+      episodeNumber: entry.index ?? 0,
+      year: entry.year ?? 0,
+      originallyAvailableAt: entry.originallyAvailableAt ?? "",
+      summary: entry.summary ?? "",
+      guid: entry.guid ?? "",
+      externalGuids: (entry.Guid ?? []).flatMap((guid) => guid.id ? [guid.id] : []),
+      hasArtwork: Boolean(entry.thumb || entry.parentThumb || entry.grandparentThumb),
+      lockedFields: (entry.Field ?? []).flatMap((field) =>
+        field.name && plexFieldIsLocked(field.locked) ? [field.name] : []
+      ),
+      files: (entry.Media ?? []).flatMap((media) => media.Part ?? []).flatMap((part) => part.file ? [part.file] : []),
+    }];
+  });
+}
+
+function changedMetadataPatch(patch: MetadataCuratorPatch, record: MetadataCuratorRecord) {
+  return {
+    ...patch,
+    applyTitle: patch.applyTitle && patch.title !== record.title,
+    applySummary: patch.applySummary && patch.summary !== record.summary,
+    applyOriginallyAvailableAt:
+      patch.applyOriginallyAvailableAt && patch.originallyAvailableAt !== record.originallyAvailableAt,
+    applyYear: patch.applyYear && patch.year !== record.year,
+  };
+}
+
+async function applyPlexMetadataPatch(token: string, patch: MetadataCuratorPatch) {
+  const params = new URLSearchParams();
+  if (patch.applyTitle) params.set("title", patch.title);
+  if (patch.applySummary) params.set("summary", patch.summary);
+  if (patch.applyOriginallyAvailableAt) params.set("originallyAvailableAt", patch.originallyAvailableAt);
+  if (patch.applyYear) params.set("year", String(patch.year));
+  if (!params.size) return 0;
+  const response = await fetch(
+    `${plexUrl}/library/metadata/${encodeURIComponent(patch.recordId)}?${params}`,
+    {
+      method: "PUT",
+      headers: { Accept: "application/json", "X-Plex-Token": token },
+      signal: AbortSignal.timeout(20_000),
+    },
+  );
+  if (!response.ok) throw new Error(`Plex rejected metadata edit for ${patch.recordId} with HTTP ${response.status}`);
+  return [patch.applyTitle, patch.applySummary, patch.applyOriginallyAvailableAt, patch.applyYear].filter(Boolean).length;
+}
+
+async function fetchPlexMetadataRecord(token: string, recordId: string) {
+  const response = await fetch(`${plexUrl}/library/metadata/${encodeURIComponent(recordId)}`, {
+    headers: { Accept: "application/json", "X-Plex-Token": token },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Could not verify Plex metadata ${recordId}: HTTP ${response.status}`);
+  const payload = await response.json() as { MediaContainer?: { Metadata?: PlexMetadata[] } };
+  const record = payload.MediaContainer?.Metadata?.[0];
+  if (!record) throw new Error(`Plex metadata ${recordId} disappeared after editing`);
+  return record;
+}
+
+function verifyAppliedMetadata(patch: MetadataCuratorPatch, record: PlexMetadata) {
+  if (patch.applyTitle && record.title !== patch.title) throw new Error(`Plex did not retain the title edit for ${patch.recordId}`);
+  if (patch.applySummary && record.summary !== patch.summary) throw new Error(`Plex did not retain the summary edit for ${patch.recordId}`);
+  if (patch.applyOriginallyAvailableAt && record.originallyAvailableAt !== patch.originallyAvailableAt) {
+    throw new Error(`Plex did not retain the release-date edit for ${patch.recordId}`);
+  }
+  if (patch.applyYear && record.year !== patch.year) throw new Error(`Plex did not retain the year edit for ${patch.recordId}`);
+}
+
+async function curatePlexMetadata(
+  item: ManifestItem,
+  matches: PlexMetadata[],
+  logPath: string,
+) {
+  const config = metadataCuratorConfig();
+  if (!config.available) {
+    await setItemState(item.id, {
+      aiMetadataStatus: "skipped",
+      aiMetadataModel: config.model,
+      aiMetadataSummary: "OPENAI_API_KEY is not configured",
+    });
+    return;
+  }
+  const token = plexToken();
+  if (!token) throw new Error("Could not read Plex token for AI metadata review");
+  const hydratedMatches = await Promise.all(matches.map(async (match) => {
+    if (!match.ratingKey || !/^\d+$/.test(match.ratingKey)) return match;
+    const details = await fetchPlexMetadataRecord(token, match.ratingKey);
+    return { ...match, ...details, Media: details.Media ?? match.Media };
+  }));
+  const records = metadataCuratorRecords(hydratedMatches);
+  if (!records.length) throw new Error("Plex matches did not contain editable record IDs");
+  await setItemState(item.id, {
+    aiMetadataStatus: "researching",
+    aiMetadataModel: config.model,
+    aiMetadataSummary: `Researching ${records.length} matched Plex record(s)`,
+  });
+  await appendBatch(`AI metadata review started for ${item.title}`);
+  const { model, plan } = await createMetadataCuratorPlan({
+    requestedTitle: item.title,
+    payloadName: item.payloadName,
+    destinationPath: item.destination.path,
+    mediaType: item.destination.type,
+    records,
+  });
+  const byId = new Map(records.map((record) => [record.recordId, record]));
+  const patches = plan.patches
+    .map((patch) => changedMetadataPatch(patch, byId.get(patch.recordId)!))
+    .filter((patch) => patch.applyTitle || patch.applySummary || patch.applyOriginallyAvailableAt || patch.applyYear);
+  await appendFile(logPath, `\n--- AI metadata review (${model}) ---\n${plan.summary}\n${plan.issues.join("\n")}\n`);
+  if (!patches.length) {
+    await setItemState(item.id, {
+      aiMetadataStatus: "passed",
+      aiMetadataModel: model,
+      aiMetadataSummary: plan.summary.slice(0, 1000),
+      aiMetadataChanges: "[]",
+    });
+    await appendBatch(`AI metadata review passed for ${item.title}: ${plan.summary}`);
+    return;
+  }
+  await setItemState(item.id, {
+    aiMetadataStatus: "applying",
+    aiMetadataModel: model,
+    aiMetadataSummary: `Applying ${patches.length} high-confidence metadata correction(s)`,
+  });
+  let changedFields = 0;
+  for (const patch of patches) {
+    changedFields += await applyPlexMetadataPatch(token, patch);
+    verifyAppliedMetadata(patch, await fetchPlexMetadataRecord(token, patch.recordId));
+    await appendFile(logPath, `${patch.recordId}: ${patch.reason}\nEvidence: ${patch.evidenceUrls.join(", ")}\n`);
+  }
+  const summary = `Corrected ${changedFields} field(s) across ${patches.length} Plex record(s). ${plan.summary}`;
+  await setItemState(item.id, {
+    aiMetadataStatus: "fixed",
+    aiMetadataModel: model,
+    aiMetadataSummary: summary.slice(0, 1000),
+    aiMetadataChanges: JSON.stringify(patches),
+  });
+  await appendBatch(`AI metadata review fixed ${item.title}: ${changedFields} field(s)`);
 }
 
 await ensureDir(root);
@@ -1005,13 +1173,26 @@ async function processItem(item: ManifestItem) {
       await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
     }
   }
-  if (item.postDownload?.verifyCanonicalMetadata === true || item.postDownload?.verifyArtwork === true) {
+  const validateMetadataWithAi = item.postDownload?.validateMetadataWithAi !== false;
+  if (item.postDownload?.verifyCanonicalMetadata === true || item.postDownload?.verifyArtwork === true || validateMetadataWithAi) {
+    let plexMatches: PlexMetadata[] = [];
     try {
-      await verifyPlexResult(item, organizedDestinations);
+      plexMatches = await verifyPlexResult(item, organizedDestinations);
     } catch (error) {
       const warning = error instanceof Error ? error.message : String(error);
       await setItemState(item.id, { plexVerificationWarning: warning });
       await appendBatch(`Plex verification warning for ${item.title}: ${warning}`);
+    }
+    if (validateMetadataWithAi) {
+      try {
+        if (!plexMatches.length) throw new Error("AI metadata review could not find the newly added Plex records");
+        await curatePlexMetadata(item, plexMatches, logPath);
+      } catch (error) {
+        const warning = error instanceof Error ? error.message : String(error);
+        await setItemState(item.id, { aiMetadataStatus: "warning", aiMetadataSummary: warning });
+        await appendFile(logPath, `\n--- AI metadata review warning ---\n${warning}\n`);
+        await appendBatch(`AI metadata warning for ${item.title}: ${warning}`);
+      }
     }
   }
   await setItemState(item.id, { status: "completed", completedAt: now(), error: null, failedAt: null });

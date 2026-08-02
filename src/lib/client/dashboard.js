@@ -199,14 +199,23 @@ function rowIdFor(id) {
 }
 
 function progressDetailFor(item) {
-  if (item.status === 'completed') return fmt(item.totalBytes) + ' finished';
+  const aiState = {
+    researching: 'AI researching',
+    applying: 'AI applying fixes',
+    passed: 'AI checked',
+    fixed: 'AI corrected metadata',
+    warning: 'AI review warning',
+    skipped: 'AI review skipped',
+  }[item.aiMetadataStatus] || '';
+  const aiSuffix = aiState ? ' · ' + aiState : '';
+  if (item.status === 'completed') return fmt(item.totalBytes) + ' finished' + aiSuffix;
   const verification = item.progress.phase === 'verifying'
     ? ' · checking local data ' + Math.round(item.progress.verificationPercent || 0) + '%'
     : '';
   if (item.progress.downloadedBytes) {
-    return fmt(item.progress.downloadedBytes) + ' / ' + fmt(item.progress.totalBytes || item.totalBytes) + verification;
+    return fmt(item.progress.downloadedBytes) + ' / ' + fmt(item.progress.totalBytes || item.totalBytes) + verification + aiSuffix;
   }
-  return verification ? verification.slice(3) : 'queued';
+  return (verification ? verification.slice(3) : 'queued') + aiSuffix;
 }
 
 function shortTitle(title) {
@@ -842,7 +851,14 @@ function renderItems(items) {
 
     const chip = row.querySelector('[data-role="status"]');
     chip.className = 'chip ' + statusClass;
-    setText(chip, item.status === 'active' && item.progress.phase === 'verifying' ? 'verifying' : item.status);
+    const visibleStatus = item.aiMetadataStatus === 'researching'
+      ? 'AI review'
+      : item.aiMetadataStatus === 'applying'
+        ? 'AI fixing'
+        : item.status === 'active' && item.progress.phase === 'verifying'
+          ? 'verifying'
+          : item.status;
+    setText(chip, visibleStatus);
 
     tweenElementNumber(
       row.querySelector('[data-role="progress-label"]'),
@@ -851,7 +867,9 @@ function renderItems(items) {
       700,
     );
     row.querySelector('[data-role="fill"]').style.width = progress + '%';
-    setText(row.querySelector('[data-role="detail"]'), progressDetailFor(item));
+    const detail = row.querySelector('[data-role="detail"]');
+    setText(detail, progressDetailFor(item));
+    if (detail) detail.title = item.aiMetadataSummary || '';
     setText(row.querySelector('[data-role="rate"]'), item.progress.phase === 'verifying' ? '-' : item.progress.rate || '-');
     setText(row.querySelector('[data-role="eta"]'), item.progress.eta || '-');
     const remove = row.querySelector('[data-role="remove"]');
@@ -1656,6 +1674,7 @@ function initIntakeControls() {
         ['ensureEnglishSubtitles', 'ensureEnglishSubtitles'],
         ['verifyCanonicalMetadata', 'verifyCanonicalMetadata'],
         ['verifyArtwork', 'verifyArtwork'],
+        ['validateMetadataWithAi', 'validateMetadataWithAi'],
         ['refreshPlex', 'refreshPlex'],
       ]) {
         const control = document.getElementById(id);

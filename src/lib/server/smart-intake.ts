@@ -18,7 +18,7 @@ Planning rules:
 8. Source paths must exactly match directory prefixes from the supplied torrent paths and must be relative to the torrent payload root.
 9. Destination paths must remain under the supplied Movies or TV Shows roots. Never invent a different filesystem root.
 10. Use warnings for genuine ambiguity. Do not guess silently. Confidence must reflect the weakest material part of the plan.
-11. Never select executable or script files. Set all post-download verification flags, including malware scanning, to true. Torplex will separately verify streams, English captions, canonical metadata, artwork, and Plex refresh state after the content exists.
+11. Never select executable or script files. Set all post-download verification flags, including malware scanning and AI metadata validation, to true. Torplex will separately verify streams, English captions, canonical metadata, artwork, and Plex refresh state after the content exists.
 12. Return only data that conforms to the response schema.`;
 
 type TorrentFile = { index: number; path: string; length: number };
@@ -42,6 +42,7 @@ type SmartPlan = {
     ensureEnglishSubtitles: boolean;
     verifyCanonicalMetadata: boolean;
     verifyArtwork: boolean;
+    validateMetadataWithAi: boolean;
     refreshPlex: boolean;
   };
 };
@@ -81,13 +82,14 @@ const planSchema = {
     postDownloadChecks: {
       type: "object",
       additionalProperties: false,
-      required: ["verifyStreams", "scanForMalware", "ensureEnglishSubtitles", "verifyCanonicalMetadata", "verifyArtwork", "refreshPlex"],
+      required: ["verifyStreams", "scanForMalware", "ensureEnglishSubtitles", "verifyCanonicalMetadata", "verifyArtwork", "validateMetadataWithAi", "refreshPlex"],
       properties: {
         verifyStreams: { type: "boolean" },
         scanForMalware: { type: "boolean" },
         ensureEnglishSubtitles: { type: "boolean" },
         verifyCanonicalMetadata: { type: "boolean" },
         verifyArtwork: { type: "boolean" },
+        validateMetadataWithAi: { type: "boolean" },
         refreshPlex: { type: "boolean" },
       },
     },
