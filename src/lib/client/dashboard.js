@@ -40,6 +40,8 @@ const swarmMap = {
   updatedAt: '',
   labelsDirty: true,
   origin: { label: 'SERVER', lat: 39, lon: -98 },
+  relay: null,
+  vpn: null,
 };
 const mapView = {
   scale: 1,
@@ -238,6 +240,8 @@ function flagUrlForCountry(countryCode) {
 
 function renderSwarmMap(swarm) {
   const routeStatus = document.getElementById('routeStatus');
+  const vpnStatus = document.getElementById('vpnStatus');
+  const vpnStatusText = document.getElementById('vpnStatusText');
   const peers = Array.isArray(swarm?.peers) ? swarm.peers : [];
   const mapped = peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon));
   const updatedAt = String(swarm?.updatedAt || '');
@@ -254,13 +258,37 @@ function renderSwarmMap(swarm) {
       lon: Number(swarm.origin.lon),
     };
   }
+  swarmMap.relay = Number.isFinite(swarm?.relay?.lat) && Number.isFinite(swarm?.relay?.lon)
+    ? {
+        label: String(swarm.relay.label || 'VPN EXIT'),
+        lat: Number(swarm.relay.lat),
+        lon: Number(swarm.relay.lon),
+        city: String(swarm.relay.city || ''),
+        country: String(swarm.relay.country || ''),
+      }
+    : null;
+  swarmMap.vpn = swarm?.vpn || null;
+  if (vpnStatus && vpnStatusText) {
+    const vpn = swarmMap.vpn;
+    const location = [vpn?.exit?.city, vpn?.exit?.country].filter(Boolean).join(', ');
+    const provider = String(vpn?.provider || 'VPN');
+    const stateClass = vpn?.connected ? (vpn?.verified ? 'verified' : 'routed') : 'offline';
+    vpnStatus.className = 'vpn-status ' + stateClass;
+    vpnStatusText.textContent = vpn?.connected
+      ? provider + (location ? ' · ' + location : ' connected')
+      : vpn?.required ? provider + ' unavailable' : provider + ' not connected';
+    vpnStatus.title = [vpn?.message, vpn?.interface ? 'Interface: ' + vpn.interface : '', vpn?.failClosed ? 'Kill switch: fail closed' : '']
+      .filter(Boolean)
+      .join(' · ');
+  }
   routeStatus.textContent = peers.length
     ? 'aria2 SD:' + (swarm.aria2Seeders ?? 0) + ' CN:' + (swarm.aria2Connections ?? 0) +
       ' - active ' + (swarm.activeCount ?? 0) +
       ', probing ' + (swarm.probingCount ?? 0) +
       ', inactive ' + (swarm.inactiveCount ?? 0) +
-      ' - ' + mapped.length + '/' + peers.length + ' mapped'
-    : 'No connected aria2c peers visible yet';
+      ' - ' + mapped.length + '/' + peers.length + ' mapped' +
+      (swarmMap.relay ? ' · routed via ' + ([swarmMap.relay.city, swarmMap.relay.country].filter(Boolean).join(', ') || 'VPN') : '')
+    : swarmMap.relay ? 'VPN route ready · no connected aria2c peers visible yet' : 'No connected aria2c peers visible yet';
   if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
 }
 
@@ -506,7 +534,7 @@ function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
   ctx.fill();
 }
 
-function drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, nodeLabel) {
+function drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, nodeLabel, labelColor = nodeColor, labelBelow = false) {
   ctx.beginPath();
   ctx.arc(origin.x, origin.y, nodeRadius + 5, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(' + nodeColor + ', ' + (.10 + nodePulse.value * .14) + ')';
@@ -519,9 +547,9 @@ function drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, nodeLabel
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillStyle = 'rgba(' + nodeLimeRgb + ', .95)';
+  ctx.fillStyle = 'rgba(' + labelColor + ', .95)';
   ctx.textAlign = 'center';
-  ctx.fillText(nodeLabel, origin.x, origin.y - nodeRadius - 7);
+  ctx.fillText(nodeLabel, origin.x, labelBelow ? origin.y + nodeRadius + 15 : origin.y - nodeRadius - 7);
   ctx.textAlign = 'start';
 }
 
@@ -722,9 +750,49 @@ function drawWorldFrame(now) {
   );
   const originWorld = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
   const origin = cameraPoint(originWorld);
+  const relayWorld = swarmMap.relay
+    ? projectWorld(swarmMap.relay.lat, swarmMap.relay.lon, width, height)
+    : null;
+  const relay = relayWorld ? cameraPoint(relayWorld) : null;
+  const routeTarget = relay || origin;
   const nodePulse = pulseForSpeed(now, totalIngestBps);
   const nodeColor = nodeLimeRgb;
   const nodeRadius = 4.5 * (1 + nodePulse.value);
+
+  if (relay) {
+    const tunnelRgb = '87, 224, 194';
+    const tunnelStart = { x: origin.x, y: origin.y };
+    const tunnelEnd = { x: relay.x, y: relay.y };
+    const tunnelControl = {
+      x: (origin.x + relay.x) / 2,
+      y: (origin.y + relay.y) / 2 - Math.min(58, Math.abs(origin.x - relay.x) * .14),
+    };
+    ctx.beginPath();
+    ctx.moveTo(tunnelStart.x, tunnelStart.y);
+    ctx.quadraticCurveTo(tunnelControl.x, tunnelControl.y, tunnelEnd.x, tunnelEnd.y);
+    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .13)';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(tunnelStart.x, tunnelStart.y);
+    ctx.quadraticCurveTo(tunnelControl.x, tunnelControl.y, tunnelEnd.x, tunnelEnd.y);
+    ctx.setLineDash([9, 7]);
+    ctx.lineDashOffset = -(now / 85) % 16;
+    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .92)';
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+    ctx.restore();
+
+    if (Math.round(totalIngestBps) > 0) {
+      const tunnelSpeed = streamSpeedFactor(totalIngestBps);
+      const packetCount = Math.max(2, Math.min(12, Math.round(2 + tunnelSpeed * 2.5)));
+      for (let i = 0; i < packetCount; i += 1) {
+        const travel = ((now / (2700 / tunnelSpeed)) + i / packetCount) % 1;
+        drawPacketDot(ctx, tunnelStart, tunnelControl, tunnelEnd, 1 - travel, tunnelRgb, .48 + .45 * Math.sin(travel * Math.PI));
+      }
+    }
+  }
 
   swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
   swarmMap.displayPeers.forEach((item) => {
@@ -742,11 +810,11 @@ function drawWorldFrame(now) {
     const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
     const activeColor = visual.rgb;
 
-    const start = { x: origin.x, y: origin.y };
+    const start = { x: routeTarget.x, y: routeTarget.y };
     const screen = cameraPoint({ x: item.x, y: item.y });
     const end = { x: screen.x, y: screen.y };
-    const midX = (origin.x + screen.x) / 2;
-    const midY = (origin.y + screen.y) / 2 - Math.min(80, Math.abs(origin.x - screen.x) * .12);
+    const midX = (routeTarget.x + screen.x) / 2;
+    const midY = (routeTarget.y + screen.y) / 2 - Math.min(80, Math.abs(routeTarget.x - screen.x) * .12);
     const control = { x: midX, y: midY };
     if (item.peer.active) {
       ctx.beginPath();
@@ -791,6 +859,10 @@ function drawWorldFrame(now) {
       ctx.stroke();
     }
   });
+  if (relay) {
+    const relayPulse = pulseForSpeed(now, totalIngestBps, Math.PI);
+    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, '120, 166, 255', swarmMap.relay.label, '165, 195, 255', true);
+  }
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
 }

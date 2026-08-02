@@ -5,6 +5,7 @@ const password = process.env.TORPLEX_E2E_PASSWORD;
 const expectedOriginLabel = process.env.TORPLEX_E2E_ORIGIN_LABEL;
 const requirePeers = process.env.TORPLEX_E2E_REQUIRE_PEERS === "1";
 const requireMappedOrigin = process.env.TORPLEX_E2E_REQUIRE_MAPPED_ORIGIN === "1";
+const requireVpn = process.env.TORPLEX_E2E_REQUIRE_VPN === "1";
 const testReorder = process.env.TORPLEX_E2E_REORDER === "1";
 
 test("authenticated dashboard renders live swarm telemetry", async ({ page }, testInfo) => {
@@ -25,6 +26,14 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   if (expectedOriginLabel) expect(status.swarm.origin.label).toBe(expectedOriginLabel);
   expect(Number.isFinite(status.swarm.origin.lat) && Number.isFinite(status.swarm.origin.lon)).toBe(true);
   if (requireMappedOrigin) expect(status.swarm.origin.lookupStatus).toBe("mapped");
+  if (requireVpn) {
+    expect(status.swarm.vpn.connected).toBe(true);
+    expect(status.swarm.vpn.verified).toBe(true);
+    expect(status.swarm.relay.lookupStatus).toBe("mapped");
+    expect(status.swarm.relay.lat).not.toBe(status.swarm.origin.lat);
+    expect(status.swarm.relay.lon).not.toBe(status.swarm.origin.lon);
+    await expect(page.locator("#vpnStatus")).toHaveClass(/verified/);
+  }
   if (requirePeers) {
     expect(status.swarm.peers.length).toBeGreaterThan(0);
     expect(status.swarm.peers.some((peer: { lookupStatus?: string }) => peer.lookupStatus === "mapped")).toBe(true);

@@ -60,7 +60,16 @@
   <section class="transfer-map world-panel">
     <div class="map-title">
       <div class="label">Swarm Atlas</div>
-      <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+      <div class="map-status-group">
+        <div id="vpnStatus" class="vpn-status checking" title="Checking VPN route">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span id="vpnStatusText">Checking VPN...</span>
+        </div>
+        <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
+      </div>
     </div>
     <div class="world-shell">
       <div class="world-map-frame">

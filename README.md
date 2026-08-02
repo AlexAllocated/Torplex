@@ -119,6 +119,8 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `TORPLEX_REQUIRE_VPN` | `true` | Fail closed before starting torrent payload or magnet-metadata networking unless a VPN interface is configured. Set to `false` only as an intentional opt-out. |
 | `TORPLEX_VPN_INTERFACE` | empty | Required interface name used for every aria2 torrent socket, such as `wg-torplex`. Torplex refuses to start torrent networking if the interface is absent. |
 | `TORPLEX_VPN_DNS` | empty | Optional VPN-provided DNS resolver passed directly to aria2, such as Mullvad's `10.64.0.1`, to keep tracker lookups off the LAN resolver. |
+| `TORPLEX_VPN_PROVIDER` | `VPN` | Provider name shown in dashboard VPN health and map labels, such as `Mullvad`. |
+| `TORPLEX_VPN_STATUS_URL` | empty | Optional JSON endpoint used to independently verify VPN egress and discover its live city/coordinates. Mullvad deployments can use `https://am.i.mullvad.net/json`. |
 | `IGNORED_PEER_IPS` | empty | Comma-separated public IPs to hide from the peer map. |
 | `MAX_CONCURRENT_DOWNLOADS` | `0` (unlimited) | Fixed maximum simultaneous torrent jobs when adaptive scheduling is disabled. |
 | `ADAPTIVE_CONCURRENCY` | `false` | Dynamically open download slots based on aggregate ingress and measured block-device write activity. |
@@ -133,8 +135,8 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `ADAPTIVE_SCALE_DOWN_SECONDS` | `20` | Time pressure must remain high before pausing the lowest-priority active transfer. |
 | `ADAPTIVE_COOLDOWN_SECONDS` | `45` | Minimum delay between concurrency changes to prevent pause/resume churn. |
 | `MAX_MAP_PEERS` | `320` | Maximum aria2 connections retained for the swarm map. |
-| `MAP_ORIGIN_LABEL` | `SERVER` | Label shown above the receiving node on the swarm map. |
-| `MAP_ORIGIN_LAT`, `MAP_ORIGIN_LON` | automatic | Optional fixed receiving-node coordinates. By default Torplex geolocates its public IP. |
+| `MAP_ORIGIN_LABEL` | `SERVER` | Label shown above the physical Torplex host on the swarm map. |
+| `MAP_ORIGIN_LAT`, `MAP_ORIGIN_LON` | automatic | Optional fixed physical-host coordinates. Configure these when Torplex uses a VPN so the dashboard can distinguish the host from the live VPN exit. Without a VPN, Torplex geolocates its public IP. |
 | `MAP_ORIGIN_IP` | automatic | Optional public IP metadata used with fixed map coordinates. |
 | `PRIVATE_SEED_IPS` | empty | Comma-separated public IPs for private webseeds or seed hosts that should receive priority map labels. |
 | `PRIVATE_SEED_LABEL` | `VM SEED` | Label shown for configured private seed connections. |
@@ -290,6 +292,13 @@ and allow the WireGuard endpoint itself through the physical interface. A VPN
 does not grant rights to content; the intake rights attestation remains the
 user's responsibility.
 
+The dashboard checks that the configured interface exists and that Torplex's
+own route uses it. When `TORPLEX_VPN_STATUS_URL` is configured, the status pill
+also verifies provider egress and the swarm map follows the provider-reported
+exit location. Peer streams terminate at that VPN exit, then one aggregate
+encrypted-tunnel path connects the exit to the physical host coordinates from
+`MAP_ORIGIN_LAT` and `MAP_ORIGIN_LON`.
+
 Pending rows can be reordered from the dashboard with animated position changes. Moving one above an active transfer gracefully stops the displaced `aria2c` process, keeps its partial files, preserves its displayed progress, and resumes it later from the saved pieces. An item already in the organizing phase cannot be preempted.
 
 When a download finishes, the worker:
@@ -356,7 +365,8 @@ bun run test:e2e
 ```
 
 Set `TORPLEX_E2E_REQUIRE_PEERS=1` when active downloads should also be required during the check, and
-`TORPLEX_E2E_REQUIRE_MAPPED_ORIGIN=1` when public-IP geolocation must succeed.
+`TORPLEX_E2E_REQUIRE_MAPPED_ORIGIN=1` when physical-host geolocation must succeed. Set
+`TORPLEX_E2E_REQUIRE_VPN=1` to require a verified VPN route and a distinct mapped relay.
 
 ## Security Notes
 

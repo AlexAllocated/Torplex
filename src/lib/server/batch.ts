@@ -22,6 +22,10 @@ const metadataTimeoutSeconds = Number.isFinite(configuredMetadataTimeout)
 const configuredMaxMapPeers = Number.parseInt(process.env.MAX_MAP_PEERS ?? "320", 10);
 const maxMapPeers = Number.isFinite(configuredMaxMapPeers) && configuredMaxMapPeers > 0 ? configuredMaxMapPeers : 320;
 const mapOriginLabel = (process.env.MAP_ORIGIN_LABEL ?? "SERVER").trim() || "SERVER";
+const vpnInterface = (process.env.TORPLEX_VPN_INTERFACE ?? "").trim();
+const vpnProvider = (process.env.TORPLEX_VPN_PROVIDER ?? "VPN").trim() || "VPN";
+const vpnStatusUrl = (process.env.TORPLEX_VPN_STATUS_URL ?? "").trim();
+const vpnRequired = !["0", "false", "no", "off"].includes((process.env.TORPLEX_REQUIRE_VPN ?? "true").trim().toLowerCase());
 const privateSeedIps = new Set((process.env.PRIVATE_SEED_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
 const privateSeedLabel = (process.env.PRIVATE_SEED_LABEL ?? "VM SEED").trim() || "VM SEED";
 
@@ -119,6 +123,21 @@ type MapOrigin = {
   lookupStatus: "mapped" | "fallback";
 };
 
+type VpnStatus = {
+  required: boolean;
+  configured: boolean;
+  interface: string;
+  interfaceUp: boolean;
+  routeViaInterface: boolean;
+  connected: boolean;
+  verified: boolean;
+  provider: string;
+  failClosed: boolean;
+  checkedAt: string;
+  message: string;
+  exit?: MapOrigin;
+};
+
 const byteUnits: Record<string, number> = {
   B: 1,
   KiB: 1024,
@@ -130,10 +149,13 @@ const byteUnits: Record<string, number> = {
 const peerGeoCache = new Map<string, { expiresAt: number; value: PeerGeo }>();
 const peerHistory = new Map<string, PeerGeo>();
 let mapOriginCache: { expiresAt: number; value: MapOrigin } | null = null;
+let vpnStatusCache: { expiresAt: number; value: VpnStatus } | null = null;
 let peerGeoBlockedUntil = 0;
 type PeerSnapshot = {
   updatedAt: string;
   origin: MapOrigin;
+  relay?: MapOrigin;
+  vpn: VpnStatus;
   peers: PeerGeo[];
   activeCount: number;
   probingCount: number;
@@ -144,6 +166,19 @@ type PeerSnapshot = {
 let peerSnapshot: PeerSnapshot = {
   updatedAt: new Date(0).toISOString(),
   origin: { label: mapOriginLabel, lat: 39, lon: -98, lookupStatus: "fallback" },
+  vpn: {
+    required: vpnRequired,
+    configured: Boolean(vpnInterface),
+    interface: vpnInterface,
+    interfaceUp: false,
+    routeViaInterface: false,
+    connected: false,
+    verified: false,
+    provider: vpnProvider,
+    failClosed: vpnRequired,
+    checkedAt: new Date(0).toISOString(),
+    message: "VPN status has not been checked yet",
+  },
   peers: [],
   activeCount: 0,
   probingCount: 0,
@@ -1097,7 +1132,7 @@ async function lookupPeers(peers: Peer[]): Promise<PeerGeo[]> {
   });
 }
 
-async function mapOrigin(): Promise<MapOrigin> {
+function configuredMapOrigin(): MapOrigin | null {
   const configuredLat = process.env.MAP_ORIGIN_LAT?.trim() ? Number(process.env.MAP_ORIGIN_LAT) : Number.NaN;
   const configuredLon = process.env.MAP_ORIGIN_LON?.trim() ? Number(process.env.MAP_ORIGIN_LON) : Number.NaN;
   if (Number.isFinite(configuredLat) && Number.isFinite(configuredLon)) {
@@ -1109,26 +1144,39 @@ async function mapOrigin(): Promise<MapOrigin> {
       lookupStatus: "mapped",
     };
   }
+  return null;
+}
+
+function mapLocationFromPayload(data: Record<string, unknown>, label: string): MapOrigin | null {
+  const lat = Number(data.latitude ?? data.lat);
+  const lon = Number(data.longitude ?? data.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return {
+    label,
+    ...(data.ip || data.query ? { ip: String(data.ip ?? data.query) } : {}),
+    country: String(data.country ?? ""),
+    countryCode: String(data.country_code ?? data.countryCode ?? ""),
+    region: String(data.region ?? data.regionName ?? ""),
+    city: String(data.city ?? ""),
+    lat,
+    lon,
+    lookupStatus: "mapped",
+  };
+}
+
+async function egressMapLocation(): Promise<MapOrigin> {
   if (mapOriginCache && mapOriginCache.expiresAt > Date.now()) return mapOriginCache.value;
-  const fallback: MapOrigin = { label: mapOriginLabel, lat: 39, lon: -98, lookupStatus: "fallback" };
+  const fallback: MapOrigin = { label: `${vpnProvider.toUpperCase()} EXIT`, lat: 39, lon: -98, lookupStatus: "fallback" };
   try {
     const fields = "status,country,countryCode,regionName,city,lat,lon,query";
     const response = await fetch(`http://ip-api.com/json/?fields=${fields}`, { signal: AbortSignal.timeout(5_000) });
     const data = (await response.json()) as Record<string, unknown>;
     if (response.ok && data.status === "success") {
-      const value: MapOrigin = {
-        label: mapOriginLabel,
-        ip: String(data.query ?? ""),
-        country: String(data.country ?? ""),
-        countryCode: String(data.countryCode ?? ""),
-        region: String(data.regionName ?? ""),
-        city: String(data.city ?? ""),
-        lat: Number(data.lat),
-        lon: Number(data.lon),
-        lookupStatus: "mapped",
-      };
-      mapOriginCache = { expiresAt: Date.now() + peerGeoTtlMs, value };
-      return value;
+      const location = mapLocationFromPayload(data, `${vpnProvider.toUpperCase()} EXIT`);
+      if (location) {
+        mapOriginCache = { expiresAt: Date.now() + 60_000, value: location };
+        return location;
+      }
     }
   } catch {
     // A central-US fallback keeps the map usable during a geolocation outage.
@@ -1137,11 +1185,124 @@ async function mapOrigin(): Promise<MapOrigin> {
   return fallback;
 }
 
+async function routeUsesVpnInterface(): Promise<boolean> {
+  if (!vpnInterface || !/^[a-zA-Z0-9_.:-]+$/.test(vpnInterface)) return false;
+  return await new Promise<boolean>((resolve) => {
+    const child = spawn("ip", ["-json", "route", "get", "1.1.1.1"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let output = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.length > 64_000) child.kill("SIGKILL");
+    });
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    child.once("close", () => {
+      clearTimeout(timer);
+      try {
+        const routes = JSON.parse(output) as Array<{ dev?: string }>;
+        resolve(routes.some((route) => route.dev === vpnInterface));
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+}
+
+function vpnInterfaceIsUp() {
+  if (!vpnInterface || !/^[a-zA-Z0-9_.:-]+$/.test(vpnInterface)) return false;
+  try {
+    const state = readFileSync(`/sys/class/net/${vpnInterface}/operstate`, "utf8").trim();
+    return state !== "down" && state !== "notpresent";
+  } catch {
+    return false;
+  }
+}
+
+async function vpnStatus(): Promise<VpnStatus> {
+  if (vpnStatusCache && vpnStatusCache.expiresAt > Date.now()) return vpnStatusCache.value;
+  const checkedAt = new Date().toISOString();
+  const configured = Boolean(vpnInterface);
+  const interfaceUp = vpnInterfaceIsUp();
+  const routeViaInterface = interfaceUp ? await routeUsesVpnInterface() : false;
+  let verified = false;
+  let exit: MapOrigin | undefined;
+  let providerMessage = "";
+
+  if (interfaceUp && routeViaInterface && vpnStatusUrl) {
+    try {
+      const response = await fetch(vpnStatusUrl, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      const data = (await response.json()) as Record<string, unknown>;
+      const providerAssertion = typeof data.mullvad_exit_ip === "boolean" ? data.mullvad_exit_ip : true;
+      verified = response.ok && providerAssertion;
+      const city = String(data.city ?? "").trim();
+      const relayLabel = city
+        ? `${vpnProvider.toUpperCase()} · ${city.toUpperCase()}`
+        : `${vpnProvider.toUpperCase()} EXIT`;
+      exit = mapLocationFromPayload(data, relayLabel) ?? undefined;
+      if (!providerAssertion) providerMessage = `${vpnProvider} reports that this is not one of its exit addresses`;
+    } catch {
+      providerMessage = `${vpnProvider} verification endpoint is unavailable`;
+    }
+  } else if (interfaceUp && routeViaInterface) {
+    const located = await egressMapLocation();
+    exit = located.lookupStatus === "mapped" ? located : undefined;
+  }
+
+  if (!exit && interfaceUp && routeViaInterface) {
+    const located = await egressMapLocation();
+    exit = located.lookupStatus === "mapped" ? located : undefined;
+  }
+
+  const connected = interfaceUp && routeViaInterface;
+  const message = !configured
+    ? "VPN interface is not configured"
+    : !interfaceUp
+      ? `${vpnInterface} is unavailable`
+      : !routeViaInterface
+        ? `Torplex traffic is not routed through ${vpnInterface}`
+        : providerMessage || (verified ? `${vpnProvider} exit verified` : `Traffic is routed through ${vpnInterface}`);
+  const value: VpnStatus = {
+    required: vpnRequired,
+    configured,
+    interface: vpnInterface,
+    interfaceUp,
+    routeViaInterface,
+    connected,
+    verified,
+    provider: vpnProvider,
+    failClosed: vpnRequired,
+    checkedAt,
+    message,
+    ...(exit ? { exit } : {}),
+  };
+  vpnStatusCache = { expiresAt: Date.now() + (connected ? 30_000 : 8_000), value };
+  return value;
+}
+
+async function mapOrigin(): Promise<MapOrigin> {
+  const configured = configuredMapOrigin();
+  if (configured) return configured;
+  if (!vpnInterface) {
+    const direct = await egressMapLocation();
+    return { ...direct, label: mapOriginLabel };
+  }
+  return { label: mapOriginLabel, lat: 39, lon: -98, lookupStatus: "fallback" };
+}
+
 async function refreshSwarmPeers(stats?: { connections?: number; seeders?: number }): Promise<PeerSnapshot> {
   const nowMs = Date.now();
   const peers = connectedPeers();
   const activeKeys = new Set(peers.map(peerKey));
-  const [locatedPeers, origin] = await Promise.all([lookupPeers(peers), mapOrigin()]);
+  const [locatedPeers, origin, vpn] = await Promise.all([lookupPeers(peers), mapOrigin(), vpnStatus()]);
   for (const peer of locatedPeers) {
     peerHistory.set(peerKey(peer), markPeerActivity(peer, nowMs));
   }
@@ -1175,6 +1336,8 @@ async function refreshSwarmPeers(stats?: { connections?: number; seeders?: numbe
   peerSnapshot = {
     updatedAt: new Date().toISOString(),
     origin,
+    ...(vpn.connected && vpn.exit ? { relay: vpn.exit } : {}),
+    vpn,
     peers: displayedPeers,
     activeCount: displayedPeers.filter((peer) => peer.active).length,
     probingCount: displayedPeers.filter((peer) => peer.probing).length,
