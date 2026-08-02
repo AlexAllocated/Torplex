@@ -11,6 +11,15 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 </svelte:head>
 
+<svg class="crt-filter-defs" aria-hidden="true">
+  <defs>
+    <filter id="crtBarrelWarp" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+      <feImage id="crtBarrelMap" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="barrelMap" />
+      <feDisplacementMap in="SourceGraphic" in2="barrelMap" scale="96" xChannelSelector="R" yChannelSelector="G" />
+    </filter>
+  </defs>
+</svg>
+
 <div id="crtPicture" class="crt-picture">
   {@render children()}
 </div>
@@ -40,6 +49,10 @@
   <span class="crt-signal-block crt-signal-block-b"></span>
   <span class="crt-glitch-readout crt-glitch-readout-a">SYNC_LOSS // 0x17</span>
   <span class="crt-glitch-readout crt-glitch-readout-b">FRAME_BUF // RECOVER</span>
+</div>
+
+<div class="crt-curved-glass" aria-hidden="true">
+  <span class="crt-scan-sweep"></span>
 </div>
 
 <button id="crtAudioToggle" class="crt-audio-toggle icon-button" type="button" aria-label="Mute terminal audio" title="Mute terminal audio">

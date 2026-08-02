@@ -556,7 +556,7 @@ function initMapControls() {
   const setFullscreenUi = (active, pseudo = false) => {
     frame.classList.toggle('map-fullscreen-active', active);
     frame.classList.toggle('pseudo-fullscreen', active && pseudo);
-    document.body.classList.toggle('map-fullscreen-open', active && pseudo);
+    document.body.classList.toggle('map-fullscreen-open', active);
     if (fullscreenButton) {
       fullscreenButton.title = active ? 'Exit fullscreen map' : 'Fullscreen map';
       fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
@@ -2585,6 +2585,9 @@ function render(data) {
   const diskFree = clamp(100 - diskUse);
   const speed = activeRateBytes / 1024 / 1024;
   warp.batchProgress = data.totals.percent;
+  window.dispatchEvent(new CustomEvent('torplex:transfer-activity', {
+    detail: { activeCount, bytesPerSecond: activeRateBytes },
+  }));
 
   document.getElementById('connection').textContent = 'Live';
   document.getElementById('subtitle').textContent = activeTitle;
