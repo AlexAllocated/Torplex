@@ -18,6 +18,10 @@ async function powerOn(page: import("@playwright/test").Page) {
 test("authenticated dashboard renders live swarm telemetry", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   test.skip(!baseUrl || !password, "TORPLEX_E2E_URL and TORPLEX_E2E_PASSWORD are required");
+  const audioPolicyWarnings: string[] = [];
+  page.on('console', (message) => {
+    if (message.text().includes('AudioContext was not allowed to start')) audioPolicyWarnings.push(message.text());
+  });
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.addInitScript(() => {
@@ -37,6 +41,11 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await powerOn(page);
+  await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
+  const audioToggle = page.locator('#crtAudioToggle');
+  await audioToggle.click();
+  await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'muted');
+  await audioToggle.click();
   await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
   await expect(page).toHaveTitle("Torplex");
   await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
@@ -321,6 +330,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.waitForURL(/\/auth\/login$/);
   const sessionCookie = (await page.context().cookies()).find((cookie) => cookie.name === "plex_batch_session");
   expect(sessionCookie).toBeUndefined();
+  expect(audioPolicyWarnings).toEqual([]);
 });
 
 test("pending rows can be reprioritized across multiple positions", async ({ page }) => {

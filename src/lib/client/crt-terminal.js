@@ -62,7 +62,7 @@ export function startCrtTerminal() {
   body.classList.toggle('crt-audio-muted', muted);
 
   const setAudioUi = () => {
-    const state = muted ? 'muted' : audioContext?.state === 'running' ? 'running' : 'armed';
+    const state = muted ? 'muted' : audioUnlocked && audioContext?.state === 'running' ? 'running' : 'armed';
     body.dataset.audioState = state;
     if (!audioToggle) return;
     const label = state === 'muted'
@@ -77,8 +77,7 @@ export function startCrtTerminal() {
   };
   setAudioUi();
 
-  const ensureAudio = async () => {
-    if (muted) return null;
+  const createAudioContext = () => {
     if (!audioContext) {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return null;
@@ -88,14 +87,16 @@ export function startCrtTerminal() {
       audioOutput.connect(audioContext.destination);
       audioContext.addEventListener('statechange', setAudioUi);
     }
-    if (audioContext.state !== 'running') await audioContext.resume().catch(() => {});
-    if (audioContext.state === 'running') audioUnlocked = true;
-    setAudioUi();
-    return audioContext.state === 'running' ? audioContext : null;
+    return audioContext;
   };
 
-  const playPowerOn = async () => {
-    const context = await ensureAudio();
+  const runningAudio = () => {
+    if (muted || !audioUnlocked || audioContext?.state !== 'running' || !audioOutput) return null;
+    return audioContext;
+  };
+
+  const playPowerOn = () => {
+    const context = runningAudio();
     if (!context || !audioOutput) return;
     const now = context.currentTime;
     const duration = .66;
@@ -156,9 +157,9 @@ export function startCrtTerminal() {
     }, 150);
   };
 
-  const startHum = async () => {
+  const startHum = () => {
     if (muted || humNodes) return;
-    const context = await ensureAudio();
+    const context = runningAudio();
     if (!context || !audioOutput || humNodes) return;
     const master = context.createGain();
     const low = context.createOscillator();
@@ -187,12 +188,12 @@ export function startCrtTerminal() {
     humNodes = { master, oscillators: [low, high], lfo, gains: [lowGain, highGain, lfoDepth] };
   };
 
-  const playKeyClick = async () => {
+  const playKeyClick = () => {
     if (muted || document.hidden) return;
     const wallClock = performance.now();
     if (wallClock - lastKeyClickAt < 34) return;
     lastKeyClickAt = wallClock;
-    const context = await ensureAudio();
+    const context = runningAudio();
     if (!context || !audioOutput) return;
     const now = context.currentTime;
     const oscillator = context.createOscillator();
@@ -204,6 +205,27 @@ export function startCrtTerminal() {
     oscillator.connect(gain).connect(audioOutput);
     oscillator.start(now);
     oscillator.stop(now + .04);
+  };
+
+  const playAudioEnabled = () => {
+    const context = runningAudio();
+    if (!context || !audioOutput) return;
+    const now = context.currentTime;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(.0001, now);
+    gain.gain.exponentialRampToValueAtTime(.09, now + .012);
+    gain.gain.setValueAtTime(.09, now + .15);
+    gain.gain.exponentialRampToValueAtTime(.0001, now + .32);
+    gain.connect(audioOutput);
+    [520, 780].forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      oscillator.type = 'square';
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      oscillator.start(now + index * .09);
+      oscillator.stop(now + .18 + index * .09);
+    });
+    window.setTimeout(() => gain.disconnect(), 380);
   };
 
   const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
@@ -385,10 +407,27 @@ export function startCrtTerminal() {
     window.addEventListener('keydown', onBootKey, { once: true });
   }
 
-  const unlockAudio = async () => {
-    if (muted || audioContext?.state === 'running') return;
-    const context = await ensureAudio();
-    if (context && activated) void startHum();
+  const enableAudio = () => {
+    if (muted || audioUnlocked && audioContext?.state === 'running') return;
+    const context = createAudioContext();
+    if (!context) return;
+    const finish = () => {
+      if (context.state !== 'running' || muted) {
+        setAudioUi();
+        return;
+      }
+      const firstUnlock = !audioUnlocked;
+      audioUnlocked = true;
+      setAudioUi();
+      if (firstUnlock) playAudioEnabled();
+      if (activated) startHum();
+    };
+    if (context.state === 'running') finish();
+    else context.resume().then(finish).catch(setAudioUi);
+  };
+  const unlockAudio = (event) => {
+    if (event?.target instanceof Element && event.target.closest('#crtAudioToggle')) return;
+    enableAudio();
   };
   const onUiActivate = (event) => {
     if (!(event.target instanceof Element) || !event.target.closest('button, a, [role="button"]')) return;
@@ -398,21 +437,22 @@ export function startCrtTerminal() {
   document.addEventListener('keydown', unlockAudio, { capture: true });
   document.addEventListener('click', onUiActivate);
 
-  const toggleAudio = async () => {
-    muted = !muted;
-    localStorage.setItem('torplex:crt-muted', muted ? '1' : '0');
-    body.classList.toggle('crt-audio-muted', muted);
-    setAudioUi();
-    if (muted) {
-      stopHum();
-      if (audioContext?.state === 'running') await audioContext.suspend().catch(() => {});
-      audioUnlocked = false;
+  const toggleAudio = () => {
+    if (muted || !audioUnlocked || audioContext?.state !== 'running') {
+      muted = false;
+      localStorage.setItem('torplex:crt-muted', '0');
+      body.classList.remove('crt-audio-muted');
       setAudioUi();
-    } else {
-      await ensureAudio();
-      void playKeyClick();
-      if (activated) void startHum();
+      enableAudio();
+      return;
     }
+    muted = true;
+    localStorage.setItem('torplex:crt-muted', '1');
+    body.classList.add('crt-audio-muted');
+    stopHum();
+    audioUnlocked = false;
+    setAudioUi();
+    if (audioContext.state === 'running') audioContext.suspend().then(setAudioUi).catch(() => {});
   };
   audioToggle?.addEventListener('click', toggleAudio);
 
@@ -421,7 +461,7 @@ export function startCrtTerminal() {
     if (document.hidden) audioContext.suspend().then(setAudioUi).catch(() => {});
     else if (audioUnlocked) audioContext.resume().then(() => {
       setAudioUi();
-      return startHum();
+      startHum();
     }).catch(() => {});
   };
   document.addEventListener('visibilitychange', onVisibility);
