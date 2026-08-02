@@ -47,11 +47,17 @@ const mapView = {
   scale: 1,
   x: 0,
   y: 0,
+  pointers: new Map(),
   dragging: false,
+  pinching: false,
   startX: 0,
   startY: 0,
   baseX: 0,
   baseY: 0,
+  pinchStartDistance: 0,
+  pinchStartScale: 1,
+  pinchAnchorX: 0,
+  pinchAnchorY: 0,
 };
 const mapRaster = {
   image: null,
@@ -85,6 +91,7 @@ const colorPalette = [
   '#f87171',
 ];
 const nodeLimeRgb = '191, 255, 0';
+const tunnelLimeRgb = '132, 204, 0';
 let latestItems = [];
 let queueDragId = '';
 let queueOrderSaving = false;
@@ -292,26 +299,51 @@ function renderSwarmMap(swarm) {
   if (!swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
 }
 
+function worldLayout(width, height) {
+  const fullscreen = document.querySelector('.world-map-frame')?.classList.contains('map-fullscreen-active');
+  if (!fullscreen) return { x: 0, y: 0, width, height };
+  const mapWidth = Math.max(width, height * 2);
+  const mapHeight = mapWidth / 2;
+  return {
+    x: (width - mapWidth) / 2,
+    y: (height - mapHeight) / 2,
+    width: mapWidth,
+    height: mapHeight,
+  };
+}
+
+function clampMapAxis(value, viewportSize, contentStart, contentSize, scale) {
+  const minimum = viewportSize - (contentStart + contentSize) * scale;
+  const maximum = -contentStart * scale;
+  if (minimum > maximum) return (minimum + maximum) / 2;
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
 function clampMapView() {
   const viewport = document.getElementById('worldMapViewport');
   if (!viewport) return;
   const width = viewport.clientWidth;
   const height = viewport.clientHeight;
+  const layout = worldLayout(width, height);
   mapView.scale = Math.max(1, Math.min(6, mapView.scale));
-  if (mapView.scale === 1) {
-    mapView.x = 0;
-    mapView.y = 0;
-    return;
-  }
-  mapView.x = Math.min(0, Math.max(width - width * mapView.scale, mapView.x));
-  mapView.y = Math.min(0, Math.max(height - height * mapView.scale, mapView.y));
+  mapView.x = clampMapAxis(mapView.x, width, layout.x, layout.width, mapView.scale);
+  mapView.y = clampMapAxis(mapView.y, height, layout.y, layout.height, mapView.scale);
+}
+
+function mapCanPan() {
+  const viewport = document.getElementById('worldMapViewport');
+  if (!viewport) return false;
+  const layout = worldLayout(viewport.clientWidth, viewport.clientHeight);
+  return layout.width * mapView.scale > viewport.clientWidth + 1 || layout.height * mapView.scale > viewport.clientHeight + 1;
 }
 
 function applyMapTransform() {
   clampMapView();
   swarmMap.labelsDirty = true;
   const layer = document.getElementById('worldMapLayer');
+  const frame = document.querySelector('.world-map-frame');
   if (layer) layer.style.transform = '';
+  if (frame) frame.dataset.zoom = mapView.scale.toFixed(2);
   scheduleMapRaster();
 }
 
@@ -330,18 +362,19 @@ function drawMapRaster() {
     canvas.width = pixelWidth;
     canvas.height = pixelHeight;
   }
-  const sourceWidth = image.naturalWidth / mapView.scale;
-  const sourceHeight = image.naturalHeight / mapView.scale;
-  const sourceX = Math.max(0, Math.min(image.naturalWidth - sourceWidth, -mapView.x / (width * mapView.scale) * image.naturalWidth));
-  const sourceY = Math.max(0, Math.min(image.naturalHeight - sourceHeight, -mapView.y / (height * mapView.scale) * image.naturalHeight));
+  const layout = worldLayout(width, height);
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  ctx.save();
+  ctx.translate(mapView.x, mapView.y);
+  ctx.scale(mapView.scale, mapView.scale);
   ctx.filter = 'invert(1) hue-rotate(145deg) saturate(.7) brightness(1.08) contrast(1.08)';
-  ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+  ctx.drawImage(image, layout.x, layout.y, layout.width, layout.height);
   ctx.filter = 'none';
+  ctx.restore();
 }
 
 function scheduleMapRaster() {
@@ -374,7 +407,57 @@ function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
   const fullscreenButton = document.getElementById('fullscreenMap');
   if (!frame) return;
+  const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+  const setFullscreenUi = (active, pseudo = false) => {
+    frame.classList.toggle('map-fullscreen-active', active);
+    frame.classList.toggle('pseudo-fullscreen', active && pseudo);
+    document.body.classList.toggle('map-fullscreen-open', active && pseudo);
+    if (fullscreenButton) {
+      fullscreenButton.title = active ? 'Exit fullscreen map' : 'Fullscreen map';
+      fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
+      fullscreenButton.setAttribute('aria-pressed', String(active));
+    }
+    requestAnimationFrame(() => {
+      applyMapTransform();
+      requestAnimationFrame(applyMapTransform);
+    });
+  };
+  const mapRect = () => (document.getElementById('worldMapViewport') ?? frame).getBoundingClientRect();
+  const pointerPair = () => [...mapView.pointers.values()].slice(0, 2);
+  const beginPinch = () => {
+    const [first, second] = pointerPair();
+    if (!first || !second) return;
+    const rect = mapRect();
+    const centerX = (first.clientX + second.clientX) / 2 - rect.left;
+    const centerY = (first.clientY + second.clientY) / 2 - rect.top;
+    mapView.pinching = true;
+    mapView.dragging = false;
+    mapView.pinchStartDistance = Math.max(1, Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY));
+    mapView.pinchStartScale = mapView.scale;
+    mapView.pinchAnchorX = (centerX - mapView.x) / mapView.scale;
+    mapView.pinchAnchorY = (centerY - mapView.y) / mapView.scale;
+  };
+  const endPointer = (event) => {
+    mapView.pointers.delete(event.pointerId);
+    try { frame.releasePointerCapture(event.pointerId); } catch {}
+    if (mapView.pointers.size >= 2) {
+      beginPinch();
+      return;
+    }
+    mapView.pinching = false;
+    const remaining = mapView.pointers.values().next().value;
+    if (remaining && mapCanPan()) {
+      mapView.dragging = true;
+      mapView.startX = remaining.clientX;
+      mapView.startY = remaining.clientY;
+      mapView.baseX = mapView.x;
+      mapView.baseY = mapView.y;
+    } else {
+      mapView.dragging = false;
+    }
+  };
   initMapRaster();
+  frame.dataset.zoom = mapView.scale.toFixed(2);
   frame.addEventListener('wheel', (event) => {
     event.preventDefault();
     const viewport = document.getElementById('worldMapViewport');
@@ -393,27 +476,41 @@ function initMapControls() {
   }, { passive: false });
   frame.addEventListener('pointerdown', (event) => {
     if (event.target?.closest?.('#fullscreenMap, .map-peer-label')) return;
-    if (mapView.scale <= 1) return;
+    mapView.pointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    try { frame.setPointerCapture(event.pointerId); } catch {}
+    if (mapView.pointers.size >= 2) {
+      beginPinch();
+      return;
+    }
+    if (!mapCanPan()) return;
     mapView.dragging = true;
     mapView.startX = event.clientX;
     mapView.startY = event.clientY;
     mapView.baseX = mapView.x;
     mapView.baseY = mapView.y;
-    frame.setPointerCapture(event.pointerId);
   });
   frame.addEventListener('pointermove', (event) => {
+    if (!mapView.pointers.has(event.pointerId)) return;
+    mapView.pointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    if (mapView.pinching && mapView.pointers.size >= 2) {
+      const [first, second] = pointerPair();
+      const rect = mapRect();
+      const centerX = (first.clientX + second.clientX) / 2 - rect.left;
+      const centerY = (first.clientY + second.clientY) / 2 - rect.top;
+      const distance = Math.max(1, Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY));
+      mapView.scale = Math.max(1, Math.min(6, mapView.pinchStartScale * distance / mapView.pinchStartDistance));
+      mapView.x = centerX - mapView.pinchAnchorX * mapView.scale;
+      mapView.y = centerY - mapView.pinchAnchorY * mapView.scale;
+      applyMapTransform();
+      return;
+    }
     if (!mapView.dragging) return;
     mapView.x = mapView.baseX + event.clientX - mapView.startX;
     mapView.y = mapView.baseY + event.clientY - mapView.startY;
     applyMapTransform();
   });
-  frame.addEventListener('pointerup', (event) => {
-    mapView.dragging = false;
-    try { frame.releasePointerCapture(event.pointerId); } catch {}
-  });
-  frame.addEventListener('pointercancel', () => {
-    mapView.dragging = false;
-  });
+  frame.addEventListener('pointerup', endPointer);
+  frame.addEventListener('pointercancel', endPointer);
   frame.addEventListener('dblclick', () => {
     mapView.scale = 1;
     mapView.x = 0;
@@ -430,32 +527,43 @@ function initMapControls() {
     fullscreenBusy = true;
     fullscreenButton.disabled = true;
     try {
-      if (document.fullscreenElement === frame) {
-        await document.exitFullscreen();
+      if (frame.classList.contains('pseudo-fullscreen')) {
+        setFullscreenUi(false);
+      } else if (fullscreenElement() === frame) {
+        const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exitFullscreen) await exitFullscreen.call(document);
       } else {
-        await frame.requestFullscreen();
+        const requestFullscreen = frame.requestFullscreen || frame.webkitRequestFullscreen;
+        let enteredNative = false;
+        if (requestFullscreen) {
+          try {
+            await requestFullscreen.call(frame);
+            enteredNative = fullscreenElement() === frame;
+          } catch {
+            enteredNative = false;
+          }
+        }
+        if (enteredNative) setFullscreenUi(true);
+        else setFullscreenUi(true, true);
       }
-    } catch (error) {
-      console.warn('Fullscreen toggle failed', error);
     } finally {
       fullscreenBusy = false;
       fullscreenButton.disabled = false;
     }
   });
-  document.addEventListener('fullscreenchange', () => {
-    const isFullscreen = document.fullscreenElement === frame;
-    if (fullscreenButton) {
-      fullscreenButton.title = isFullscreen ? 'Exit fullscreen map' : 'Fullscreen map';
-      fullscreenButton.setAttribute('aria-label', fullscreenButton.title);
-    }
-    applyMapTransform();
+  const onFullscreenChange = () => setFullscreenUi(fullscreenElement() === frame);
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && frame.classList.contains('pseudo-fullscreen')) setFullscreenUi(false);
   });
 }
 
 function projectWorld(lat, lon, width, height) {
+  const layout = worldLayout(width, height);
   return {
-    x: ((lon + 180) / 360) * width,
-    y: ((90 - lat) / 180) * height,
+    x: layout.x + ((lon + 180) / 360) * layout.width,
+    y: layout.y + ((90 - lat) / 180) * layout.height,
   };
 }
 
@@ -515,6 +623,26 @@ function itemVisual(itemId) {
   };
 }
 
+function mixedPeerRgb(peers) {
+  let totalWeight = 0;
+  const channels = [0, 0, 0];
+  const torrentWeights = new Map();
+  for (const item of peers) {
+    const rate = item.peer?.active ? Math.max(0, Number(item.peer.receiveRateBps) || 0) : 0;
+    if (!rate) continue;
+    const id = String(item.peer.itemId || item.peer.pid || item.peer.ip);
+    torrentWeights.set(id, (torrentWeights.get(id) || 0) + rate);
+  }
+  for (const [id, rate] of torrentWeights) {
+    const weight = Math.sqrt(rate);
+    const rgb = itemVisual(id).rgb.split(',').map((value) => Number(value.trim()));
+    for (let channel = 0; channel < 3; channel += 1) channels[channel] += rgb[channel] ** 2 * weight;
+    totalWeight += weight;
+  }
+  if (!totalWeight) return tunnelLimeRgb;
+  return channels.map((value) => Math.round(Math.sqrt(value / totalWeight))).join(', ');
+}
+
 function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
   const head = quadPoint(start, control, end, t);
   const tail = quadPoint(start, control, end, Math.min(1, t + .045));
@@ -532,6 +660,32 @@ function drawPacketDot(ctx, start, control, end, t, rgb, alpha) {
   ctx.arc(head.x, head.y, 4.8, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(' + rgb + ', ' + alpha + ')';
   ctx.fill();
+}
+
+function drawTunnelLock(ctx, start, control, end, t, rgb, alpha) {
+  const point = quadPoint(start, control, end, t);
+  ctx.save();
+  ctx.translate(point.x, point.y);
+  ctx.scale(1.5, 1.5);
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = 'rgb(' + rgb + ')';
+  ctx.shadowBlur = 5;
+  ctx.strokeStyle = 'rgb(' + rgb + ')';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.arc(0, -2, 3.1, Math.PI, 0);
+  ctx.stroke();
+  ctx.fillStyle = 'rgb(' + rgb + ')';
+  ctx.beginPath();
+  ctx.roundRect(-4.4, -1.6, 8.8, 7.2, 1.5);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(7, 16, 26, .8)';
+  ctx.beginPath();
+  ctx.arc(0, 1.2, 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(-.55, 1.5, 1.1, 2.1);
+  ctx.restore();
 }
 
 function drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, nodeLabel, labelColor = nodeColor, labelBelow = false) {
@@ -760,7 +914,7 @@ function drawWorldFrame(now) {
   const nodeRadius = 4.5 * (1 + nodePulse.value);
 
   if (relay) {
-    const tunnelRgb = '87, 224, 194';
+    const tunnelRgb = mixedPeerRgb(swarmMap.displayPeers);
     const tunnelStart = { x: origin.x, y: origin.y };
     const tunnelEnd = { x: relay.x, y: relay.y };
     const tunnelControl = {
@@ -778,7 +932,7 @@ function drawWorldFrame(now) {
     ctx.moveTo(tunnelStart.x, tunnelStart.y);
     ctx.quadraticCurveTo(tunnelControl.x, tunnelControl.y, tunnelEnd.x, tunnelEnd.y);
     ctx.setLineDash([9, 7]);
-    ctx.lineDashOffset = -(now / 85) % 16;
+    ctx.lineDashOffset = (now / 85) % 16;
     ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .92)';
     ctx.lineWidth = 2.8;
     ctx.stroke();
@@ -789,7 +943,7 @@ function drawWorldFrame(now) {
       const packetCount = Math.max(2, Math.min(12, Math.round(2 + tunnelSpeed * 2.5)));
       for (let i = 0; i < packetCount; i += 1) {
         const travel = ((now / (2700 / tunnelSpeed)) + i / packetCount) % 1;
-        drawPacketDot(ctx, tunnelStart, tunnelControl, tunnelEnd, 1 - travel, tunnelRgb, .48 + .45 * Math.sin(travel * Math.PI));
+        drawTunnelLock(ctx, tunnelStart, tunnelControl, tunnelEnd, 1 - travel, tunnelRgb, .48 + .45 * Math.sin(travel * Math.PI));
       }
     }
   }

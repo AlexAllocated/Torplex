@@ -91,6 +91,59 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(500);
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile.png` });
+
+  const mapFrame = page.locator(".world-map-frame");
+  await mapFrame.scrollIntoViewIfNeeded();
+  await mapFrame.evaluate((frame) => {
+    const rect = frame.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const pointer = (type: string, pointerId: number, clientX: number, clientY: number) =>
+      frame.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        pointerId,
+        pointerType: "touch",
+        isPrimary: pointerId === 1,
+        clientX,
+        clientY,
+      }));
+    pointer("pointerdown", 1, centerX - 30, centerY);
+    pointer("pointerdown", 2, centerX + 30, centerY);
+    pointer("pointermove", 1, centerX - 75, centerY);
+    pointer("pointermove", 2, centerX + 75, centerY);
+    pointer("pointerup", 1, centerX - 75, centerY);
+    pointer("pointerup", 2, centerX + 75, centerY);
+  });
+  await expect.poll(async () => Number(await mapFrame.getAttribute("data-zoom"))).toBeGreaterThan(2);
+
+  await mapFrame.evaluate((frame) => frame.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+  await expect(mapFrame).toHaveAttribute("data-zoom", "1.00");
+
+  await mapFrame.evaluate((frame) => {
+    Object.defineProperty(frame, "requestFullscreen", { configurable: true, value: undefined });
+    Object.defineProperty(frame, "webkitRequestFullscreen", { configurable: true, value: undefined });
+  });
+  await page.locator("#fullscreenMap").click();
+  await expect(mapFrame).toHaveClass(/pseudo-fullscreen/);
+  await expect(page.locator("body")).toHaveClass(/map-fullscreen-open/);
+  await expect(page.locator("#fullscreenMap")).toHaveAttribute("aria-label", "Exit fullscreen map");
+  const fullscreenGeometry = await mapFrame.evaluate((frame) => {
+    const frameRect = frame.getBoundingClientRect();
+    const viewportRect = frame.querySelector(".world-map-viewport")!.getBoundingClientRect();
+    return {
+      frameWidth: frameRect.width,
+      frameHeight: frameRect.height,
+      viewportWidth: viewportRect.width,
+      viewportHeight: viewportRect.height,
+    };
+  });
+  expect(fullscreenGeometry.frameWidth).toBeGreaterThanOrEqual(389);
+  expect(fullscreenGeometry.frameHeight).toBeGreaterThanOrEqual(843);
+  expect(fullscreenGeometry.viewportWidth).toBeGreaterThanOrEqual(389);
+  expect(fullscreenGeometry.viewportHeight).toBeGreaterThanOrEqual(843);
+  await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-mobile-fullscreen.png` });
+  await page.locator("#fullscreenMap").click();
+  await expect(mapFrame).not.toHaveClass(/map-fullscreen-active/);
 });
 
 test("pending rows can be reprioritized across multiple positions", async ({ page }) => {

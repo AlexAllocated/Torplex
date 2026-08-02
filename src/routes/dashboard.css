@@ -1168,15 +1168,22 @@
       cursor: grab;
       touch-action: none;
     }
-    .world-map-frame:fullscreen {
+    .world-map-frame:fullscreen,
+    .world-map-frame.pseudo-fullscreen {
       width: 100vw;
-      height: 100vh;
-      min-height: 100vh;
+      height: 100dvh;
+      min-height: 100dvh;
       aspect-ratio: auto;
       border: 0;
       border-radius: 0;
       background: #07101a;
     }
+    .world-map-frame.pseudo-fullscreen {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+    }
+    body.map-fullscreen-open { overflow: hidden; }
     .world-map-frame:active { cursor: grabbing; }
     .world-map-frame .icon-button {
       position: absolute;
@@ -1187,20 +1194,18 @@
       backdrop-filter: blur(10px);
     }
     .world-map-frame .exit-fullscreen-icon { display: none; }
-    .world-map-frame:fullscreen .enter-fullscreen-icon { display: none; }
-    .world-map-frame:fullscreen .exit-fullscreen-icon { display: block; }
+    .world-map-frame.map-fullscreen-active .enter-fullscreen-icon { display: none; }
+    .world-map-frame.map-fullscreen-active .exit-fullscreen-icon { display: block; }
     .world-map-viewport {
       position: absolute;
       inset: 0;
       overflow: hidden;
     }
-    .world-map-frame:fullscreen .world-map-viewport {
-      inset: auto;
-      left: 50%;
-      top: 50%;
-      width: min(100vw, 200vh);
-      height: min(50vw, 100vh);
-      transform: translate(-50%, -50%);
+    .world-map-frame.map-fullscreen-active .world-map-viewport {
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transform: none;
     }
     .world-map-layer {
       position: absolute;
@@ -1307,7 +1312,7 @@
       pointer-events: none;
       transform: translateX(-50%);
     }
-    .world-map-frame:fullscreen .map-progress-widget {
+    .world-map-frame.map-fullscreen-active .map-progress-widget {
       display: block;
     }
     .map-progress-title {
