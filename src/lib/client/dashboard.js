@@ -912,9 +912,9 @@ function drawWorldFrame(now) {
   const nodePulse = pulseForSpeed(now, totalIngestBps);
   const nodeColor = nodeLimeRgb;
   const nodeRadius = 4.5 * (1 + nodePulse.value);
+  const tunnelRgb = mixedPeerRgb(swarmMap.displayPeers);
 
   if (relay) {
-    const tunnelRgb = mixedPeerRgb(swarmMap.displayPeers);
     const tunnelStart = { x: origin.x, y: origin.y };
     const tunnelEnd = { x: relay.x, y: relay.y };
     const tunnelControl = {
@@ -1015,7 +1015,7 @@ function drawWorldFrame(now) {
   });
   if (relay) {
     const relayPulse = pulseForSpeed(now, totalIngestBps, Math.PI);
-    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, '120, 166, 255', swarmMap.relay.label, '165, 195, 255', true);
+    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, tunnelRgb, swarmMap.relay.label, '165, 195, 255', true);
   }
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
