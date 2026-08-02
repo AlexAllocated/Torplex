@@ -1313,6 +1313,8 @@
         linear-gradient(180deg, rgba(10, 18, 28, .96), rgba(7, 11, 17, .96));
       cursor: grab;
       touch-action: none;
+      contain: layout paint;
+      isolation: isolate;
     }
     .world-map-frame:fullscreen,
     .world-map-frame.pseudo-fullscreen {
@@ -1357,7 +1359,6 @@
       position: absolute;
       inset: 0;
       transform-origin: 0 0;
-      will-change: transform;
       z-index: 1;
     }
     .world-map-raster {
@@ -1367,7 +1368,8 @@
       height: 100%;
       opacity: .56;
     }
-    #worldCanvas {
+    #worldCanvas,
+    .world-static-canvas {
       position: absolute;
       inset: 0;
       display: block;

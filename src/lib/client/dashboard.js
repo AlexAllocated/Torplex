@@ -40,6 +40,11 @@ const swarmMap = {
   lastFrame: 0,
   updatedAt: '',
   labelsDirty: true,
+  geometryDirty: true,
+  geometry: null,
+  inViewport: true,
+  frameCount: 0,
+  fpsStartedAt: 0,
   origin: { label: 'SERVER', lat: 39, lon: -98 },
   relay: null,
   vpn: null,
@@ -64,6 +69,10 @@ const mapRaster = {
   image: null,
   ready: false,
   raf: 0,
+};
+const mapStatic = {
+  raf: 0,
+  dirty: true,
 };
 const MAP_COLLAPSED_STORAGE_KEY = 'torplex:map-collapsed';
 let mapCollapsed = false;
@@ -278,6 +287,8 @@ function renderSwarmMap(swarm) {
     swarmMap.peers = peers;
     syncDisplayPeers(peers);
     swarmMap.labelsDirty = true;
+    swarmMap.geometryDirty = true;
+    mapStatic.dirty = true;
   }
   if (Number.isFinite(swarm?.origin?.lat) && Number.isFinite(swarm?.origin?.lon)) {
     swarmMap.origin = {
@@ -296,6 +307,8 @@ function renderSwarmMap(swarm) {
       }
     : null;
   swarmMap.vpn = swarm?.vpn || null;
+  swarmMap.geometryDirty = true;
+  mapStatic.dirty = true;
   if (vpnStatus && vpnStatusText) {
     const vpn = swarmMap.vpn;
     const location = [vpn?.exit?.city, vpn?.exit?.country].filter(Boolean).join(', ');
@@ -321,6 +334,7 @@ function renderSwarmMap(swarm) {
       (swarmMap.relay ? ' · routed via ' + ([swarmMap.relay.city, swarmMap.relay.country].filter(Boolean).join(', ') || 'VPN') : '')
     : swarmMap.relay ? 'VPN route ready · no connected aria2c peers visible yet' : 'No connected aria2c peers visible yet';
   startMapAnimation();
+  scheduleMapStatic();
 }
 
 function worldLayout(width, height) {
@@ -364,11 +378,14 @@ function mapCanPan() {
 function applyMapTransform() {
   clampMapView();
   swarmMap.labelsDirty = true;
+  swarmMap.geometryDirty = true;
+  mapStatic.dirty = true;
   const layer = document.getElementById('worldMapLayer');
   const frame = document.querySelector('.world-map-frame');
   if (layer) layer.style.transform = '';
   if (frame) frame.dataset.zoom = mapView.scale.toFixed(2);
   scheduleMapRaster();
+  scheduleMapStatic();
 }
 
 function drawMapRaster() {
@@ -403,12 +420,27 @@ function drawMapRaster() {
 }
 
 function scheduleMapRaster() {
-  if (mapCollapsed) return;
+  if (mapCollapsed || !swarmMap.inViewport || document.hidden) return;
   if (!mapRaster.raf) mapRaster.raf = requestAnimationFrame(drawMapRaster);
 }
 
+function mapCanRender() {
+  return !mapCollapsed && swarmMap.inViewport && !document.hidden;
+}
+
+function updateMapRenderingState() {
+  const panel = document.querySelector('.transfer-map');
+  panel?.setAttribute('data-map-rendering', mapCollapsed ? 'paused' : mapCanRender() ? 'running' : 'idle');
+}
+
 function startMapAnimation() {
-  if (!mapCollapsed && !swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+  updateMapRenderingState();
+  if (mapCanRender() && !swarmMap.raf) swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+}
+
+function scheduleMapStatic() {
+  if (!mapCanRender() || !mapStatic.dirty || mapStatic.raf) return;
+  mapStatic.raf = requestAnimationFrame(drawWorldStaticFrame);
 }
 
 function setMapCollapsed(collapsed, { persist = true } = {}) {
@@ -417,7 +449,7 @@ function setMapCollapsed(collapsed, { persist = true } = {}) {
   const shell = document.getElementById('worldShell');
   const button = document.getElementById('toggleMap');
   panel?.classList.toggle('map-collapsed', mapCollapsed);
-  panel?.setAttribute('data-map-rendering', mapCollapsed ? 'paused' : 'running');
+  updateMapRenderingState();
   shell?.setAttribute('aria-hidden', String(mapCollapsed));
   if (button) {
     button.title = mapCollapsed ? 'Expand swarm map' : 'Collapse swarm map';
@@ -429,19 +461,57 @@ function setMapCollapsed(collapsed, { persist = true } = {}) {
   if (mapCollapsed) {
     if (swarmMap.raf) cancelAnimationFrame(swarmMap.raf);
     if (mapRaster.raf) cancelAnimationFrame(mapRaster.raf);
+    if (mapStatic.raf) cancelAnimationFrame(mapStatic.raf);
     swarmMap.raf = 0;
     mapRaster.raf = 0;
+    mapStatic.raf = 0;
     swarmMap.lastFrame = 0;
     return;
   }
 
   swarmMap.lastFrame = 0;
   swarmMap.labelsDirty = true;
+  swarmMap.geometryDirty = true;
+  mapStatic.dirty = true;
   requestAnimationFrame(() => {
     applyMapTransform();
     scheduleMapRaster();
     startMapAnimation();
   });
+}
+
+function initMapVisibility() {
+  const panel = document.querySelector('.transfer-map');
+  if (!panel) return;
+  const syncVisibility = (visible) => {
+    swarmMap.inViewport = visible;
+    updateMapRenderingState();
+    if (!visible || document.hidden) {
+      if (swarmMap.raf) cancelAnimationFrame(swarmMap.raf);
+      if (mapRaster.raf) cancelAnimationFrame(mapRaster.raf);
+      if (mapStatic.raf) cancelAnimationFrame(mapStatic.raf);
+      swarmMap.raf = 0;
+      mapRaster.raf = 0;
+      mapStatic.raf = 0;
+      swarmMap.lastFrame = 0;
+      return;
+    }
+    scheduleMapRaster();
+    scheduleMapStatic();
+    startMapAnimation();
+  };
+  const observer = new IntersectionObserver(([entry]) => syncVisibility(Boolean(entry?.isIntersecting)), {
+    rootMargin: '120px 0px',
+    threshold: 0,
+  });
+  observer.observe(panel);
+  const themeObserver = new MutationObserver(() => {
+    phosphorCache.theme = '';
+    mapStatic.dirty = true;
+    scheduleMapStatic();
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-crt-theme'] });
+  document.addEventListener('visibilitychange', () => syncVisibility(swarmMap.inViewport));
 }
 
 function initMapCollapse() {
@@ -852,31 +922,20 @@ function streamSpeedFactor(bytesPerSecond) {
 }
 
 function syncDisplayPeers(peers) {
-  const now = performance.now();
   const existing = new Map(swarmMap.displayPeers
     .map((item) => [item.peerKey || item.peer?.peerKey || '', item])
     .filter(([key]) => key));
   const next = [];
-  const nextKeys = new Set();
   peers.filter((peer) => Number.isFinite(peer.lat) && Number.isFinite(peer.lon)).forEach((peer, index) => {
     peer.peerKey = (peer.itemId || peer.pid || 'unknown') + ':' + peer.ip + ':' + peer.port;
     const key = peer.peerKey;
-    nextKeys.add(key);
-    const current = existing.get(key) || { alpha: 0, x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
+    const current = existing.get(key) || { x: 0, y: 0, phase: Math.random() * Math.PI * 2 };
     current.peerKey = key;
     current.peer = peer;
     current.targetLat = Number(peer.lat);
     current.targetLon = Number(peer.lon);
-    current.lastSeen = now;
     current.rank = index;
-    current.fading = false;
     next.push(current);
-  });
-  existing.forEach((peer, key) => {
-    if (key && !nextKeys.has(key)) {
-      peer.fading = true;
-      next.push(peer);
-    }
   });
   swarmMap.displayPeers = next;
 }
@@ -910,7 +969,7 @@ function renderMapPeerLabels(width, height) {
   const layer = document.getElementById('mapPeerLabels');
   if (!layer) return;
   const visible = swarmMap.displayPeers
-    .filter((item) => item.peer?.active && !item.fading)
+    .filter((item) => item.peer?.active)
     .sort((a, b) =>
       Number(Boolean(b.peer.infrastructure)) - Number(Boolean(a.peer.infrastructure)) ||
       (Number(b.peer.receiveRateBps) || 0) - (Number(a.peer.receiveRateBps) || 0) ||
@@ -1031,29 +1090,91 @@ function renderMapPeerLabels(width, height) {
   swarmMap.labelsDirty = false;
 }
 
-function drawWorldFrame(now) {
-  swarmMap.raf = 0;
-  if (mapCollapsed) return;
-  swarmMap.raf = requestAnimationFrame(drawWorldFrame);
-  const canvas = document.getElementById('worldCanvas');
-  if (!canvas) return;
-  const frameInterval = 1000 / 30;
-  if (swarmMap.lastFrame && now - swarmMap.lastFrame < frameInterval) return;
+function mapCanvasMetrics(canvas, maxDpr) {
   const viewport = document.getElementById('worldMapViewport');
-  const rect = { width: viewport?.clientWidth || canvas.clientWidth, height: viewport?.clientHeight || canvas.clientHeight };
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const pixelWidth = Math.max(1, Math.floor(rect.width * dpr));
-  const pixelHeight = Math.max(1, Math.floor(rect.height * dpr));
-  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+  const width = Math.max(1, viewport?.clientWidth || canvas.clientWidth || 1);
+  const height = Math.max(1, viewport?.clientHeight || canvas.clientHeight || 1);
+  const dpr = Math.min(maxDpr, window.devicePixelRatio || 1);
+  const pixelWidth = Math.max(1, Math.floor(width * dpr));
+  const pixelHeight = Math.max(1, Math.floor(height * dpr));
+  const resized = canvas.width !== pixelWidth || canvas.height !== pixelHeight;
+  if (resized) {
     canvas.width = pixelWidth;
     canvas.height = pixelHeight;
   }
-  const ctx = canvas.getContext('2d');
-  const dt = swarmMap.lastFrame ? Math.min(80, now - swarmMap.lastFrame) : 16;
-  swarmMap.lastFrame = now;
-  const width = rect.width;
-  const height = rect.height;
+  return { width, height, dpr, resized };
+}
 
+function prepareMapGeometry(width, height) {
+  const key = [
+    width,
+    height,
+    mapView.scale.toFixed(3),
+    mapView.x.toFixed(1),
+    mapView.y.toFixed(1),
+    swarmMap.updatedAt,
+    swarmMap.origin.lat,
+    swarmMap.origin.lon,
+    swarmMap.relay?.lat ?? '',
+    swarmMap.relay?.lon ?? '',
+  ].join(':');
+  if (!swarmMap.geometryDirty && swarmMap.geometry?.key === key) return swarmMap.geometry;
+
+  const origin = cameraPoint(projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height));
+  const relay = swarmMap.relay
+    ? cameraPoint(projectWorld(swarmMap.relay.lat, swarmMap.relay.lon, width, height))
+    : null;
+  const routeTarget = relay || origin;
+  const tunnelControl = relay ? {
+    x: (origin.x + relay.x) / 2,
+    y: (origin.y + relay.y) / 2 - Math.min(58, Math.abs(origin.x - relay.x) * .14),
+  } : null;
+  const peers = swarmMap.displayPeers.map((item) => {
+    const world = projectWorld(item.targetLat, item.targetLon, width, height);
+    item.x = world.x;
+    item.y = world.y;
+    const screen = cameraPoint(world);
+    const control = {
+      x: (routeTarget.x + screen.x) / 2,
+      y: (routeTarget.y + screen.y) / 2 - Math.min(80, Math.abs(routeTarget.x - screen.x) * .12),
+    };
+    return {
+      item,
+      peer: item.peer,
+      screen,
+      control,
+      visual: itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip),
+      rateBps: Number(item.peer.receiveRateBps) || 0,
+    };
+  });
+  const activePeers = peers.filter((entry) => entry.peer.active);
+  const geometry = {
+    key,
+    origin,
+    relay,
+    routeTarget,
+    tunnelControl,
+    peers,
+    activePeers,
+    totalIngestBps: activePeers.reduce((sum, entry) => sum + entry.rateBps, 0),
+  };
+  swarmMap.geometry = geometry;
+  swarmMap.geometryDirty = false;
+  return geometry;
+}
+
+function drawWorldStaticFrame() {
+  mapStatic.raf = 0;
+  if (!mapCanRender() || !mapStatic.dirty) return;
+  const canvas = document.getElementById('worldStaticCanvas');
+  if (!canvas) return;
+  const { width, height, dpr, resized } = mapCanvasMetrics(canvas, window.innerWidth <= 720 ? 1 : 1.35);
+  if (resized) {
+    swarmMap.geometryDirty = true;
+    swarmMap.labelsDirty = true;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
@@ -1067,31 +1188,101 @@ function drawWorldFrame(now) {
 
   ctx.strokeStyle = 'rgba(' + themeRgb + ', .13)';
   ctx.lineWidth = 1;
+  ctx.beginPath();
   for (let lon = -150; lon <= 150; lon += 30) {
     const x = projectWorldScreen(0, lon, width, height).x;
-    ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
-    ctx.stroke();
   }
   for (let lat = -60; lat <= 60; lat += 30) {
     const y = projectWorldScreen(lat, 0, width, height).y;
-    ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
-    ctx.stroke();
   }
+  ctx.stroke();
 
-  const totalIngestBps = swarmMap.displayPeers.reduce(
-    (sum, item) => sum + (item.peer?.active ? Number(item.peer.receiveRateBps) || 0 : 0),
-    0,
-  );
-  const originWorld = projectWorld(swarmMap.origin.lat, swarmMap.origin.lon, width, height);
-  const origin = cameraPoint(originWorld);
-  const relayWorld = swarmMap.relay
-    ? projectWorld(swarmMap.relay.lat, swarmMap.relay.lon, width, height)
-    : null;
-  const relay = relayWorld ? cameraPoint(relayWorld) : null;
+  const geometry = prepareMapGeometry(width, height);
+  if (geometry.relay && geometry.tunnelControl) {
+    ctx.beginPath();
+    ctx.moveTo(geometry.origin.x, geometry.origin.y);
+    ctx.quadraticCurveTo(geometry.tunnelControl.x, geometry.tunnelControl.y, geometry.relay.x, geometry.relay.y);
+    ctx.strokeStyle = 'rgba(' + themeRgb + ', .13)';
+    ctx.lineWidth = 9;
+    ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(geometry.origin.x, geometry.origin.y);
+    ctx.quadraticCurveTo(geometry.tunnelControl.x, geometry.tunnelControl.y, geometry.relay.x, geometry.relay.y);
+    ctx.setLineDash([9, 7]);
+    ctx.strokeStyle = 'rgba(' + themeRgb + ', .92)';
+    ctx.lineWidth = 2.8;
+    ctx.stroke();
+    ctx.restore();
+  }
+  geometry.activePeers.forEach((entry) => {
+    ctx.beginPath();
+    ctx.moveTo(geometry.routeTarget.x, geometry.routeTarget.y);
+    ctx.quadraticCurveTo(entry.control.x, entry.control.y, entry.screen.x, entry.screen.y);
+    ctx.strokeStyle = 'rgba(' + entry.visual.rgb + ', .17)';
+    ctx.lineWidth = 7;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(' + entry.visual.rgb + ', .88)';
+    ctx.lineWidth = 2.7;
+    ctx.stroke();
+  });
+  geometry.peers.filter((entry) => !entry.peer.active).forEach((entry) => {
+    const alpha = entry.peer.probing ? .72 : .38;
+    const outerRadius = entry.peer.probing ? 7.5 : 6;
+    const innerRadius = entry.peer.probing ? 4.65 : 3.9;
+    drawGlyph(ctx, entry.screen, entry.visual.shape, outerRadius, entry.visual.rgb, .07 * alpha, 2);
+    drawGlyph(ctx, entry.screen, entry.visual.shape, innerRadius, entry.visual.rgb, .68 * alpha, 1);
+    if (entry.peer.infrastructure) {
+      ctx.beginPath();
+      ctx.arc(entry.screen.x, entry.screen.y, outerRadius + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(' + themeRgb + ', ' + (.9 * alpha) + ')';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+  });
+  mapStatic.dirty = false;
+  if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
+}
+
+function drawWorldFrame(now) {
+  swarmMap.raf = 0;
+  if (!mapCanRender()) {
+    updateMapRenderingState();
+    return;
+  }
+  swarmMap.raf = requestAnimationFrame(drawWorldFrame);
+  const canvas = document.getElementById('worldCanvas');
+  if (!canvas) return;
+  const viewport = document.getElementById('worldMapViewport');
+  const width = Math.max(1, viewport?.clientWidth || canvas.clientWidth || 1);
+  const height = Math.max(1, viewport?.clientHeight || canvas.clientHeight || 1);
+  const geometry = prepareMapGeometry(width, height);
+  const fullscreen = document.querySelector('.world-map-frame')?.classList.contains('map-fullscreen-active');
+  const activeFps = fullscreen ? 20 : window.innerWidth <= 720 ? 14 : 18;
+  const frameInterval = 1000 / (geometry.totalIngestBps > 0 ? activeFps : 8);
+  if (swarmMap.lastFrame && now - swarmMap.lastFrame < frameInterval) return;
+  const { dpr, resized } = mapCanvasMetrics(canvas, window.innerWidth <= 720 ? .75 : .9);
+  if (resized) {
+    swarmMap.geometryDirty = true;
+    swarmMap.labelsDirty = true;
+    mapStatic.dirty = true;
+    scheduleMapStatic();
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  swarmMap.lastFrame = now;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const themeRgb = currentPhosphorRgb();
+  const totalIngestBps = geometry.totalIngestBps;
+  const origin = geometry.origin;
+  const relay = geometry.relay;
   const routeTarget = relay || origin;
   const nodePulse = pulseForSpeed(now, totalIngestBps);
   const nodeColor = themeRgb;
@@ -1101,30 +1292,11 @@ function drawWorldFrame(now) {
   if (relay) {
     const tunnelStart = { x: origin.x, y: origin.y };
     const tunnelEnd = { x: relay.x, y: relay.y };
-    const tunnelControl = {
-      x: (origin.x + relay.x) / 2,
-      y: (origin.y + relay.y) / 2 - Math.min(58, Math.abs(origin.x - relay.x) * .14),
-    };
-    ctx.beginPath();
-    ctx.moveTo(tunnelStart.x, tunnelStart.y);
-    ctx.quadraticCurveTo(tunnelControl.x, tunnelControl.y, tunnelEnd.x, tunnelEnd.y);
-    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .13)';
-    ctx.lineWidth = 9;
-    ctx.stroke();
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(tunnelStart.x, tunnelStart.y);
-    ctx.quadraticCurveTo(tunnelControl.x, tunnelControl.y, tunnelEnd.x, tunnelEnd.y);
-    ctx.setLineDash([9, 7]);
-    ctx.lineDashOffset = (now / 85) % 16;
-    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .92)';
-    ctx.lineWidth = 2.8;
-    ctx.stroke();
-    ctx.restore();
+    const tunnelControl = geometry.tunnelControl;
 
-    if (Math.round(totalIngestBps) > 0) {
+    if (tunnelControl && Math.round(totalIngestBps) > 0) {
       const tunnelSpeed = streamSpeedFactor(totalIngestBps);
-      const packetCount = Math.max(2, Math.min(12, Math.round(2 + tunnelSpeed * 2.5)));
+      const packetCount = Math.max(2, Math.min(8, Math.round(2 + tunnelSpeed * 1.7)));
       for (let i = 0; i < packetCount; i += 1) {
         const travel = ((now / (2700 / tunnelSpeed)) + i / packetCount) % 1;
         drawTunnelLock(ctx, tunnelStart, tunnelControl, tunnelEnd, 1 - travel, tunnelRgb, .48 + .45 * Math.sin(travel * Math.PI));
@@ -1132,44 +1304,16 @@ function drawWorldFrame(now) {
     }
   }
 
-  swarmMap.displayPeers = swarmMap.displayPeers.filter((item) => item.alpha > .02 || !item.fading);
-  swarmMap.displayPeers.forEach((item) => {
-    const target = projectWorld(item.targetLat, item.targetLon, width, height);
-    if (!item.x && !item.y) {
-      item.x = target.x;
-      item.y = target.y;
-    }
-    item.x = target.x;
-    item.y = target.y;
-    item.alpha += ((item.fading ? 0 : 1) - item.alpha) * (1 - Math.exp(-dt / 360));
-    const targetAlpha = item.peer.active ? 1 : item.peer.probing ? .72 : .38;
-    const alpha = Math.max(0, Math.min(targetAlpha, item.alpha * targetAlpha));
-    const peerPulse = pulseForSpeed(now, item.peer.receiveRateBps, item.phase + Math.PI);
-    const visual = itemVisual(item.peer.itemId || item.peer.pid || item.peer.ip);
+  geometry.activePeers.forEach(({ item, peer, screen, control, visual, rateBps }) => {
+    const alpha = 1;
+    const peerPulse = pulseForSpeed(now, rateBps, item.phase + Math.PI);
     const activeColor = visual.rgb;
-
     const start = { x: routeTarget.x, y: routeTarget.y };
-    const screen = cameraPoint({ x: item.x, y: item.y });
     const end = { x: screen.x, y: screen.y };
-    const midX = (routeTarget.x + screen.x) / 2;
-    const midY = (routeTarget.y + screen.y) / 2 - Math.min(80, Math.abs(routeTarget.x - screen.x) * .12);
-    const control = { x: midX, y: midY };
-    if (item.peer.active) {
-      ctx.beginPath();
-      ctx.moveTo(start.x, start.y);
-      ctx.quadraticCurveTo(control.x, control.y, end.x, end.y);
-      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.17 * alpha) + ')';
-      ctx.lineWidth = 7;
-      ctx.stroke();
-      ctx.strokeStyle = 'rgba(' + activeColor + ', ' + (.88 * alpha) + ')';
-      ctx.lineWidth = 2.7;
-      ctx.stroke();
-    }
 
-    const rateBps = Number(item.peer.receiveRateBps) || 0;
-    if (item.peer.active && Math.round(rateBps) > 0) {
+    if (Math.round(rateBps) > 0) {
       const speedFactor = streamSpeedFactor(rateBps);
-      const packetCount = Math.max(2, Math.min(14, Math.round(2 + speedFactor * 3.1)));
+      const packetCount = Math.max(2, Math.min(10, Math.round(2 + speedFactor * 2.1)));
       for (let i = 0; i < packetCount; i += 1) {
         const travel = ((now / (2600 / speedFactor)) + i / packetCount + item.phase) % 1;
         const t = 1 - travel;
@@ -1179,11 +1323,11 @@ function drawWorldFrame(now) {
     }
 
     const activePeerRadius = 3.375 + (1 - peerPulse.value) * 3.375;
-    const outerRadius = item.peer.active ? activePeerRadius + 4.5 : item.peer.probing ? 7.5 : 6;
-    const innerRadius = item.peer.active ? activePeerRadius : item.peer.probing ? 4.65 : 3.9;
-    drawGlyph(ctx, screen, visual.shape, outerRadius, activeColor, (item.peer.active ? .17 : .07) * alpha, 4);
-    drawGlyph(ctx, screen, visual.shape, innerRadius, activeColor, (item.peer.active ? 1 : .68) * alpha, item.peer.active ? 7 : 2);
-    if (item.peer.infrastructure) {
+    const outerRadius = activePeerRadius + 4.5;
+    const innerRadius = activePeerRadius;
+    drawGlyph(ctx, screen, visual.shape, outerRadius, activeColor, .17 * alpha, 3);
+    drawGlyph(ctx, screen, visual.shape, innerRadius, activeColor, alpha, 4);
+    if (peer.infrastructure) {
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, outerRadius + 3, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(' + themeRgb + ', ' + (.9 * alpha) + ')';
@@ -1197,6 +1341,14 @@ function drawWorldFrame(now) {
   }
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
+  swarmMap.frameCount += 1;
+  if (!swarmMap.fpsStartedAt) swarmMap.fpsStartedAt = now;
+  if (now - swarmMap.fpsStartedAt >= 1000) {
+    const panel = document.querySelector('.transfer-map');
+    panel?.setAttribute('data-map-fps', String(Math.round(swarmMap.frameCount * 1000 / (now - swarmMap.fpsStartedAt))));
+    swarmMap.frameCount = 0;
+    swarmMap.fpsStartedAt = now;
+  }
 }
 
 function renderItems(items) {
@@ -2488,6 +2640,7 @@ if ('EventSource' in window) {
   setInterval(refreshFallback, 1000);
 }
 initWarp();
+initMapVisibility();
 initMapCollapse();
 initMapControls();
 initIntakeNavigation();

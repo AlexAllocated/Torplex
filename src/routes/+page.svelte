@@ -122,6 +122,7 @@
           </div>
           <div id="worldMapLayer" class="world-map-layer">
             <canvas id="worldMapRaster" class="world-map-raster" aria-hidden="true"></canvas>
+            <canvas id="worldStaticCanvas" class="world-static-canvas" aria-hidden="true"></canvas>
             <canvas id="worldCanvas" aria-label="Connected peer world map"></canvas>
             <div id="mapPeerLabels" class="map-peer-label-layer" aria-hidden="true"></div>
           </div>

@@ -105,6 +105,8 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.locator('#commandInput').fill('status');
   await page.locator('#commandInput').press('Enter');
   await expect(page.locator('#commandOutput')).toContainText('STATE');
+  await page.locator('.transfer-map').scrollIntoViewIfNeeded();
+  await expect(page.locator('.transfer-map')).toHaveAttribute('data-map-rendering', 'running');
   await page.locator('#commandInput').fill('map off');
   await page.locator('#commandInput').press('Enter');
   await expect(page.locator('.transfer-map')).toHaveAttribute('data-map-rendering', 'paused');
@@ -184,7 +186,10 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     return painted;
   });
   await expect.poll(() => paintedSamples("#worldMapRaster"), { timeout: 15_000 }).toBeGreaterThan(100);
+  await expect.poll(() => paintedSamples("#worldStaticCanvas"), { timeout: 15_000 }).toBeGreaterThan(100);
   await expect.poll(() => paintedSamples("#worldCanvas"), { timeout: 15_000 }).toBeGreaterThan(100);
+  await expect.poll(async () => Number(await mapPanel.getAttribute('data-map-fps')), { timeout: 15_000 }).toBeGreaterThan(0);
+  expect(Number(await mapPanel.getAttribute('data-map-fps'))).toBeLessThanOrEqual(25);
   if (requirePeers) {
     const peerLabel = page.locator('.map-peer-label').first();
     await expect(peerLabel).toBeVisible({ timeout: 15_000 });
@@ -225,6 +230,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(lastQueueItem.locator('[data-role="title"]')).toBeVisible();
   await expect(lastQueueItem.locator('[data-role="title"]')).not.toBeEmpty();
   await page.waitForTimeout(1_200);
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'idle');
   await page.screenshot({ path: `/tmp/torplex-pi-${testInfo.project.name}-queue-bottom.png` });
   await page.addStyleTag({ content: "#items .item { content-visibility: visible !important; }" });
   const overlappingRows = await page.locator("#items .item").evaluateAll((rows) => rows.flatMap((row) => {
@@ -250,6 +256,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
 
   const mapFrame = page.locator(".world-map-frame");
   await mapFrame.scrollIntoViewIfNeeded();
+  await expect(mapPanel).toHaveAttribute('data-map-rendering', 'running');
   await mapFrame.evaluate((frame) => {
     const rect = frame.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
