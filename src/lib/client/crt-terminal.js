@@ -27,6 +27,74 @@ const normalizeTheme = (theme) => theme === 'purple' ? 'magenta' : theme;
 
 const hasReadableText = (node) => Boolean(node?.textContent?.trim());
 
+function createWavUrl(durationSeconds, sampleAt) {
+  const sampleRate = 22050;
+  const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  writeText(0, 'RIFF');
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  writeText(8, 'WAVE');
+  writeText(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, 'data');
+  view.setUint32(40, sampleCount * 2, true);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = Math.max(-1, Math.min(1, Number(sampleAt(index / sampleRate, index, sampleCount)) || 0));
+    view.setInt16(44 + index * 2, Math.round(sample * 32767), true);
+  }
+  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
+
+function createTerminalMediaBank() {
+  const tau = Math.PI * 2;
+  const urls = {
+    enabled: createWavUrl(.38, (time, index, count) => {
+      const progress = index / count;
+      const frequency = progress < .48 ? 520 : 780;
+      const envelope = Math.sin(Math.PI * progress) ** .45;
+      return Math.sign(Math.sin(tau * frequency * time)) * envelope * .42;
+    }),
+    key: createWavUrl(.055, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 12.9898) * 43758.5453) % 1) * 2 - 1;
+      return (Math.sin(tau * 960 * time) * .55 + noise * .45) * (1 - progress) ** 3 * .48;
+    }),
+    power: createWavUrl(.72, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 78.233) * 43758.5453) % 1) * 2 - 1;
+      const sweep = Math.sin(tau * (58 + progress * 520) * time);
+      return (noise * .46 + sweep * .54) * Math.sin(Math.PI * progress) ** .8 * .5;
+    }),
+    hum: createWavUrl(2, (time) => (
+      Math.sin(tau * 72 * time) * .72 + Math.sin(tau * 144 * time) * .18
+    ) * .13),
+  };
+  const audio = (url, volume, loop = false) => {
+    const element = new Audio(url);
+    element.preload = 'auto';
+    element.volume = volume;
+    element.loop = loop;
+    return element;
+  };
+  return {
+    urls,
+    enabled: audio(urls.enabled, .72),
+    power: audio(urls.power, .62),
+    hum: audio(urls.hum, .38, true),
+    keys: Array.from({ length: 8 }, () => audio(urls.key, .48)),
+  };
+}
+
 export function startCrtTerminal() {
   const body = document.body;
   const boot = document.getElementById('crtBootTrigger');
@@ -35,15 +103,15 @@ export function startCrtTerminal() {
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const revealed = new WeakSet();
   const pendingTargets = new Set();
-  let audioContext = null;
-  let audioOutput = null;
-  let humNodes = null;
+  const media = createTerminalMediaBank();
+  let mediaUnlocked = false;
+  let audioError = '';
+  let keyVoice = 0;
   let typingTimer = 0;
   let themeTimer = 0;
   let themeSwapTimer = 0;
   let activeTyping = 0;
   let lastKeyClickAt = 0;
-  let audioUnlocked = false;
   let activated = false;
   let destroyed = false;
   let muted = localStorage.getItem('torplex:crt-muted') === '1';
@@ -61,172 +129,84 @@ export function startCrtTerminal() {
   body.classList.add(warmStart ? 'crt-powering-on' : 'crt-awaiting-power');
   body.classList.toggle('crt-audio-muted', muted);
 
+  const allMedia = () => [media.enabled, media.power, media.hum, ...media.keys];
+
   const setAudioUi = () => {
-    const state = muted ? 'muted' : audioUnlocked && audioContext?.state === 'running' ? 'running' : 'armed';
+    const state = muted ? 'muted' : audioError ? 'error' : mediaUnlocked ? 'running' : 'armed';
     body.dataset.audioState = state;
+    body.dataset.audioBackend = 'html-media';
+    if (audioError) body.dataset.audioError = audioError;
+    else delete body.dataset.audioError;
     if (!audioToggle) return;
     const label = state === 'muted'
       ? 'Enable terminal audio'
       : state === 'running'
         ? 'Mute terminal audio'
-        : 'Terminal audio armed - interact to enable';
+        : state === 'error'
+          ? `Audio failed: ${audioError}`
+          : 'Terminal audio armed - interact to enable';
     audioToggle.setAttribute('aria-label', label);
     audioToggle.title = label;
     audioToggle.setAttribute('aria-pressed', String(state === 'running'));
     audioToggle.dataset.audioState = state;
   };
-  setAudioUi();
 
-  const createAudioContext = () => {
-    if (!audioContext) {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextClass) return null;
-      audioContext = new AudioContextClass();
-      audioOutput = audioContext.createGain();
-      audioOutput.gain.value = .9;
-      audioOutput.connect(audioContext.destination);
-      audioContext.addEventListener('statechange', setAudioUi);
-    }
-    return audioContext;
+  const reportAudioError = (error) => {
+    audioError = error instanceof Error ? error.message : String(error || 'Playback failed');
+    mediaUnlocked = false;
+    setAudioUi();
   };
 
-  const runningAudio = () => {
-    if (muted || !audioUnlocked || audioContext?.state !== 'running' || !audioOutput) return null;
-    return audioContext;
-  };
-
-  const playPowerOn = () => {
-    const context = runningAudio();
-    if (!context || !audioOutput) return;
-    const now = context.currentTime;
-    const duration = .66;
-    const sampleCount = Math.floor(context.sampleRate * duration);
-    const noiseBuffer = context.createBuffer(1, sampleCount, context.sampleRate);
-    const samples = noiseBuffer.getChannelData(0);
-    for (let index = 0; index < sampleCount; index += 1) {
-      const envelope = Math.sin(Math.PI * index / sampleCount) ** 1.8;
-      samples[index] = (Math.random() * 2 - 1) * envelope;
+  const playElement = (element, { restart = true } = {}) => {
+    if (muted) return Promise.resolve(false);
+    if (restart) {
+      try { element.currentTime = 0; } catch {}
     }
-    const noise = context.createBufferSource();
-    const filter = context.createBiquadFilter();
-    const noiseGain = context.createGain();
-    noise.buffer = noiseBuffer;
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(180, now);
-    filter.frequency.exponentialRampToValueAtTime(3100, now + .3);
-    filter.frequency.exponentialRampToValueAtTime(760, now + duration);
-    filter.Q.value = .7;
-    noiseGain.gain.setValueAtTime(.0001, now);
-    noiseGain.gain.exponentialRampToValueAtTime(.07, now + .09);
-    noiseGain.gain.exponentialRampToValueAtTime(.0001, now + duration);
-    noise.connect(filter).connect(noiseGain).connect(audioOutput);
-    noise.start(now);
-    noise.stop(now + duration);
-
-    const beam = context.createOscillator();
-    const beamGain = context.createGain();
-    beam.type = 'sawtooth';
-    beam.frequency.setValueAtTime(48, now);
-    beam.frequency.exponentialRampToValueAtTime(118, now + .34);
-    beam.frequency.exponentialRampToValueAtTime(76, now + duration);
-    beamGain.gain.setValueAtTime(.0001, now);
-    beamGain.gain.exponentialRampToValueAtTime(.034, now + .12);
-    beamGain.gain.exponentialRampToValueAtTime(.0001, now + duration);
-    beam.connect(beamGain).connect(audioOutput);
-    beam.start(now);
-    beam.stop(now + duration);
+    return Promise.resolve(element.play()).then(() => true).catch((error) => {
+      reportAudioError(error);
+      return false;
+    });
   };
 
   const stopHum = () => {
-    if (!humNodes || !audioContext) return;
-    const { master, oscillators, lfo, gains } = humNodes;
-    humNodes = null;
-    const now = audioContext.currentTime;
-    master.gain.cancelScheduledValues(now);
-    master.gain.setValueAtTime(Math.max(.0001, master.gain.value), now);
-    master.gain.exponentialRampToValueAtTime(.0001, now + .12);
-    window.setTimeout(() => {
-      oscillators.forEach((oscillator) => {
-        try { oscillator.stop(); } catch {}
-        oscillator.disconnect();
-      });
-      try { lfo.stop(); } catch {}
-      lfo.disconnect();
-      gains.forEach((gain) => gain.disconnect());
-      master.disconnect();
-    }, 150);
+    media.hum.pause();
+    try { media.hum.currentTime = 0; } catch {}
   };
 
   const startHum = () => {
-    if (muted || humNodes) return;
-    const context = runningAudio();
-    if (!context || !audioOutput || humNodes) return;
-    const master = context.createGain();
-    const low = context.createOscillator();
-    const high = context.createOscillator();
-    const lowGain = context.createGain();
-    const highGain = context.createGain();
-    const lfo = context.createOscillator();
-    const lfoDepth = context.createGain();
-    master.gain.value = .006;
-    low.type = 'sine';
-    low.frequency.value = 72;
-    high.type = 'triangle';
-    high.frequency.value = 144;
-    lowGain.gain.value = .72;
-    highGain.gain.value = .18;
-    lfo.type = 'sine';
-    lfo.frequency.value = .42;
-    lfoDepth.gain.value = .001;
-    low.connect(lowGain).connect(master);
-    high.connect(highGain).connect(master);
-    lfo.connect(lfoDepth).connect(master.gain);
-    master.connect(audioOutput);
-    low.start();
-    high.start();
-    lfo.start();
-    humNodes = { master, oscillators: [low, high], lfo, gains: [lowGain, highGain, lfoDepth] };
+    if (muted || !mediaUnlocked || !media.hum.paused) return;
+    void playElement(media.hum, { restart: false });
+  };
+
+  const playPowerOn = () => {
+    if (!mediaUnlocked) return;
+    void playElement(media.power);
   };
 
   const playKeyClick = () => {
-    if (muted || document.hidden) return;
+    if (muted || !mediaUnlocked || document.hidden) return;
     const wallClock = performance.now();
     if (wallClock - lastKeyClickAt < 34) return;
     lastKeyClickAt = wallClock;
-    const context = runningAudio();
-    if (!context || !audioOutput) return;
-    const now = context.currentTime;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = Math.random() > .45 ? 'square' : 'triangle';
-    oscillator.frequency.value = 760 + Math.random() * 520;
-    gain.gain.setValueAtTime(.018 + Math.random() * .008, now);
-    gain.gain.exponentialRampToValueAtTime(.0001, now + .022 + Math.random() * .012);
-    oscillator.connect(gain).connect(audioOutput);
-    oscillator.start(now);
-    oscillator.stop(now + .04);
+    const voice = media.keys[keyVoice % media.keys.length];
+    keyVoice += 1;
+    void playElement(voice);
   };
 
-  const playAudioEnabled = () => {
-    const context = runningAudio();
-    if (!context || !audioOutput) return;
-    const now = context.currentTime;
-    const gain = context.createGain();
-    gain.gain.setValueAtTime(.0001, now);
-    gain.gain.exponentialRampToValueAtTime(.09, now + .012);
-    gain.gain.setValueAtTime(.09, now + .15);
-    gain.gain.exponentialRampToValueAtTime(.0001, now + .32);
-    gain.connect(audioOutput);
-    [520, 780].forEach((frequency, index) => {
-      const oscillator = context.createOscillator();
-      oscillator.type = 'square';
-      oscillator.frequency.value = frequency;
-      oscillator.connect(gain);
-      oscillator.start(now + index * .09);
-      oscillator.stop(now + .18 + index * .09);
-    });
-    window.setTimeout(() => gain.disconnect(), 380);
+  const enableAudio = () => {
+    if (muted || mediaUnlocked) return;
+    audioError = '';
+    setAudioUi();
+    try { media.enabled.currentTime = 0; } catch {}
+    Promise.resolve(media.enabled.play()).then(() => {
+      mediaUnlocked = true;
+      audioError = '';
+      body.dataset.audioProbe = 'played';
+      setAudioUi();
+      if (activated) startHum();
+    }).catch(reportAudioError);
   };
+  setAudioUi();
 
   const applyTheme = (theme, { persist = true, animate = true, sound = true } = {}) => {
     theme = normalizeTheme(theme);
@@ -407,24 +387,6 @@ export function startCrtTerminal() {
     window.addEventListener('keydown', onBootKey, { once: true });
   }
 
-  const enableAudio = () => {
-    if (muted || audioUnlocked && audioContext?.state === 'running') return;
-    const context = createAudioContext();
-    if (!context) return;
-    const finish = () => {
-      if (context.state !== 'running' || muted) {
-        setAudioUi();
-        return;
-      }
-      const firstUnlock = !audioUnlocked;
-      audioUnlocked = true;
-      setAudioUi();
-      if (firstUnlock) playAudioEnabled();
-      if (activated) startHum();
-    };
-    if (context.state === 'running') finish();
-    else context.resume().then(finish).catch(setAudioUi);
-  };
   const unlockAudio = (event) => {
     if (event?.target instanceof Element && event.target.closest('#crtAudioToggle')) return;
     enableAudio();
@@ -438,8 +400,10 @@ export function startCrtTerminal() {
   document.addEventListener('click', onUiActivate);
 
   const toggleAudio = () => {
-    if (muted || !audioUnlocked || audioContext?.state !== 'running') {
+    if (muted || !mediaUnlocked) {
       muted = false;
+      mediaUnlocked = false;
+      audioError = '';
       localStorage.setItem('torplex:crt-muted', '0');
       body.classList.remove('crt-audio-muted');
       setAudioUi();
@@ -447,22 +411,19 @@ export function startCrtTerminal() {
       return;
     }
     muted = true;
+    mediaUnlocked = false;
     localStorage.setItem('torplex:crt-muted', '1');
     body.classList.add('crt-audio-muted');
+    allMedia().forEach((element) => element.pause());
     stopHum();
-    audioUnlocked = false;
     setAudioUi();
-    if (audioContext.state === 'running') audioContext.suspend().then(setAudioUi).catch(() => {});
   };
   audioToggle?.addEventListener('click', toggleAudio);
 
   const onVisibility = () => {
-    if (!audioContext || muted) return;
-    if (document.hidden) audioContext.suspend().then(setAudioUi).catch(() => {});
-    else if (audioUnlocked) audioContext.resume().then(() => {
-      setAudioUi();
-      startHum();
-    }).catch(() => {});
+    if (muted || !mediaUnlocked) return;
+    if (document.hidden) media.hum.pause();
+    else startHum();
   };
   document.addEventListener('visibilitychange', onVisibility);
 
@@ -485,7 +446,11 @@ export function startCrtTerminal() {
     if (themeTimer) clearTimeout(themeTimer);
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
     stopHum();
-    audioContext?.removeEventListener('statechange', setAudioUi);
-    audioContext?.close().catch(() => {});
+    allMedia().forEach((element) => {
+      element.pause();
+      element.removeAttribute('src');
+      element.load();
+    });
+    Object.values(media.urls).forEach((url) => URL.revokeObjectURL(url));
   };
 }

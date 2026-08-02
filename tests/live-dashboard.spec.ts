@@ -42,6 +42,9 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await page.getByRole("button", { name: "Unlock" }).click();
   await powerOn(page);
   await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
+  await expect(page.locator('body')).toHaveAttribute('data-audio-backend', 'html-media');
+  await expect(page.locator('body')).toHaveAttribute('data-audio-probe', 'played');
+  await expect(page.locator('body')).not.toHaveAttribute('data-audio-state', 'error');
   const audioToggle = page.locator('#crtAudioToggle');
   await audioToggle.click();
   await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'muted');
