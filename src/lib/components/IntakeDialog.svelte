@@ -1,4 +1,5 @@
 <script>
+  import { goto } from '$app/navigation';
   import IntakeItem from './IntakeItem.svelte';
 
   let items = [];
@@ -187,9 +188,7 @@
       items = [];
       snapshots = new Map();
       queueRightsConfirmed = false;
-      addItem();
-      document.getElementById('intakeDialog')?.close();
-      window.dispatchEvent(new Event('torplex:refresh'));
+      await goto('/');
     } catch (caught) {
       queueError = caught instanceof Error ? caught.message : String(caught);
       dialogStatus = queueError;
@@ -202,8 +201,8 @@
   addItem();
 </script>
 
-<dialog id="intakeDialog" class="intake-dialog">
-  <div class="dialog-card panel bulk-intake-dialog">
+<section class="intake-page">
+  <div class="bulk-intake-workspace intake-page-card">
     <div class="dialog-head">
       <div>
         <div class="label">Torrent Intake</div>
@@ -211,7 +210,7 @@
       </div>
       <div class="dialog-actions">
         <div class="status-pill" data-mode={dialogMode}>{dialogStatus}</div>
-        <button id="closeIntake" class="secondary-button dialog-close" type="button">Close</button>
+        <a class="secondary-button" href="/">Dashboard</a>
       </div>
     </div>
 
@@ -297,4 +296,4 @@
       </section>
     {/if}
   </div>
-</dialog>
+</section>

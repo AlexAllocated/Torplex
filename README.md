@@ -1,6 +1,6 @@
 # Torplex
 
-Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a torrent upload dialog, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
+Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a dedicated torrent intake workspace, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
 
 Torplex does not provide media. It manages `.torrent` files, magnet links, direct `.torrent` URLs, and pages containing an extractable torrent source. An optional search integration can query administrator-installed qBittorrent Nova plugins and use an OpenAI model to build a reviewable multi-title proposal. Use every intake path only with media you have the legal right to download and store.
 
@@ -98,6 +98,8 @@ Open the app at:
 http://SERVER_IP:8787
 ```
 
+Use **Add Torrent** from the dashboard, or open `/add` directly, to enter the authenticated intake workspace. Intake uses normal page scrolling so bulk sources, file manifests, Smart Setup results, and final review remain usable on phones and desktop browsers.
+
 By default, Torplex requires password login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
 
 ## Configuration
@@ -152,7 +154,7 @@ Smart Setup is optional. Without an API key, the normal torrent inspector, per-f
 | `TORPLEX_AI_MODEL` | `gpt-5.6-terra` | OpenAI model used for structured intake plans. |
 | `TORPLEX_AI_EXTRA_INSTRUCTIONS` | empty | Optional installation-wide rules appended to Torplex's built-in planning policy. |
 
-The dialog also accepts per-torrent **Additional instructions**. Those instructions are appended to the fixed Torplex policy; they do not replace its path, selection, validation, or review requirements.
+The intake workspace also accepts per-torrent **Additional instructions**. Those instructions are appended to the fixed Torplex policy; they do not replace its path, selection, validation, or review requirements.
 
 Smart Setup runs once automatically when source inspection succeeds. It sends the torrent filename, payload name, file paths, file sizes, automatic suggestions, configured media roots, and any additional instructions to the OpenAI API. It does not send media bytes. The model returns a draft that fills the same visible controls a user can edit manually; the button remains available for an intentional rerun. Torplex validates all selected indexes and destinations server-side before queueing.
 
@@ -259,7 +261,7 @@ These files are runtime state and are intentionally ignored by git.
 
 ## Queue Model
 
-The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`. During inspection, magnet links use aria2's metadata-only mode to retrieve and cache the small torrent manifest under `BATCH_DIR/torrent-metadata/`; media payload bytes are not downloaded. The dialog reports elapsed metadata-discovery time because inactive magnets may take several minutes to fail. Uploaded files and resolved magnets share the same file picker and Smart Setup flow. Selected file indexes are stored in the manifest and passed to aria2 with `--select-file`; unselected files are not downloaded. Mixed bundles can use visible folder routes to place separate titles or seasons into independent Plex destinations.
+The web app writes uploaded or URL-resolved torrent files to `BATCH_DIR/torrents/` or stores magnet links directly in `BATCH_DIR/manifest.json`. During inspection, magnet links use aria2's metadata-only mode to retrieve and cache the small torrent manifest under `BATCH_DIR/torrent-metadata/`; media payload bytes are not downloaded. The intake page reports elapsed metadata-discovery time because inactive magnets may take several minutes to fail. Uploaded files and resolved magnets share the same file picker and Smart Setup flow. Selected file indexes are stored in the manifest and passed to aria2 with `--select-file`; unselected files are not downloaded. Mixed bundles can use visible folder routes to place separate titles or seasons into independent Plex destinations.
 
 For pasted HTTP(S) URLs, Torplex fetches the URL server-side. A direct `.torrent` response is stored as a torrent file. An HTML page is scanned for the first magnet link and then for the first `.torrent` link. URL fetching rejects localhost, private network addresses, credentialed URLs, oversized torrent files, oversized HTML pages, and excessive redirects.
 

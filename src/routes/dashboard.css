@@ -408,28 +408,26 @@
       cursor: not-allowed;
       opacity: .45;
     }
-    .intake-dialog {
-      width: min(1120px, calc(100vw - 32px));
-      max-height: calc(100vh - 48px);
-      padding: 0;
-      border: 0;
-      color: inherit;
-      background: transparent;
+    .intake-page-shell {
+      width: min(1120px, 100%);
+      min-height: 100vh;
+      padding-top: 28px;
+      padding-bottom: 48px;
     }
-    .intake-dialog::backdrop {
-      background: rgba(2, 6, 12, .72);
-      backdrop-filter: blur(8px);
+    .intake-page { width: 100%; }
+    .intake-page-card {
+      min-height: calc(100vh - 76px);
+      padding: 4px 0 24px;
     }
-    .dialog-card {
-      margin: 0;
-      padding: 18px;
-      max-height: calc(100vh - 48px);
-      overflow: auto;
-      background:
-        linear-gradient(160deg, rgba(87, 224, 194, .08), transparent 42%),
-        var(--panel-strong);
+    .intake-page-card .dialog-head {
+      position: sticky;
+      top: 0;
+      z-index: 8;
+      margin: 0 0 18px;
+      padding: 12px 0 14px;
+      background: linear-gradient(to bottom, #0c1017 76%, rgba(12, 16, 23, 0));
     }
-    body.dialog-open { overflow: hidden; }
+    .intake-page-card .bulk-submit-actions { bottom: 0; }
     .primary-button {
       min-height: 38px;
       border: 1px solid rgba(87, 224, 194, .50);
@@ -752,7 +750,7 @@
     .post-download-options span { display: grid; gap: 2px; }
     .post-download-options strong { font-size: 12px; }
     .post-download-options small { color: var(--muted); font-size: 10px; line-height: 1.35; }
-    .bulk-intake-dialog { min-height: min(760px, calc(100vh - 48px)); }
+    .bulk-intake-workspace { min-height: min(760px, calc(100vh - 48px)); }
     .intake-tabs {
       display: inline-grid;
       grid-template-columns: repeat(2, minmax(150px, 1fr));
@@ -1619,4 +1617,31 @@
         font-size: 11px;
       }
       .drag-handle { width: 36px; }
+      .intake-page-shell {
+        padding-top: 0;
+        padding-bottom: 24px;
+      }
+      .intake-page-card {
+        min-height: 100vh;
+        padding-top: 0;
+      }
+      .intake-page-card .dialog-head {
+        margin: 0 0 12px;
+        padding: 14px 0 12px;
+      }
+      .intake-page-card .dialog-title { font-size: 22px; }
+      .intake-page-card .dialog-actions {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+      .intake-page-card .status-pill {
+        justify-content: flex-start;
+        min-width: 0;
+      }
+      .intake-page-card .bulk-submit-actions {
+        margin-right: -16px;
+        margin-bottom: -24px;
+        margin-left: -16px;
+        padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+      }
     }

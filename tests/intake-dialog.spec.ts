@@ -10,7 +10,26 @@ async function unlock(page: import("@playwright/test").Page) {
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Unlock" }).click();
   await page.getByRole("button", { name: "Add Torrent" }).click();
+  await expect(page).toHaveURL(/\/add$/);
 }
+
+test("torrent intake uses normal document scrolling on mobile", async ({ page }) => {
+  test.skip(!baseUrl || !password, "Torplex URL and password are required");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await unlock(page);
+  await expect(page.locator("dialog")).toHaveCount(0);
+  const metrics = await page.evaluate(() => ({
+    innerHeight,
+    scrollHeight: document.documentElement.scrollHeight,
+    bodyOverflow: getComputedStyle(document.body).overflowY,
+  }));
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.innerHeight);
+  expect(metrics.bodyOverflow).not.toBe("hidden");
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "Add 0 selected items" })).toBeVisible();
+});
 
 test("torrent intake supports reviewed file selection and Smart Setup", async ({ page }) => {
   test.skip(!baseUrl || !password || !torrentPath, "Torplex URL, password, and a torrent fixture are required");

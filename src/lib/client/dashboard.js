@@ -1374,23 +1374,16 @@ function renderTorrentFileTree(files, selectedFiles, filter = '') {
   container.append(renderNode(torrentTree(visibleFiles), 0));
 }
 
-function initDialogControls() {
-  const dialog = document.getElementById('intakeDialog');
+function initIntakeNavigation() {
   const open = document.getElementById('openIntake');
-  const close = document.getElementById('closeIntake');
   open?.addEventListener('click', () => {
     if (!sessionState.configured) return;
     if (!sessionState.authenticated) {
       window.location.href = sessionState.loginUrl || '/auth/login';
       return;
     }
-    if (typeof dialog?.showModal === 'function') {
-      dialog.showModal();
-      document.body.classList.add('dialog-open');
-    }
+    window.location.href = '/add';
   });
-  close?.addEventListener('click', () => dialog?.close());
-  dialog?.addEventListener('close', () => document.body.classList.remove('dialog-open'));
 }
 
 function initIntakeControls() {
@@ -1999,7 +1992,7 @@ if ('EventSource' in window) {
 }
 initWarp();
 initMapControls();
-initDialogControls();
+initIntakeNavigation();
 initQueueControls();
 refreshSession();
 window.addEventListener('torplex:refresh', () => refreshFallback().catch(() => {}));

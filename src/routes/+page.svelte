@@ -4,7 +4,6 @@
 
 <script>
   import { onMount } from 'svelte';
-  import IntakeDialog from '$lib/components/IntakeDialog.svelte';
   import { startDashboard } from '$lib/client/dashboard.js';
   import './dashboard.css';
 
@@ -57,8 +56,6 @@
       <div class="hero-bar"><div id="totalFill" class="hero-fill"></div></div>
     </div>
   </section>
-
-  <IntakeDialog />
 
   <section class="transfer-map world-panel">
     <div class="map-title">
