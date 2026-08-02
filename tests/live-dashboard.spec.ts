@@ -16,7 +16,7 @@ async function powerOn(page: import("@playwright/test").Page) {
 }
 
 test("authenticated dashboard renders live swarm telemetry", async ({ page }, testInfo) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   test.skip(!baseUrl || !password, "TORPLEX_E2E_URL and TORPLEX_E2E_PASSWORD are required");
   const audioPolicyWarnings: string[] = [];
   page.on('console', (message) => {
@@ -105,6 +105,20 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   await expect(page.locator('body')).toHaveClass(/crt-awaiting-power/);
   await powerOn(page);
+  const crtPicture = page.locator('#crtPicture');
+  const crtViewport = await crtPicture.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      position: getComputedStyle(element).position,
+      height: rect.height,
+      top: rect.top,
+      scrollHeight: element.scrollHeight,
+    };
+  });
+  expect(crtViewport.position).toBe('fixed');
+  expect(crtViewport.top).toBe(0);
+  expect(crtViewport.height).toBe(1000);
+  expect(crtViewport.scrollHeight).toBeGreaterThan(crtViewport.height);
   await page.locator('.crt-theme-dot[data-theme="green"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'green');
   const font = await page.evaluate(async () => {
@@ -155,6 +169,13 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   expect(status.swarm.activeCount + status.swarm.probingCount + status.swarm.inactiveCount).toBe(status.swarm.peers.length);
   const pendingCount = status.items.filter((item: { status?: string }) => item.status === "pending").length;
   const activeCount = status.items.filter((item: { status?: string }) => item.status === "active" || item.status === "organizing").length;
+  if (activeCount) {
+    await expect(page.locator('body')).toHaveAttribute('data-disk-activity', 'active');
+    expect(Number(await page.locator('body').getAttribute('data-disk-density'))).toBeGreaterThan(0);
+    const diskEvents = Number(await page.locator('body').getAttribute('data-disk-event-count')) || 0;
+    await expect.poll(async () => Number(await page.locator('body').getAttribute('data-disk-event-count')) || 0, { timeout: 8_000 })
+      .toBeGreaterThan(diskEvents);
+  }
   await expect(page.locator('.item.pending [data-role="drag-handle"]')).toHaveCount(pendingCount);
   const activeShapes = await page.locator('.item.active .torrent-marker, .item.organizing .torrent-marker').evaluateAll((markers) =>
     markers.map((marker) => (marker as HTMLElement).dataset.shape),

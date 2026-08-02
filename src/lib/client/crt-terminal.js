@@ -135,6 +135,7 @@ function installCrtPointerCompensation() {
   window.addEventListener('blur', clearHover);
   window.addEventListener('resize', onViewportMove, { passive: true });
   window.addEventListener('scroll', onViewportMove, { capture: true, passive: true });
+  picture.addEventListener('scroll', onViewportMove, { passive: true });
   document.body.dataset.warpInput = 'compensated';
   return () => {
     clearHover();
@@ -144,6 +145,7 @@ function installCrtPointerCompensation() {
     window.removeEventListener('blur', clearHover);
     window.removeEventListener('resize', onViewportMove);
     window.removeEventListener('scroll', onViewportMove, { capture: true });
+    picture.removeEventListener('scroll', onViewportMove);
   };
 }
 
@@ -222,12 +224,34 @@ function createTerminalMediaBank() {
       const frequency = 255 - progress * 120;
       return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** 1.15 * .2;
     }),
-    diskTick: createWavUrl(.065, (time, index, count) => {
+    diskTickLight: createWavUrl(.052, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
-      const envelope = (1 - Math.exp(-progress * 95)) * Math.exp(-progress * 12);
-      const mechanism = Math.sin(tau * (118 - progress * 42) * time);
-      return (mechanism * .68 + noise * .32) * envelope * .2;
+      const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
+      const mechanism = Math.sin(tau * (94 - progress * 46) * time);
+      return (mechanism * .82 + noise * .18) * envelope * .2;
+    }),
+    diskTickSeek: createWavUrl(.082, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 73.913 + 8.61) * 24634.6345) % 1) * 2 - 1;
+      const first = (1 - Math.exp(-progress * 130)) * Math.exp(-progress * 18);
+      const secondProgress = Math.max(0, progress - .42);
+      const second = secondProgress > 0
+        ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
+        : 0;
+      const mechanism = Math.sin(tau * (78 - progress * 34) * time);
+      return (mechanism * .84 + noise * .16) * (first + second) * .21;
+    }),
+    diskTickClack: createWavUrl(.11, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 61.317 + 2.03) * 31547.2371) % 1) * 2 - 1;
+      const impact = (1 - Math.exp(-progress * 150)) * Math.exp(-progress * 20);
+      const returnProgress = Math.max(0, progress - .3);
+      const returnImpact = returnProgress > 0
+        ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
+        : 0;
+      const lowMechanism = Math.sin(tau * 54 * time) + Math.sin(tau * 108 * time) * .18;
+      return (lowMechanism * .86 + noise * .14) * (impact + returnImpact) * .2;
     }),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
@@ -258,7 +282,10 @@ function createTerminalMediaBank() {
       Array.from({ length: 4 }, () => audio(urls[name], .5)),
     ])),
     ambient: ['ambientPing', 'ambientSweep', 'ambientBloop'].map((name) => audio(urls[name], .24)),
-    disk: Array.from({ length: 8 }, () => audio(urls.diskTick, .06)),
+    disk: Array.from({ length: 12 }, (_, index) => {
+      const timbres = [urls.diskTickLight, urls.diskTickSeek, urls.diskTickLight, urls.diskTickClack];
+      return audio(timbres[index % timbres.length], .05);
+    }),
   };
 }
 
@@ -281,7 +308,9 @@ export function startCrtTerminal() {
   let ambientTimer = 0;
   let ambientIndex = 0;
   let diskActivityTimer = 0;
-  let diskVoiceIndex = 0;
+  let diskBurstRemaining = 0;
+  let diskBurstSize = 0;
+  let diskEventCount = 0;
   let transferRateBytes = 0;
   let activeTransferCount = 0;
   let lastKeyClickAt = 0;
@@ -370,20 +399,75 @@ export function startCrtTerminal() {
     return Math.min(1, throughput * .82 + concurrency * .18);
   };
 
-  const scheduleDiskActivity = () => {
+  const randomGeometric = (probability, cap) => {
+    let count = 1;
+    while (count < cap && Math.random() > probability) count += 1;
+    return count;
+  };
+
+  const chooseDiskBurstSize = (density) => {
+    const isolatedChance = .72 - density * .48;
+    if (Math.random() < isolatedChance) return 1;
+    const cap = Math.round(4 + density * 46);
+    let count = randomGeometric(.7 - density * .48, cap);
+    if (density > .45 && Math.random() < density * .13) {
+      count += 8 + Math.floor(Math.pow(Math.random(), .72) * density * 48);
+    }
+    return Math.min(cap, count);
+  };
+
+  const diskBurstDelay = (density) => {
+    if (Math.random() < .78) {
+      return Math.max(15, (18 + Math.pow(Math.random(), 1.7) * (100 - density * 35)) * (1 - density * .12));
+    }
+    return Math.max(55, (75 + Math.random() * 80) * (1 - density * .16));
+  };
+
+  const diskRestDelay = (density) => {
+    const scale = 175 + (1 - density) ** 2 * 1200;
+    let delay = 140 + -Math.log(Math.max(.015, Math.random())) * scale;
+    if (Math.random() < .1) delay *= 1.8 + Math.random() * 1.8;
+    return Math.min(4200, delay);
+  };
+
+  const resetDiskBurst = () => {
+    diskBurstRemaining = 0;
+    diskBurstSize = 0;
+    body.dataset.diskPattern = 'rest';
+    body.dataset.diskBurstRemaining = '0';
+  };
+
+  const scheduleDiskActivity = (delayOverride) => {
     if (diskActivityTimer || destroyed || muted || !mediaUnlocked || document.hidden) return;
     const density = diskDensity();
     if (density <= 0) return;
-    const delay = 70 + 2850 * (1 - density) ** 2 + Math.random() * (240 - density * 180);
+    if (diskBurstRemaining <= 0) {
+      diskBurstSize = chooseDiskBurstSize(density);
+      diskBurstRemaining = diskBurstSize;
+      body.dataset.diskPattern = 'rest';
+    }
+    const delay = Number.isFinite(delayOverride) ? delayOverride : diskRestDelay(density);
     diskActivityTimer = window.setTimeout(() => {
       diskActivityTimer = 0;
       const currentDensity = diskDensity();
       if (destroyed || muted || !mediaUnlocked || document.hidden || currentDensity <= 0) return;
-      const voice = media.disk[diskVoiceIndex % media.disk.length];
-      diskVoiceIndex += 1;
-      voice.volume = .025 + currentDensity * .085;
+      const availableVoices = media.disk.filter((candidate) => candidate.paused || candidate.ended);
+      const voicePool = availableVoices.length ? availableVoices : media.disk;
+      const voice = voicePool[Math.floor(Math.random() * voicePool.length)];
+      const burstProgress = diskBurstSize > 1
+        ? 1 - diskBurstRemaining / diskBurstSize
+        : 0;
+      const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
+      voice.volume = Math.min(.13, (.028 + currentDensity * .078) * accent);
+      voice.playbackRate = .78 + Math.random() * .22 + Math.sin(burstProgress * Math.PI) * .025;
       void playElement(voice);
-      scheduleDiskActivity();
+      diskEventCount += 1;
+      body.dataset.diskEventCount = String(diskEventCount);
+      diskBurstRemaining -= 1;
+      body.dataset.diskPattern = diskBurstRemaining > 0 ? 'seek' : 'rest';
+      body.dataset.diskBurstRemaining = String(Math.max(0, diskBurstRemaining));
+      if (diskBurstRemaining > 0) scheduleDiskActivity(diskBurstDelay(currentDensity));
+      else scheduleDiskActivity();
     }, delay);
   };
 
@@ -397,6 +481,9 @@ export function startCrtTerminal() {
     else if (diskActivityTimer) {
       clearTimeout(diskActivityTimer);
       diskActivityTimer = 0;
+      resetDiskBurst();
+    } else {
+      resetDiskBurst();
     }
   };
   window.addEventListener('torplex:transfer-activity', onTransferActivity);
@@ -621,6 +708,7 @@ export function startCrtTerminal() {
     ambientTimer = 0;
     if (diskActivityTimer) clearTimeout(diskActivityTimer);
     diskActivityTimer = 0;
+    resetDiskBurst();
     stopHum();
     setAudioUi();
   };
@@ -634,6 +722,7 @@ export function startCrtTerminal() {
       ambientTimer = 0;
       if (diskActivityTimer) clearTimeout(diskActivityTimer);
       diskActivityTimer = 0;
+      resetDiskBurst();
     } else {
       startHum();
       scheduleAmbient(2500 + Math.random() * 2500);

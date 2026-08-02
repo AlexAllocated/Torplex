@@ -1612,7 +1612,8 @@ function drawWarpFrame(now) {
   warp.raf = requestAnimationFrame(drawWarpFrame);
   const canvas = document.getElementById('warpCanvas');
   if (!canvas || document.hidden || now < warp.scrollingUntil) return;
-  const frameInterval = window.scrollY > warp.height * .65 ? 1000 / 12 : 1000 / 20;
+  const pageScrollTop = document.getElementById('crtPicture')?.scrollTop || window.scrollY;
+  const frameInterval = pageScrollTop > warp.height * .65 ? 1000 / 12 : 1000 / 20;
   if (warp.lastFrame && now - warp.lastFrame < frameInterval) return;
   const ctx = canvas.getContext('2d');
   const dt = warp.lastFrame ? Math.min(80, now - warp.lastFrame) : 16;

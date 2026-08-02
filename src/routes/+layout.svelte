@@ -1,10 +1,12 @@
 <script>
   import { onMount } from 'svelte';
+  import { afterNavigate } from '$app/navigation';
   import { startCrtTerminal } from '$lib/client/crt-terminal.js';
 
   let { children } = $props();
 
   onMount(() => startCrtTerminal());
+  afterNavigate(() => document.getElementById('crtPicture')?.scrollTo({ top: 0, left: 0 }));
 </script>
 
 <svelte:head>
