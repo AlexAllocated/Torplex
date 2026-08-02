@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
-import { basename, dirname, extname, join } from "path";
+import { basename, dirname, extname, join, relative } from "path";
 
 const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const plexUrl = (process.env.PLEX_URL ?? "http://127.0.0.1:32400").replace(/\/$/, "");
@@ -33,6 +33,7 @@ const adaptiveCooldownMs = Math.max(10, Number.parseInt(process.env.ADAPTIVE_COO
 const checkIntegrity = /^(1|true|yes)$/i.test(process.env.ARIA2_CHECK_INTEGRITY ?? "");
 const videoExtensions = new Set([".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm"]);
 const subtitleExtensions = new Set([".srt", ".ass", ".ssa", ".vtt", ".sub"]);
+const ancillaryVideoPattern = /(?:^|[. _-])(?:sample|trailer|proof)(?:[. _-]|$)/i;
 const riskyAttachmentPattern = /\.(?:exe|dll|com|scr|bat|cmd|ps1|vbs|js|wsf|hta|msi|reg|lnk|desktop|appimage|apk|jar|dmg|pkg|deb|rpm|sh|py|pl|rb)$/i;
 const openSubtitlesApiKey = (process.env.OPENSUBTITLES_API_KEY ?? "").trim();
 const openSubtitlesUserAgent = (process.env.OPENSUBTITLES_USER_AGENT ?? "Torplex v1").trim() || "Torplex v1";
@@ -285,7 +286,39 @@ async function selectedVideoFiles(item: ManifestItem, staging: string) {
     ));
     return [...new Set(routed.flat())];
   }
-  return await collectFiles(staging, isVideo);
+  const videos = await collectFiles(staging, isVideo);
+  if (item.selectFiles?.length && !item.selectedPaths?.length) {
+    const primaryVideos = videos.filter((file) => !ancillaryVideoPattern.test(basename(file)));
+    if (primaryVideos.length) return primaryVideos;
+  }
+  return videos;
+}
+
+async function pruneUnselectedDownloadArtifacts(item: ManifestItem, logPath: string) {
+  if (!item.selectFiles?.length || !item.selectedPaths?.length) return;
+  const rootSource = await resolveSourceRoot(item);
+  const rootDetails = await stat(rootSource);
+  if (!rootDetails.isDirectory()) return;
+
+  const selected = new Set(item.selectedPaths.map((path) => safeRelativePath(path)));
+  const downloaded = await collectFiles(rootSource, () => true);
+  let removedFiles = 0;
+  let removedBytes = 0;
+  for (const file of downloaded) {
+    const relativePath = relative(rootSource, file).replaceAll("\\", "/");
+    if (selected.has(relativePath)) continue;
+    const details = await stat(file);
+    await rm(file, { force: true });
+    removedFiles += 1;
+    removedBytes += details.size;
+  }
+
+  const summary = removedFiles
+    ? `Removed ${removedFiles} unselected download artifact(s) (${formatBytes(removedBytes)}).`
+    : "No unselected download artifacts were present.";
+  await appendFile(logPath, `\n--- Selection cleanup ---\n${summary}\n`);
+  await setItemState(item.id, { selectionCleanup: "passed", selectionCleanupSummary: summary });
+  await appendBatch(`Selection cleanup for ${item.title}: ${summary}`);
 }
 
 async function verifyMediaStreams(item: ManifestItem, path: string, logPath: string) {
@@ -539,6 +572,13 @@ function formatRate(bytesPerSecond: number) {
   if (bytesPerSecond >= 1024 ** 2) return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
   if (bytesPerSecond >= 1024) return `${(bytesPerSecond / 1024).toFixed(0)} KiB/s`;
   return `${Math.round(bytesPerSecond)} B/s`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
 }
 
 async function runCommand(args: string[], logPath: string) {
@@ -901,6 +941,8 @@ async function processItem(item: ManifestItem) {
     await appendBatch(`FAILED ${item.title}: aria2c exited ${exitCode}`);
     throw new Error(`${item.title}: aria2c exited ${exitCode}`);
   }
+
+  await pruneUnselectedDownloadArtifacts(item, logPath);
 
   const downloadedStats = await collectFileStats(staging);
   if (downloadedStats.totalBytes > 0 && !item.selectFiles?.length) {
