@@ -1,4 +1,4 @@
-import { redirect } from "@sveltejs/kit";
+import { json, redirect } from "@sveltejs/kit";
 import { appOrigin, authConfig, setSession, verifyPassword } from "$lib/server/auth";
 
 function loginPage(message = "") {
@@ -22,14 +22,46 @@ function loginPage(message = "") {
     </style>
   </head>
   <body>
-    <form method="post" action="/auth/login">
+    <form id="login-form" method="post" action="/auth/login">
       <h1>Torplex</h1>
       <p>Enter the server password to continue.</p>
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
       <button type="submit">Unlock</button>
-      <div class="error">${message}</div>
+      <div id="login-error" class="error">${message}</div>
     </form>
+    <script>
+      const form = document.getElementById("login-form");
+      const error = document.getElementById("login-error");
+      const button = form.querySelector("button");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        error.textContent = "";
+
+        try {
+          const response = await fetch("/auth/login", {
+            method: "POST",
+            headers: {
+              "accept": "application/json",
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({ password: form.elements.password.value })
+          });
+          const result = await response.json();
+          if (!response.ok) {
+            error.textContent = result.error || "Unable to sign in";
+            return;
+          }
+          window.location.assign("/");
+        } catch {
+          error.textContent = "Unable to reach Torplex";
+        } finally {
+          button.disabled = false;
+        }
+      });
+    </script>
   </body>
 </html>`;
 }
@@ -46,9 +78,14 @@ export async function POST({ cookies, request, url }) {
   if (!authConfig().configured) {
     throw redirect(303, "/?auth=missing_config");
   }
-  const form = await request.formData();
-  const password = String(form.get("password") || "");
+  const isJson = request.headers.get("content-type")?.includes("application/json");
+  const password = isJson
+    ? String(((await request.json()) as { password?: unknown }).password || "")
+    : String((await request.formData()).get("password") || "");
   if (!verifyPassword(password)) {
+    if (isJson) {
+      return json({ error: "Incorrect password" }, { status: 401 });
+    }
     return new Response(loginPage("Incorrect password"), {
       status: 401,
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -56,5 +93,8 @@ export async function POST({ cookies, request, url }) {
   }
 
   setSession(cookies, origin);
+  if (isJson) {
+    return json({ ok: true });
+  }
   throw redirect(303, "/");
 }
