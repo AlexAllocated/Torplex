@@ -255,7 +255,7 @@ function createTerminalMediaBank() {
       const progress = index / count;
       const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
       const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
-      const frequency = 68 - progress * 20;
+      const frequency = 34 - progress * 10;
       const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .2;
       return (mechanism * .88 + noise * .12) * envelope * .22;
     }, { bitcrush: false }),
@@ -267,7 +267,7 @@ function createTerminalMediaBank() {
       const second = secondProgress > 0
         ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
         : 0;
-      const frequency = 62 - progress * 18;
+      const frequency = 31 - progress * 9;
       const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .18;
       return (mechanism * .9 + noise * .1) * (first + second) * .23;
     }, { bitcrush: false }),
@@ -279,7 +279,7 @@ function createTerminalMediaBank() {
       const returnImpact = returnProgress > 0
         ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
         : 0;
-      const lowMechanism = Math.sin(tau * 48 * time) + Math.sin(tau * 96 * time) * .22;
+      const lowMechanism = Math.sin(tau * 24 * time) + Math.sin(tau * 48 * time) * .22;
       return (lowMechanism * .92 + noise * .08) * (impact + returnImpact) * .22;
     }, { bitcrush: false }),
     power: createWavUrl(.72, (time, index, count) => {
@@ -319,7 +319,7 @@ function createTerminalMediaBank() {
       Array.from({ length: 4 }, () => audio(urls[name], .5)),
     ])),
     ambient: ['ambientPing', 'ambientSweep', 'ambientBloop'].map((name) => audio(urls[name], .24)),
-    transitionStatic: Array.from({ length: 4 }, () => audio(urls.transitionStatic, .028)),
+    transitionStatic: Array.from({ length: 4 }, () => audio(urls.transitionStatic, .014)),
     disk: Array.from({ length: 12 }, (_, index) => {
       const timbres = [urls.diskTickLight, urls.diskTickSeek, urls.diskTickLight, urls.diskTickClack];
       return audio(timbres[index % timbres.length], .05);
@@ -565,8 +565,8 @@ export function startCrtTerminal() {
     lastTransitionStaticAt = now;
     const voice = media.transitionStatic[transitionStaticVoice % media.transitionStatic.length];
     transitionStaticVoice += 1;
-    voice.volume = .028;
-    voice.playbackRate = 1.5;
+    voice.volume = .014;
+    voice.playbackRate = .85;
     void playElement(voice);
   };
 
