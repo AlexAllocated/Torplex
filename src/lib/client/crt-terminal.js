@@ -149,6 +149,79 @@ function installCrtPointerCompensation() {
   };
 }
 
+export function bitcrushTerminalSamples(samples, sourceSampleRate, bitDepth = 8, targetSampleRate = 16000) {
+  const levels = 2 ** (Math.max(4, Math.min(16, Math.round(bitDepth))) - 1);
+  const phaseStep = Math.min(1, Math.max(4000, Math.min(sourceSampleRate, targetSampleRate)) / sourceSampleRate);
+  const processed = new Float32Array(samples.length);
+  let phase = 1;
+  let held = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    phase += phaseStep;
+    if (phase >= 1) {
+      phase -= 1;
+      held = Math.round((samples[index] || 0) * levels) / levels;
+    }
+    processed[index] = held;
+  }
+  return processed;
+}
+
+export function createTerminalDriveSamples(sampleRate, durationSeconds, seed = 1, intensity = .5) {
+  const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
+  const samples = new Float32Array(sampleCount);
+  let randomState = (Math.abs(Math.trunc(seed)) || 1) >>> 0;
+  const random = () => {
+    randomState += 0x6d2b79f5;
+    let value = randomState;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+  const seekCount = 2 + Math.floor(random() * (3 + intensity * 5));
+  const seeks = Array.from({ length: seekCount }, () => ({
+    time: .025 + random() * Math.max(.01, durationSeconds - .09),
+    frequency: 135 + random() * 200,
+    decay: 22 + random() * 30,
+    strength: .35 + random() * .5,
+  })).sort((left, right) => left.time - right.time);
+  let lowNoise = 0;
+  let midNoise = 0;
+  let dc = 0;
+  const motorFrequency = 68 + random() * 17;
+  const motorPhase = random() * Math.PI * 2;
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const time = index / sampleRate;
+    const progress = index / sampleCount;
+    const white = random() * 2 - 1;
+    lowNoise += (white - lowNoise) * .018;
+    midNoise += (white - midNoise) * .055;
+    const texture = lowNoise * .69 + midNoise * .3 + white * .006;
+    const motor = Math.sin(Math.PI * 2 * motorFrequency * time + motorPhase) * .055
+      + Math.sin(Math.PI * 2 * motorFrequency * 2.03 * time + motorPhase * .7) * .018;
+    let seek = 0;
+    for (const event of seeks) {
+      const age = time - event.time;
+      if (age < 0 || age > .15) continue;
+      const sweep = event.frequency * (1 - Math.min(.34, age * 2.1));
+      const body = Math.sin(Math.PI * 2 * sweep * age) * Math.exp(-age * event.decay);
+      const returnStroke = age > .038
+        ? Math.sin(Math.PI * 2 * sweep * .72 * (age - .038)) * Math.exp(-(age - .038) * (event.decay + 7)) * .42
+        : 0;
+      seek += (body + returnStroke) * event.strength;
+    }
+    const attack = Math.min(1, time / .018);
+    const release = Math.min(1, (durationSeconds - time) / .065);
+    const envelope = Math.sin(Math.PI * .5 * Math.max(0, Math.min(1, attack)))
+      * Math.sin(Math.PI * .5 * Math.max(0, Math.min(1, release)));
+    const activityWave = .78 + Math.sin(progress * Math.PI * (2.2 + intensity) + motorPhase) * .12;
+    const mixed = (texture * (.23 + intensity * .08) + motor + seek * .13) * envelope * activityWave;
+    dc += (mixed - dc) * .003;
+    samples[index] = Math.max(-1, Math.min(1, mixed - dc));
+  }
+  return samples;
+}
+
 function createWavUrl(durationSeconds, sampleAt) {
   const sampleRate = 22050;
   const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
@@ -170,11 +243,21 @@ function createWavUrl(durationSeconds, sampleAt) {
   view.setUint16(34, 16, true);
   writeText(36, 'data');
   view.setUint32(40, sampleCount * 2, true);
+  const rawSamples = new Float32Array(sampleCount);
   for (let index = 0; index < sampleCount; index += 1) {
-    const sample = Math.max(-1, Math.min(1, Number(sampleAt(index / sampleRate, index, sampleCount)) || 0));
-    view.setInt16(44 + index * 2, Math.round(sample * 32767), true);
+    rawSamples[index] = Math.max(-1, Math.min(1, Number(sampleAt(index / sampleRate, index, sampleCount)) || 0));
+  }
+  const samples = bitcrushTerminalSamples(rawSamples, sampleRate);
+  for (let index = 0; index < sampleCount; index += 1) {
+    view.setInt16(44 + index * 2, Math.round((samples[index] || 0) * 32767), true);
   }
   return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
+
+function createDriveWavUrl(durationSeconds, seed, intensity) {
+  const sampleRate = 22050;
+  const samples = createTerminalDriveSamples(sampleRate, durationSeconds, seed, intensity);
+  return createWavUrl(durationSeconds, (_time, index) => (samples[index] || 0) * 3.2);
 }
 
 function createTerminalMediaBank() {
@@ -224,35 +307,9 @@ function createTerminalMediaBank() {
       const frequency = 255 - progress * 120;
       return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** 1.15 * .2;
     }),
-    diskTickLight: createWavUrl(.052, (time, index, count) => {
-      const progress = index / count;
-      const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
-      const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
-      const mechanism = Math.sin(tau * (94 - progress * 46) * time);
-      return (mechanism * .82 + noise * .18) * envelope * .2;
-    }),
-    diskTickSeek: createWavUrl(.082, (time, index, count) => {
-      const progress = index / count;
-      const noise = ((Math.sin(index * 73.913 + 8.61) * 24634.6345) % 1) * 2 - 1;
-      const first = (1 - Math.exp(-progress * 130)) * Math.exp(-progress * 18);
-      const secondProgress = Math.max(0, progress - .42);
-      const second = secondProgress > 0
-        ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
-        : 0;
-      const mechanism = Math.sin(tau * (78 - progress * 34) * time);
-      return (mechanism * .84 + noise * .16) * (first + second) * .21;
-    }),
-    diskTickClack: createWavUrl(.11, (time, index, count) => {
-      const progress = index / count;
-      const noise = ((Math.sin(index * 61.317 + 2.03) * 31547.2371) % 1) * 2 - 1;
-      const impact = (1 - Math.exp(-progress * 150)) * Math.exp(-progress * 20);
-      const returnProgress = Math.max(0, progress - .3);
-      const returnImpact = returnProgress > 0
-        ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
-        : 0;
-      const lowMechanism = Math.sin(tau * 54 * time) + Math.sin(tau * 108 * time) * .18;
-      return (lowMechanism * .86 + noise * .14) * (impact + returnImpact) * .2;
-    }),
+    diskTickLight: createDriveWavUrl(.24, 0x51a7, .34),
+    diskTickSeek: createDriveWavUrl(.34, 0xa11c, .65),
+    diskTickClack: createDriveWavUrl(.46, 0xc1a6, .92),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 78.233) * 43758.5453) % 1) * 2 - 1;
@@ -313,6 +370,7 @@ export function startCrtTerminal() {
   let diskEventCount = 0;
   let transferRateBytes = 0;
   let activeTransferCount = 0;
+  let activeAiCount = 0;
   let lastKeyClickAt = 0;
   let activated = false;
   let destroyed = false;
@@ -392,11 +450,17 @@ export function startCrtTerminal() {
   };
 
   const diskDensity = () => {
-    if (transferRateBytes <= 0 || activeTransferCount <= 0) return 0;
-    const maxRate = 100 * 1024 * 1024;
-    const throughput = Math.min(1, Math.log1p(transferRateBytes / 128) / Math.log1p(maxRate / 128));
-    const concurrency = Math.min(1, activeTransferCount / 8);
-    return Math.min(1, throughput * .82 + concurrency * .18);
+    let transferDensity = 0;
+    if (transferRateBytes > 0 && activeTransferCount > 0) {
+      const maxRate = 100 * 1024 * 1024;
+      const throughput = Math.min(1, Math.log1p(transferRateBytes / 128) / Math.log1p(maxRate / 128));
+      const concurrency = Math.min(1, activeTransferCount / 8);
+      transferDensity = Math.min(1, throughput * .82 + concurrency * .18);
+    }
+    const aiDensity = activeAiCount > 0
+      ? Math.min(1, .78 + Math.log2(activeAiCount + 1) * .09)
+      : 0;
+    return 1 - (1 - transferDensity) * (1 - aiDensity);
   };
 
   const randomGeometric = (probability, cap) => {
@@ -418,9 +482,9 @@ export function startCrtTerminal() {
 
   const diskBurstDelay = (density) => {
     if (Math.random() < .78) {
-      return Math.max(15, (18 + Math.pow(Math.random(), 1.7) * (100 - density * 35)) * (1 - density * .12));
+      return Math.max(48, (82 + Math.pow(Math.random(), 1.55) * (145 - density * 45)) * (1 - density * .32));
     }
-    return Math.max(55, (75 + Math.random() * 80) * (1 - density * .16));
+    return Math.max(105, (150 + Math.random() * 170) * (1 - density * .28));
   };
 
   const diskRestDelay = (density) => {
@@ -458,8 +522,8 @@ export function startCrtTerminal() {
         ? 1 - diskBurstRemaining / diskBurstSize
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
-      voice.volume = Math.min(.13, (.028 + currentDensity * .078) * accent);
-      voice.playbackRate = .78 + Math.random() * .22 + Math.sin(burstProgress * Math.PI) * .025;
+      voice.volume = Math.min(.05, (.01 + currentDensity * .028) * accent);
+      voice.playbackRate = .82 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
       void playElement(voice);
       diskEventCount += 1;
       body.dataset.diskEventCount = String(diskEventCount);
@@ -471,13 +535,19 @@ export function startCrtTerminal() {
     }, delay);
   };
 
-  const onTransferActivity = (event) => {
-    transferRateBytes = Math.max(0, Number(event.detail?.bytesPerSecond) || 0);
-    activeTransferCount = Math.max(0, Number(event.detail?.activeCount) || 0);
+  const syncDiskActivity = (immediate = false) => {
     const density = diskDensity();
     body.dataset.diskActivity = density > 0 ? 'active' : 'idle';
     body.dataset.diskDensity = density.toFixed(3);
-    if (density > 0) scheduleDiskActivity();
+    body.dataset.aiActivity = String(activeAiCount);
+    if (density > 0) {
+      if (immediate && diskActivityTimer) {
+        clearTimeout(diskActivityTimer);
+        diskActivityTimer = 0;
+        resetDiskBurst();
+      }
+      scheduleDiskActivity(immediate ? 25 + Math.random() * 45 : undefined);
+    }
     else if (diskActivityTimer) {
       clearTimeout(diskActivityTimer);
       diskActivityTimer = 0;
@@ -486,7 +556,18 @@ export function startCrtTerminal() {
       resetDiskBurst();
     }
   };
+  const onTransferActivity = (event) => {
+    transferRateBytes = Math.max(0, Number(event.detail?.bytesPerSecond) || 0);
+    activeTransferCount = Math.max(0, Number(event.detail?.activeCount) || 0);
+    syncDiskActivity();
+  };
+  const onCrtActivity = (event) => {
+    const previousAiCount = activeAiCount;
+    activeAiCount = Math.max(0, Number(event.detail?.counts?.ai) || 0);
+    syncDiskActivity(activeAiCount > previousAiCount);
+  };
   window.addEventListener('torplex:transfer-activity', onTransferActivity);
+  window.addEventListener('torplex:crt-activity', onCrtActivity);
 
   const playPowerOn = () => {
     if (!mediaUnlocked) return;
@@ -746,6 +827,7 @@ export function startCrtTerminal() {
     document.removeEventListener('animationend', onAnimationEnd);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('torplex:transfer-activity', onTransferActivity);
+    window.removeEventListener('torplex:crt-activity', onCrtActivity);
     if (themeTimer) clearTimeout(themeTimer);
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
     if (ambientTimer) clearTimeout(ambientTimer);

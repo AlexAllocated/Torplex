@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { beginCrtActivity } from '$lib/client/crt-activity.js';
   import { withSmartSetupSlot } from '$lib/client/smart-setup-queue.js';
 
   export let clientId;
@@ -39,6 +40,7 @@
     verifyStreams: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, validateMetadataWithAi: true, refreshPlex: true,
   };
   let routes = [];
+  const activeActivityStops = new Set();
 
   $: visibleFiles = (inspection?.files || []).filter((entry) => !filter || entry.path.toLowerCase().includes(filter.toLowerCase()));
   $: selectedBytes = (inspection?.files || []).filter((entry) => selectedFiles.includes(entry.index)).reduce((sum, entry) => sum + entry.length, 0);
@@ -211,37 +213,44 @@
       const result = await withSmartSetupSlot(async () => {
         if (nonce !== operation) return null;
         status = 'Smart Setup slot acquired';
-        const data = new FormData();
-        if (sourceUrl.trim()) data.set('sourceUrl', sourceUrl.trim());
-        else if (torrentFile) data.set('torrent', torrentFile);
-        data.set('additionalInstructions', additionalInstructions.trim());
-        const response = await fetch('/api/torrent/plan', { method: 'POST', body: data });
-        if (!response.ok) {
-          const payload = await responsePayload(response);
-          throw new Error(payload.error || 'Smart Setup could not start');
-        }
-        if (!response.body) throw new Error('Smart Setup could not start');
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let payload = null;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const event = JSON.parse(line);
-            if (event.type === 'progress') {
-              progress = [...progress, event.message];
-              status = event.message;
-            } else if (event.type === 'result') payload = event;
-            else if (event.type === 'error') throw new Error(event.error || 'Smart Setup failed');
+        const stopActivity = beginCrtActivity('ai');
+        activeActivityStops.add(stopActivity);
+        try {
+          const data = new FormData();
+          if (sourceUrl.trim()) data.set('sourceUrl', sourceUrl.trim());
+          else if (torrentFile) data.set('torrent', torrentFile);
+          data.set('additionalInstructions', additionalInstructions.trim());
+          const response = await fetch('/api/torrent/plan', { method: 'POST', body: data });
+          if (!response.ok) {
+            const payload = await responsePayload(response);
+            throw new Error(payload.error || 'Smart Setup could not start');
           }
+          if (!response.body) throw new Error('Smart Setup could not start');
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let payload = null;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const event = JSON.parse(line);
+              if (event.type === 'progress') {
+                progress = [...progress, event.message];
+                status = event.message;
+              } else if (event.type === 'result') payload = event;
+              else if (event.type === 'error') throw new Error(event.error || 'Smart Setup failed');
+            }
+          }
+          return payload;
+        } finally {
+          activeActivityStops.delete(stopActivity);
+          stopActivity();
         }
-        return payload;
       });
       if (nonce !== operation) return;
       if (!result?.plan) throw new Error('Smart Setup ended without a plan');
@@ -303,6 +312,8 @@
     clearTimeout(timer);
     clearInterval(elapsedTimer);
     operation += 1;
+    activeActivityStops.forEach((stopActivity) => stopActivity());
+    activeActivityStops.clear();
   });
 </script>
 

@@ -1,5 +1,7 @@
 <script>
   import { goto } from '$app/navigation';
+  import { onDestroy } from 'svelte';
+  import { beginCrtActivity } from '$lib/client/crt-activity.js';
   import IntakeItem from './IntakeItem.svelte';
 
   let items = [];
@@ -19,6 +21,7 @@
   let dialogStatus = 'Ready';
   let dialogMode = 'idle';
   let queueError = '';
+  let stopSearchActivity = null;
 
   $: readyItems = items.map((item) => snapshots.get(item.clientId)).filter((item) => item?.ready);
   $: unresolvedItems = items.length - readyItems.length;
@@ -121,6 +124,8 @@
     const searchId = `search-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
     searchController = controller;
     activeSearchId = searchId;
+    const stopActivity = beginCrtActivity('ai');
+    stopSearchActivity = stopActivity;
     try {
       const response = await fetch('/api/torrent/search', {
         method: 'POST',
@@ -146,6 +151,8 @@
         dialogMode = 'error';
       }
     } finally {
+      stopActivity();
+      if (stopSearchActivity === stopActivity) stopSearchActivity = null;
       if (searchController === controller) {
         searchController = null;
         activeSearchId = '';
@@ -244,6 +251,13 @@
       queueRunning = false;
     }
   }
+
+  onDestroy(() => {
+    searchController?.abort();
+    searchController = null;
+    stopSearchActivity?.();
+    stopSearchActivity = null;
+  });
 
   addItem();
 </script>
