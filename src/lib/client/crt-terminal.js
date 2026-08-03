@@ -255,7 +255,7 @@ function createTerminalMediaBank() {
       const progress = index / count;
       const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
       const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
-      const frequency = 34 - progress * 10;
+      const frequency = 17 - progress * 5;
       const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .2;
       return (mechanism * .88 + noise * .12) * envelope * .22;
     }, { bitcrush: false }),
@@ -267,7 +267,7 @@ function createTerminalMediaBank() {
       const second = secondProgress > 0
         ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
         : 0;
-      const frequency = 31 - progress * 9;
+      const frequency = 15.5 - progress * 4.5;
       const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .18;
       return (mechanism * .9 + noise * .1) * (first + second) * .23;
     }, { bitcrush: false }),
@@ -279,7 +279,7 @@ function createTerminalMediaBank() {
       const returnImpact = returnProgress > 0
         ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
         : 0;
-      const lowMechanism = Math.sin(tau * 24 * time) + Math.sin(tau * 48 * time) * .22;
+      const lowMechanism = Math.sin(tau * 12 * time) + Math.sin(tau * 24 * time) * .22;
       return (lowMechanism * .92 + noise * .08) * (impact + returnImpact) * .22;
     }, { bitcrush: false }),
     power: createWavUrl(.72, (time, index, count) => {
@@ -465,16 +465,16 @@ export function startCrtTerminal() {
 
   const diskBurstDelay = (density) => {
     if (Math.random() < .78) {
-      return Math.max(48, (82 + Math.pow(Math.random(), 1.55) * (145 - density * 45)) * (1 - density * .32));
+      return Math.max(58, (98 + Math.pow(Math.random(), 1.55) * (174 - density * 54)) * (1 - density * .32));
     }
-    return Math.max(105, (150 + Math.random() * 170) * (1 - density * .28));
+    return Math.max(126, (180 + Math.random() * 204) * (1 - density * .28));
   };
 
   const diskRestDelay = (density) => {
-    const scale = 175 + (1 - density) ** 2 * 1200;
-    let delay = 140 + -Math.log(Math.max(.015, Math.random())) * scale;
+    const scale = 210 + (1 - density) ** 2 * 1440;
+    let delay = 168 + -Math.log(Math.max(.015, Math.random())) * scale;
     if (Math.random() < .1) delay *= 1.8 + Math.random() * 1.8;
-    return Math.min(4200, delay);
+    return Math.min(5040, delay);
   };
 
   const resetDiskBurst = () => {
