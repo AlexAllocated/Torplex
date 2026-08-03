@@ -177,47 +177,38 @@ export function createTerminalDriveSamples(sampleRate, durationSeconds, seed = 1
     value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
     return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
-  const seekCount = 2 + Math.floor(random() * (3 + intensity * 5));
+  const seekCount = 2 + Math.floor(random() * (2 + intensity * 5));
   const seeks = Array.from({ length: seekCount }, () => ({
-    time: .025 + random() * Math.max(.01, durationSeconds - .09),
-    frequency: 135 + random() * 200,
-    decay: 22 + random() * 30,
-    strength: .35 + random() * .5,
+    time: .018 + random() * Math.max(.01, durationSeconds - .072),
+    frequency: 92 + random() * 118,
+    decay: 42 + random() * 30,
+    strength: .68 + random() * .32,
+    returnDelay: .016 + random() * .018,
+    phase: random() * Math.PI * 2,
   })).sort((left, right) => left.time - right.time);
-  let lowNoise = 0;
-  let midNoise = 0;
-  let dc = 0;
-  const motorFrequency = 68 + random() * 17;
-  const motorPhase = random() * Math.PI * 2;
 
   for (let index = 0; index < sampleCount; index += 1) {
     const time = index / sampleRate;
-    const progress = index / sampleCount;
-    const white = random() * 2 - 1;
-    lowNoise += (white - lowNoise) * .018;
-    midNoise += (white - midNoise) * .055;
-    const texture = lowNoise * .69 + midNoise * .3 + white * .006;
-    const motor = Math.sin(Math.PI * 2 * motorFrequency * time + motorPhase) * .055
-      + Math.sin(Math.PI * 2 * motorFrequency * 2.03 * time + motorPhase * .7) * .018;
     let seek = 0;
     for (const event of seeks) {
       const age = time - event.time;
-      if (age < 0 || age > .15) continue;
-      const sweep = event.frequency * (1 - Math.min(.34, age * 2.1));
-      const body = Math.sin(Math.PI * 2 * sweep * age) * Math.exp(-age * event.decay);
-      const returnStroke = age > .038
-        ? Math.sin(Math.PI * 2 * sweep * .72 * (age - .038)) * Math.exp(-(age - .038) * (event.decay + 7)) * .42
+      if (age < 0 || age > .082) continue;
+      const sweep = event.frequency * (1 - Math.min(.22, age * 2.7));
+      const contact = (
+        Math.sin(Math.PI * 2 * sweep * 2.15 * age + event.phase) * .52
+        + Math.sin(Math.PI * 2 * sweep * 1.38 * age + event.phase * .63) * .28
+      ) * Math.exp(-age * 128);
+      const body = Math.sin(Math.PI * 2 * sweep * age + event.phase * .2) * Math.exp(-age * event.decay) * .72;
+      const returnAge = age - event.returnDelay;
+      const returnStroke = returnAge > 0
+        ? (
+          Math.sin(Math.PI * 2 * sweep * 1.62 * returnAge + event.phase * .35) * .36
+          + Math.sin(Math.PI * 2 * sweep * .74 * returnAge) * .22
+        ) * Math.exp(-returnAge * (event.decay + 34))
         : 0;
-      seek += (body + returnStroke) * event.strength;
+      seek += (contact + body + returnStroke) * event.strength;
     }
-    const attack = Math.min(1, time / .018);
-    const release = Math.min(1, (durationSeconds - time) / .065);
-    const envelope = Math.sin(Math.PI * .5 * Math.max(0, Math.min(1, attack)))
-      * Math.sin(Math.PI * .5 * Math.max(0, Math.min(1, release)));
-    const activityWave = .78 + Math.sin(progress * Math.PI * (2.2 + intensity) + motorPhase) * .12;
-    const mixed = (texture * (.23 + intensity * .08) + motor + seek * .13) * envelope * activityWave;
-    dc += (mixed - dc) * .003;
-    samples[index] = Math.max(-1, Math.min(1, mixed - dc));
+    samples[index] = Math.tanh(seek * (.31 + intensity * .09));
   }
   return samples;
 }
@@ -522,7 +513,7 @@ export function startCrtTerminal() {
         ? 1 - diskBurstRemaining / diskBurstSize
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
-      voice.volume = Math.min(.05, (.01 + currentDensity * .028) * accent);
+      voice.volume = Math.min(.075, (.016 + currentDensity * .04) * accent);
       voice.playbackRate = .82 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
       void playElement(voice);
       diskEventCount += 1;

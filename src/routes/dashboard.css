@@ -2175,6 +2175,30 @@
       --violet: rgb(var(--phosphor-main));
     }
     html { background: rgb(var(--phosphor-black)); }
+    :root {
+      scrollbar-color: rgb(var(--phosphor-main) / .78) rgb(var(--phosphor-black));
+      scrollbar-width: thin;
+    }
+    *::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    *::-webkit-scrollbar-track {
+      border: 1px solid rgb(var(--phosphor-main) / .14);
+      background: rgb(var(--phosphor-black));
+      box-shadow: inset 0 0 7px rgb(var(--phosphor-main) / .06);
+    }
+    *::-webkit-scrollbar-thumb {
+      border: 2px solid rgb(var(--phosphor-black));
+      border-radius: 0;
+      background: rgb(var(--phosphor-main) / .72);
+      box-shadow: 0 0 7px rgb(var(--phosphor-main) / .35);
+    }
+    *::-webkit-scrollbar-thumb:hover {
+      background: rgb(var(--phosphor-soft) / .9);
+      box-shadow: 0 0 9px rgb(var(--phosphor-soft) / .55);
+    }
+    *::-webkit-scrollbar-corner { background: rgb(var(--phosphor-black)); }
     body {
       background:
         radial-gradient(ellipse at 50% 18%, rgb(var(--phosphor-screen) / .94), rgb(var(--phosphor-black)) 72%),
