@@ -44,9 +44,9 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await expect(page.locator('.crt-scan-sweep')).toHaveCount(1);
   await expect(page.locator('body')).toHaveClass(/crt-barrel-ready/);
   await expect(page.locator('body')).toHaveAttribute('data-warp-input', 'compensated');
-  await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
+  await expect(page.locator('.crt-theme-dot')).toHaveCount(8);
   expect(await page.locator('.crt-theme-dot').evaluateAll((buttons) => buttons.map((button) => (button as HTMLElement).dataset.theme))).toEqual([
-    'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta',
+    'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gruvbox',
   ]);
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   await expect(page.getByRole('button', { name: 'Magenta phosphor' })).toHaveAttribute('aria-pressed', 'true');
@@ -58,7 +58,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
   await audioToggle.click();
   await expect(page.locator('body')).toHaveAttribute('data-audio-state', 'running');
   await expect(page).toHaveTitle("Torplex");
-  await expect(page.locator('.crt-theme-dot')).toHaveCount(7);
+  await expect(page.locator('.crt-theme-dot')).toHaveCount(8);
   await expect(page.locator('html')).toHaveAttribute('data-crt-theme', 'magenta');
   const themes = {
     red: '248 72 72',
@@ -68,6 +68,7 @@ test("authenticated dashboard renders live swarm telemetry", async ({ page }, te
     cyan: '34 211 238',
     blue: '59 130 246',
     magenta: '245 62 200',
+    gruvbox: '184 187 38',
   };
   await page.evaluate(() => {
     (window as Window & { __themeSwapOpacity?: number | null }).__themeSwapOpacity = null;

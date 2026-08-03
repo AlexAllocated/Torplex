@@ -21,7 +21,7 @@ const TYPE_SELECTOR = [
   'a.secondary-button',
 ].join(',');
 
-const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta']);
+const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gruvbox']);
 const CRT_THEME_STORAGE_KEY = 'torplex:crt-theme';
 const CRT_WARP_SCALE = 96;
 const CRT_WARP_CURVE = .28;
@@ -166,8 +166,7 @@ export function bitcrushTerminalSamples(samples, sourceSampleRate, bitDepth = 8,
   return processed;
 }
 
-function createWavUrl(durationSeconds, sampleAt, { bitcrush = true } = {}) {
-  const sampleRate = 22050;
+function createWavUrl(durationSeconds, sampleAt, { bitcrush = true, sampleRate = 22050 } = {}) {
   const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
   const buffer = new ArrayBuffer(44 + sampleCount * 2);
   const view = new DataView(buffer);
@@ -200,13 +199,19 @@ function createWavUrl(durationSeconds, sampleAt, { bitcrush = true } = {}) {
 
 function createTerminalMediaBank() {
   const tau = Math.PI * 2;
+  let transitionNoiseState = 0x51f15e;
+  const transitionNoise = () => {
+    transitionNoiseState = Math.imul(transitionNoiseState ^ (transitionNoiseState >>> 15), 1 | transitionNoiseState);
+    transitionNoiseState ^= transitionNoiseState + Math.imul(transitionNoiseState ^ (transitionNoiseState >>> 7), 61 | transitionNoiseState);
+    return (((transitionNoiseState ^ (transitionNoiseState >>> 14)) >>> 0) / 4_294_967_296) * 2 - 1;
+  };
   const urls = {
     enabled: createWavUrl(.38, (time, index, count) => {
       const progress = index / count;
       const frequency = progress < .48 ? 220 : 330;
       const envelope = Math.sin(Math.PI * progress) ** .45;
       return Math.sin(tau * frequency * time) * envelope * .38;
-    }),
+    }, { bitcrush: false }),
     action: createWavUrl(.085, (time, index, count) => {
       const progress = index / count;
       const frequency = 190 + progress * 55;
@@ -249,9 +254,10 @@ function createTerminalMediaBank() {
       const progress = index / count;
       const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
       const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
-      const mechanism = Math.sin(tau * (44 - progress * 22) * time);
-      return (mechanism * .88 + noise * .12) * envelope * .2;
-    }),
+      const frequency = 68 - progress * 20;
+      const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .2;
+      return (mechanism * .88 + noise * .12) * envelope * .22;
+    }, { bitcrush: false }),
     diskTickSeek: createWavUrl(.082, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 73.913 + 8.61) * 24634.6345) % 1) * 2 - 1;
@@ -260,9 +266,10 @@ function createTerminalMediaBank() {
       const second = secondProgress > 0
         ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
         : 0;
-      const mechanism = Math.sin(tau * (36 - progress * 16) * time);
-      return (mechanism * .9 + noise * .1) * (first + second) * .21;
-    }),
+      const frequency = 62 - progress * 18;
+      const mechanism = Math.sin(tau * frequency * time) + Math.sin(tau * frequency * 2 * time) * .18;
+      return (mechanism * .9 + noise * .1) * (first + second) * .23;
+    }, { bitcrush: false }),
     diskTickClack: createWavUrl(.11, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 61.317 + 2.03) * 31547.2371) % 1) * 2 - 1;
@@ -271,14 +278,22 @@ function createTerminalMediaBank() {
       const returnImpact = returnProgress > 0
         ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
         : 0;
-      const lowMechanism = Math.sin(tau * 26 * time) + Math.sin(tau * 52 * time) * .14;
-      return (lowMechanism * .92 + noise * .08) * (impact + returnImpact) * .2;
-    }),
+      const lowMechanism = Math.sin(tau * 48 * time) + Math.sin(tau * 96 * time) * .22;
+      return (lowMechanism * .92 + noise * .08) * (impact + returnImpact) * .22;
+    }, { bitcrush: false }),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 78.233) * 43758.5453) % 1) * 2 - 1;
       const sweep = Math.sin(tau * (58 + progress * 520) * time);
       return (noise * .46 + sweep * .54) * Math.sin(Math.PI * progress) ** .8 * .5;
+    }, { bitcrush: false }),
+    transitionStatic: createWavUrl(.34, (time, index, count) => {
+      const progress = index / Math.max(1, count - 1);
+      const noise = transitionNoise();
+      const electricalGate = Math.sin(tau * (38 + 22 * progress) * time) > .35 ? 1 : .22;
+      const envelope = Math.min(1, time / .012) * Math.max(0, 1 - progress) ** .78;
+      const crackle = noise * (.045 + electricalGate * .16);
+      return Math.tanh(crackle * envelope * 1.35) * .78;
     }),
     hum: createWavUrl(60, (time) => (
       Math.sin(tau * 72 * time) * .72
@@ -303,6 +318,7 @@ function createTerminalMediaBank() {
       Array.from({ length: 4 }, () => audio(urls[name], .5)),
     ])),
     ambient: ['ambientPing', 'ambientSweep', 'ambientBloop'].map((name) => audio(urls[name], .24)),
+    transitionStatic: Array.from({ length: 4 }, () => audio(urls.transitionStatic, .055)),
     disk: Array.from({ length: 12 }, (_, index) => {
       const timbres = [urls.diskTickLight, urls.diskTickSeek, urls.diskTickLight, urls.diskTickClack];
       return audio(timbres[index % timbres.length], .05);
@@ -332,6 +348,8 @@ export function startCrtTerminal() {
   let diskBurstRemaining = 0;
   let diskBurstSize = 0;
   let diskEventCount = 0;
+  let transitionStaticVoice = 0;
+  let lastTransitionStaticAt = 0;
   let transferRateBytes = 0;
   let activeTransferCount = 0;
   let activeAiCount = 0;
@@ -352,7 +370,7 @@ export function startCrtTerminal() {
   body.classList.add('crt-awaiting-power');
   body.classList.toggle('crt-audio-muted', muted);
 
-  const allMedia = () => [media.enabled, media.power, media.hum, ...Object.values(media.controls).flat(), ...media.ambient, ...media.disk];
+  const allMedia = () => [media.enabled, media.power, media.hum, ...Object.values(media.controls).flat(), ...media.ambient, ...media.transitionStatic, ...media.disk];
 
   const setAudioUi = () => {
     const state = muted ? 'muted' : audioError ? 'error' : mediaUnlocked ? 'running' : 'armed';
@@ -486,8 +504,8 @@ export function startCrtTerminal() {
         ? 1 - diskBurstRemaining / diskBurstSize
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
-      voice.volume = Math.min(.06, (.012 + currentDensity * .033) * accent);
-      voice.playbackRate = .82 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
+      voice.volume = Math.min(.075, (.018 + currentDensity * .04) * accent);
+      voice.playbackRate = .88 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
       void playElement(voice);
       diskEventCount += 1;
       body.dataset.diskEventCount = String(diskEventCount);
@@ -536,6 +554,18 @@ export function startCrtTerminal() {
   const playPowerOn = () => {
     if (!mediaUnlocked) return;
     void playElement(media.power);
+    playTransitionStatic(true);
+  };
+
+  const playTransitionStatic = (force = false) => {
+    if (muted || !mediaUnlocked || document.hidden) return;
+    const now = performance.now();
+    if (!force && now - lastTransitionStaticAt < 260) return;
+    lastTransitionStaticAt = now;
+    const voice = media.transitionStatic[transitionStaticVoice % media.transitionStatic.length];
+    transitionStaticVoice += 1;
+    voice.volume = .055;
+    void playElement(voice);
   };
 
   const playControlSound = (target, forcedKind = '') => {
@@ -567,6 +597,7 @@ export function startCrtTerminal() {
       body.dataset.audioProbe = 'played';
       setAudioUi();
       if (activated) {
+        if (body.classList.contains('crt-powering-on')) playPowerOn();
         startHum();
         scheduleAmbient(3500 + Math.random() * 3500);
         scheduleDiskActivity();
@@ -597,6 +628,7 @@ export function startCrtTerminal() {
         document.documentElement.dataset.crtTheme = activeTheme;
         body.classList.remove('crt-theme-switching');
         body.classList.add('crt-theme-restoring');
+        playTransitionStatic(true);
         themeTimer = window.setTimeout(() => {
           themeTimer = 0;
           body.classList.remove('crt-theme-restoring');
@@ -629,6 +661,31 @@ export function startCrtTerminal() {
     }
   };
   window.addEventListener('storage', onThemeStorage);
+
+  const glitchPhases = new Map([
+    ['crtSignalJitter', [.62, .85]],
+    ['crtTearA', [.35, .77]],
+    ['crtTearB', [.48, .92]],
+    ['crtTearC', [.71]],
+    ['crtBlockA', [.39]],
+    ['crtBlockB', [.65]],
+  ]);
+  const glitchSoundTimers = new Set();
+  const onGlitchAnimationCycle = (event) => {
+    const phases = glitchPhases.get(event.animationName);
+    if (!phases || reducedMotion) return;
+    const duration = Number.parseFloat(getComputedStyle(event.target).animationDuration) * 1_000;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    phases.forEach((phase) => {
+      const timer = window.setTimeout(() => {
+        glitchSoundTimers.delete(timer);
+        if (activated && body.classList.contains('crt-powered-on')) playTransitionStatic();
+      }, duration * phase);
+      glitchSoundTimers.add(timer);
+    });
+  };
+  document.addEventListener('animationstart', onGlitchAnimationCycle);
+  document.addEventListener('animationiteration', onGlitchAnimationCycle);
 
   const reveal = (node, delay = 0) => {
     if (!(node instanceof HTMLElement) || revealed.has(node) || !hasReadableText(node)) return;
@@ -789,6 +846,8 @@ export function startCrtTerminal() {
     themeButtons.forEach((button) => button.removeEventListener('click', onThemeClick));
     window.removeEventListener('storage', onThemeStorage);
     document.removeEventListener('animationend', onAnimationEnd);
+    document.removeEventListener('animationstart', onGlitchAnimationCycle);
+    document.removeEventListener('animationiteration', onGlitchAnimationCycle);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('torplex:transfer-activity', onTransferActivity);
     window.removeEventListener('torplex:crt-activity', onCrtActivity);
@@ -796,6 +855,8 @@ export function startCrtTerminal() {
     if (themeSwapTimer) clearTimeout(themeSwapTimer);
     if (ambientTimer) clearTimeout(ambientTimer);
     if (diskActivityTimer) clearTimeout(diskActivityTimer);
+    glitchSoundTimers.forEach((timer) => clearTimeout(timer));
+    glitchSoundTimers.clear();
     stopHum();
     allMedia().forEach((element) => {
       element.pause();

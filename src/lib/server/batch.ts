@@ -6,6 +6,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, join } from "path";
 import { createSmartIntakePlan, smartIntakeConfig } from "$lib/server/smart-intake";
+import { ProgressSnapshotStore } from "$lib/server/progress-snapshots";
 import { seasonNumbersFromManifest } from "$lib/server/torrent-coverage";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
@@ -29,6 +30,7 @@ const vpnStatusUrl = (process.env.TORPLEX_VPN_STATUS_URL ?? "").trim();
 const vpnRequired = !["0", "false", "no", "off"].includes((process.env.TORPLEX_REQUIRE_VPN ?? "true").trim().toLowerCase());
 const privateSeedIps = new Set((process.env.PRIVATE_SEED_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
 const privateSeedLabel = (process.env.PRIVATE_SEED_LABEL ?? "VM SEED").trim() || "VM SEED";
+const progressSnapshots = new ProgressSnapshotStore(join(root, "progress-snapshots.json"));
 
 type Item = {
   id: string;
@@ -902,6 +904,7 @@ export async function removeTorrentItem(id: string) {
   if (state.currentItemId === id) state.currentItemId = null;
   await saveState(state);
   await removeItemArtifacts(item);
+  progressSnapshots.delete(id);
 
   for (const [key, peer] of peerHistory.entries()) {
     if (peer.itemId === id || key.startsWith(`${id}:`)) peerHistory.delete(key);
@@ -927,6 +930,7 @@ export async function clearCompletedItems() {
   await saveState(state);
 
   for (const item of completed) {
+    progressSnapshots.delete(item.id);
     await rm(join(root, "logs", `${item.id}.log`), { force: true });
     if (item.torrentFile) await rm(join(root, "torrents", item.torrentFile), { force: true });
   }
@@ -1376,6 +1380,7 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
   const stateItems = state.items ?? {};
   let completedBytes = 0;
   let activeBytes = 0;
+  let retainedBytes = 0;
   let activeTotalBytes = 0;
   let activeRateBytesPerSecond = 0;
   let activeConnections = 0;
@@ -1388,11 +1393,16 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
     const status = recordedStatus === "completed" && !destinationExists ? "pending" : recordedStatus;
     const hasPartialDownload = status === "pending" && existsSync(join(root, "staging", item.id));
     const shouldReadProgressLog = status === "active" || status === "organizing" || status === "failed" || hasPartialDownload;
-    const progress = shouldReadProgressLog
+    const currentProgress = shouldReadProgressLog
       ? parseProgress(readTail(join(root, "logs", `${item.id}.log`)))
       : status === "completed"
         ? completedProgress(item.totalBytes)
         : pendingProgress(item.totalBytes);
+    const retainProgress = status !== "completed" && (hasPartialDownload || status === "active" || status === "organizing" || status === "failed");
+    const retainedProgress = progressSnapshots.reconcile(item.id, item.totalBytes, currentProgress, retainProgress);
+    const progress = status === "pending" && retainedProgress.downloadedBytes > 0
+      ? { ...retainedProgress, rate: "", eta: "", connections: 0, seeders: 0, phase: "waiting" }
+      : retainedProgress;
     const effectiveTotalBytes = item.totalBytes || progress.totalBytes;
     if (status === "completed") {
       completedBytes += effectiveTotalBytes;
@@ -1401,6 +1411,8 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
       activeTotalBytes += effectiveTotalBytes;
       activeConnections += progress.connections;
       activeSeeders += progress.seeders;
+    } else {
+      retainedBytes += Math.min(progress.downloadedBytes, effectiveTotalBytes || progress.downloadedBytes);
     }
     return {
       ...item,
@@ -1440,7 +1452,7 @@ export async function buildStatus(options: BuildStatusOptions = {}) {
   });
   const activeItems = enrichedItems.filter((item) => item.status === "active" || item.status === "organizing");
   const activeRemainingBytes = Math.max(0, activeTotalBytes - activeBytes);
-  const doneBytes = completedBytes + activeBytes;
+  const doneBytes = completedBytes + activeBytes + retainedBytes;
   const rawLog = includeBatchLogTail ? readTail(join(root, "batch.log"), 80_000).replace(/\x1b\[[0-9;]*[mK]/g, "") : "";
   return {
     generatedAt: new Date().toISOString(),

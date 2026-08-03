@@ -34,6 +34,7 @@
   <button class="crt-theme-dot" type="button" data-theme="cyan" aria-label="Cyan phosphor" title="Cyan phosphor"></button>
   <button class="crt-theme-dot" type="button" data-theme="blue" aria-label="Blue phosphor" title="Blue phosphor"></button>
   <button class="crt-theme-dot" type="button" data-theme="magenta" aria-label="Magenta phosphor" title="Magenta phosphor"></button>
+  <button class="crt-theme-dot" type="button" data-theme="gruvbox" aria-label="Gruvbox Dark Hard" title="Gruvbox Dark Hard"></button>
 </div>
 
 <button id="crtBootTrigger" class="crt-boot-screen" type="button" aria-label="Power on Torplex terminal">

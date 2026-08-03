@@ -3034,6 +3034,23 @@
       --phosphor-bright: 253 232 247;
       --phosphor-hue: 275deg;
     }
+    :root[data-crt-theme="gruvbox"] {
+      --phosphor-screen: 40 40 40;
+      --phosphor-black: 29 32 33;
+      --phosphor-shadow: 60 56 54;
+      --phosphor-deep: 69 133 136;
+      --phosphor-main: 184 187 38;
+      --phosphor-soft: 250 189 47;
+      --phosphor-text: 235 219 178;
+      --phosphor-bright: 251 241 199;
+      --phosphor-hue: 55deg;
+      --teal: #8ec07c;
+      --green: #b8bb26;
+      --amber: #fabd2f;
+      --rose: #fb4934;
+      --blue: #83a598;
+      --violet: #d3869b;
+    }
 
     ::selection {
       color: rgb(var(--phosphor-black));
@@ -3077,6 +3094,10 @@
     .crt-theme-dot[data-theme="cyan"] { --theme-swatch: #22d3ee; }
     .crt-theme-dot[data-theme="blue"] { --theme-swatch: #3b82f6; }
     .crt-theme-dot[data-theme="magenta"] { --theme-swatch: #f53ec8; }
+    .crt-theme-dot[data-theme="gruvbox"] {
+      --theme-swatch: #b8bb26;
+      background: conic-gradient(#fb4934, #fabd2f, #b8bb26, #8ec07c, #83a598, #d3869b, #fb4934);
+    }
     body.map-fullscreen-open .crt-theme-switcher { display: none; }
     body.crt-theme-switching .crt-picture { animation: phosphorThemeOff 150ms cubic-bezier(.55, 0, 1, .45) both; }
     body.crt-theme-restoring .crt-picture { animation: phosphorThemeOn 230ms cubic-bezier(.16, 1, .3, 1) both; }
