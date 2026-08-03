@@ -25,6 +25,7 @@ const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 
 const CRT_THEME_STORAGE_KEY = 'torplex:crt-theme';
 const CRT_WARP_SCALE = 96;
 const CRT_WARP_CURVE = .28;
+const CRT_GLITCH_STATIC_CHANCE = .125;
 const normalizeTheme = (theme) => theme === 'purple' ? 'magenta' : theme;
 
 const hasReadableText = (node) => Boolean(node?.textContent?.trim());
@@ -318,7 +319,7 @@ function createTerminalMediaBank() {
       Array.from({ length: 4 }, () => audio(urls[name], .5)),
     ])),
     ambient: ['ambientPing', 'ambientSweep', 'ambientBloop'].map((name) => audio(urls[name], .24)),
-    transitionStatic: Array.from({ length: 4 }, () => audio(urls.transitionStatic, .055)),
+    transitionStatic: Array.from({ length: 4 }, () => audio(urls.transitionStatic, .028)),
     disk: Array.from({ length: 12 }, (_, index) => {
       const timbres = [urls.diskTickLight, urls.diskTickSeek, urls.diskTickLight, urls.diskTickClack];
       return audio(timbres[index % timbres.length], .05);
@@ -504,7 +505,7 @@ export function startCrtTerminal() {
         ? 1 - diskBurstRemaining / diskBurstSize
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
-      voice.volume = Math.min(.075, (.018 + currentDensity * .04) * accent);
+      voice.volume = Math.min(.18, (.1 + currentDensity * .07) * accent);
       voice.playbackRate = .88 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
       void playElement(voice);
       diskEventCount += 1;
@@ -564,7 +565,8 @@ export function startCrtTerminal() {
     lastTransitionStaticAt = now;
     const voice = media.transitionStatic[transitionStaticVoice % media.transitionStatic.length];
     transitionStaticVoice += 1;
-    voice.volume = .055;
+    voice.volume = .028;
+    voice.playbackRate = 1.5;
     void playElement(voice);
   };
 
@@ -679,7 +681,9 @@ export function startCrtTerminal() {
     phases.forEach((phase) => {
       const timer = window.setTimeout(() => {
         glitchSoundTimers.delete(timer);
-        if (activated && body.classList.contains('crt-powered-on')) playTransitionStatic();
+        if (activated && body.classList.contains('crt-powered-on') && Math.random() < CRT_GLITCH_STATIC_CHANCE) {
+          playTransitionStatic();
+        }
       }, duration * phase);
       glitchSoundTimers.add(timer);
     });
