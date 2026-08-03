@@ -5,9 +5,22 @@ import { preflightTorrentSource } from "$lib/server/batch";
 import {
   findLibraryMatch,
   loadLibraryInventory,
+  missingLibrarySeasons,
+  normalizeLibraryTitle,
   type LibraryInventoryItem,
 } from "$lib/server/library-inventory";
 import { coversSeasons, seasonNumbersFromManifest } from "$lib/server/torrent-coverage";
+import {
+  assessSearchQuality,
+  normalizeQualityProfile,
+  qualitySearchTerms,
+  type SearchQualityProfile,
+} from "$lib/search-quality";
+import {
+  loadProviderReliability,
+  providerReliabilitySummary,
+  recordProviderOutcomes,
+} from "$lib/server/provider-reliability";
 
 const defaultModel = "gpt-5.6-terra";
 const defaultMetadataCandidateLimit = 24;
@@ -47,6 +60,8 @@ export type SearchCandidate = {
   seeders: number;
   leechers: number;
   publishedAt: number;
+  quality?: ReturnType<typeof assessSearchQuality>;
+  providerReliability?: ReturnType<typeof providerReliabilitySummary>;
 };
 
 type TorrentPreflightMetadata = {
@@ -85,6 +100,7 @@ export type SearchProposal = {
   }>;
   providers: string[];
   model: string;
+  qualityProfile: SearchQualityProfile;
 };
 
 type Progress = (message: string) => void;
@@ -123,10 +139,15 @@ const outlineSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["inventoryId", "reason"],
+        required: ["inventoryId", "reason", "requestedSeasons"],
         properties: {
           inventoryId: { type: "string" },
           reason: { type: "string" },
+          requestedSeasons: {
+            type: "array",
+            maxItems: 30,
+            items: { type: "integer", minimum: 1, maximum: 99 },
+          },
         },
       },
     },
@@ -325,7 +346,7 @@ Resolve the request into one canonical entry per movie or TV series. Follow scop
 
 For every TV series, requiredSeasons must enumerate every regular season needed to satisfy the request. A request for a series without a season limit means all released seasons of that series. Use an empty array for movies. Do not include specials as season 0 unless the user explicitly requests them. This season manifest is operational: Torplex will use it to verify complete-series packs and fall back to separate season downloads when necessary, so do not omit known seasons.
 
-The supplied existingInventory is authoritative for content already in Plex or already queued in Torplex. Do not include an existing title in works when its title, year, and media type match. Report it in excludedExisting using the supplied inventory ID. Never infer ownership beyond this list. For ranked or count-based requests such as "top 10," return the full requested number of non-existing works by continuing farther down the ranking; excluded titles do not count toward the requested total.`,
+The supplied existingInventory is authoritative for content already in Plex or already queued in Torplex. Movies are existing when title, year, and type match. TV series inventory includes exact season numbers: exclude a series only when its inventory seasons cover every requested season. When only some seasons exist, include the series in works with requiredSeasons containing only the missing seasons. Every excludedExisting entry must repeat the full requested regular-season scope in requestedSeasons for shows and use an empty array for movies. Never infer ownership beyond this list. For ranked or count-based requests such as "top 10," return the full requested number of non-existing works by continuing farther down the ranking; excluded titles do not count toward the requested total.`,
     { prompt, maximumWorks: maxWorks, existingInventory: inventory },
     signal,
   );
@@ -359,20 +380,53 @@ The supplied existingInventory is authoritative for content already in Plex or a
     const excluded = entry as Record<string, unknown>;
     const inventoryItem = inventoryById.get(String(excluded.inventoryId || ""));
     if (!inventoryItem) continue;
+    const requestedSeasons = Array.isArray(excluded.requestedSeasons)
+      ? [...new Set(excluded.requestedSeasons.map(Number).filter((season) => Number.isInteger(season) && season > 0 && season <= 99))]
+      : [];
+    if (inventoryItem.type === "show" && requestedSeasons.length) {
+      const missingSeasons = requestedSeasons.filter((season) => !inventoryItem.seasons.includes(season));
+      if (missingSeasons.length) {
+        const title = inventoryItem.title;
+        if (!proposedWorks.some((work) => work.type === "show" && normalizeLibraryTitle(work.title) === normalizeLibraryTitle(title))) {
+          proposedWorks.push({
+            id: cleanId(`${title}-${inventoryItem.year || ""}`, `show-${proposedWorks.length + 1}`),
+            title,
+            year: inventoryItem.year,
+            type: "show",
+            searchQuery: `${title}${inventoryItem.year ? ` ${inventoryItem.year}` : ""}`,
+            notes: `Existing seasons retained; searching only for missing seasons ${missingSeasons.map(seasonCode).join(", ")}.`,
+            requiredSeasons: missingSeasons,
+          });
+        }
+        continue;
+      }
+    }
     alreadyOwned.set(inventoryItem.id, {
       inventoryItem,
       reason: String(excluded.reason || "Already present in Plex or Torplex").trim(),
     });
   }
-  const works = proposedWorks.filter((work) => {
+  const works = proposedWorks.flatMap((work): SearchWork[] => {
+    if (work.type === "show" && work.requiredSeasons.length) {
+      const missingSeasons = missingLibrarySeasons(work, inventory);
+      if (missingSeasons.length) {
+        return [{
+          ...work,
+          requiredSeasons: missingSeasons,
+          notes: missingSeasons.length === work.requiredSeasons.length
+            ? work.notes
+            : `${work.notes ? `${work.notes} ` : ""}Existing seasons retained; searching only for ${missingSeasons.map(seasonCode).join(", ")}.`,
+        }];
+      }
+    }
     const match = findLibraryMatch(work, inventory);
-    if (!match) return true;
+    if (!match) return [work];
     alreadyOwned.set(match.id, {
       inventoryItem: match,
       reason: `${work.title}${work.year ? ` (${work.year})` : ""} is already ${match.status}`,
     });
-    return false;
-  });
+    return [];
+  }).slice(0, maxWorks);
   if (!works.length && !alreadyOwned.size) throw new Error("The request did not resolve to any searchable titles");
   return { summary: String(payload.summary || "").trim(), works, alreadyOwned: [...alreadyOwned.values()] };
 }
@@ -393,29 +447,30 @@ function seasonCode(season: number) {
   return `S${String(season).padStart(2, "0")}`;
 }
 
-function completeScopeQuery(work: SearchWork) {
-  if (work.type !== "show" || !work.requiredSeasons.length) return work.searchQuery;
+function completeScopeQuery(work: SearchWork, qualityProfile: SearchQualityProfile) {
+  const quality = qualitySearchTerms(qualityProfile);
+  if (work.type !== "show" || !work.requiredSeasons.length) return `${work.searchQuery} ${quality}`.trim();
   const first = work.requiredSeasons[0];
   const last = work.requiredSeasons.at(-1)!;
   const contiguous = work.requiredSeasons.every((season, index) => season === first + index);
   const scope = contiguous && first !== last
     ? `${seasonCode(first)}-${seasonCode(last)}`
     : work.requiredSeasons.map(seasonCode).join(" ");
-  return `${work.searchQuery} complete ${scope}`;
+  return `${work.searchQuery} complete ${scope} ${quality}`.trim();
 }
 
-function completeTarget(work: SearchWork): SearchTarget {
+function completeTarget(work: SearchWork, qualityProfile: SearchQualityProfile): SearchTarget {
   return {
     ...work,
     workId: work.id,
     scope: work.type === "movie" ? "movie" : "complete",
     scopeLabel: work.type === "movie" ? "Movie" : "Complete series",
     seasonNumber: null,
-    searchQuery: completeScopeQuery(work),
+    searchQuery: completeScopeQuery(work, qualityProfile),
   };
 }
 
-function seasonTarget(work: SearchWork, seasonNumber: number): SearchTarget {
+function seasonTarget(work: SearchWork, seasonNumber: number, qualityProfile: SearchQualityProfile): SearchTarget {
   const code = seasonCode(seasonNumber);
   return {
     ...work,
@@ -425,7 +480,7 @@ function seasonTarget(work: SearchWork, seasonNumber: number): SearchTarget {
     scopeLabel: `Season ${String(seasonNumber).padStart(2, "0")}`,
     seasonNumber,
     requiredSeasons: [seasonNumber],
-    searchQuery: `${work.title}${work.year ? ` ${work.year}` : ""} ${code} Season ${seasonNumber}`,
+    searchQuery: `${work.title}${work.year ? ` ${work.year}` : ""} ${code} Season ${seasonNumber} ${qualitySearchTerms(qualityProfile)}`.trim(),
   };
 }
 
@@ -436,7 +491,15 @@ function candidateSeasonNumbers(candidate: SearchCandidate, metadata: TorrentPre
   ).concat(metadata.seasonNumbers || []).filter((season, index, seasons) => seasons.indexOf(season) === index);
 }
 
-function candidateUsefulForTarget(target: SearchTarget, candidate: SearchCandidate, metadata: TorrentPreflightMetadata) {
+function candidateUsefulForTarget(
+  target: SearchTarget,
+  candidate: SearchCandidate,
+  metadata: TorrentPreflightMetadata,
+  qualityProfile: SearchQualityProfile,
+) {
+  const quality = assessSearchQuality(qualityProfile, `${candidate.name} ${metadata.payloadName}`, metadata.totalBytes);
+  candidate.quality = quality;
+  if (!quality.allowed) return false;
   if (target.scope === "movie" || !target.requiredSeasons.length) return true;
   const seasons = candidateSeasonNumbers(candidate, metadata);
   if (target.scope === "complete") return coversSeasons(seasons, target.requiredSeasons);
@@ -539,7 +602,7 @@ function runNova(work: SearchWork, signal?: AbortSignal): Promise<SearchCandidat
   });
 }
 
-function candidateScore(work: SearchWork, candidate: SearchCandidate) {
+function candidateScore(work: SearchWork, candidate: SearchCandidate, qualityProfile: SearchQualityProfile) {
   const normalized = candidate.name.toLowerCase();
   const titleWords = work.title.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 1);
   const matchedWords = titleWords.filter((word) => normalized.includes(word)).length;
@@ -557,7 +620,9 @@ function candidateScore(work: SearchWork, candidate: SearchCandidate) {
     if (namedSeasons.includes(target.seasonNumber)) scopeScore += 70;
     else if (namedSeasons.length) scopeScore -= 70;
   }
-  return matchedWords * 10 + yearScore + seedScore + badRelease + scopeScore;
+  const qualityScore = assessSearchQuality(qualityProfile, candidate.name, candidate.sizeBytes).score;
+  const reliabilityScore = ((candidate.providerReliability?.score ?? .6) - .5) * 36;
+  return matchedWords * 10 + yearScore + seedScore + badRelease + scopeScore + qualityScore + reliabilityScore;
 }
 
 function providerDiverseShortlist(ranked: SearchCandidate[], limit: number) {
@@ -600,6 +665,7 @@ async function preflightCandidateGroups(
   candidateGroups: SearchCandidate[][],
   config: ReturnType<typeof searchConfig>,
   onProgress: Progress,
+  qualityProfile: SearchQualityProfile,
   signal?: AbortSignal,
 ) {
   const workMap = new Map(targets.map((target) => [target.id, target]));
@@ -678,20 +744,23 @@ async function preflightCandidateGroups(
         };
       }
     });
+    const providerOutcomes: Array<{ provider: string; manifestSuccess: boolean; scopeSuccess: boolean }> = [];
     for (const result of results) {
       const target = workMap.get(result.candidate.workId);
       if (result.metadata) {
         verified.set(result.candidate.id, result.metadata);
-        const useful = target ? candidateUsefulForTarget(target, result.candidate, result.metadata) : true;
+        const useful = target ? candidateUsefulForTarget(target, result.candidate, result.metadata, qualityProfile) : true;
         if (useful) {
           verifiedCounts.set(result.candidate.workId, (verifiedCounts.get(result.candidate.workId) || 0) + 1);
         }
+        providerOutcomes.push({ provider: result.candidate.provider, manifestSuccess: true, scopeSuccess: useful });
         const coverage = result.metadata.seasonNumbers?.length
           ? `; seasons ${result.metadata.seasonNumbers.map((season) => String(season).padStart(2, "0")).join(", ")}`
           : "";
         const coverageResult = useful ? "verified" : "verified but does not cover this target; continuing";
         onProgress(`${target ? targetDisplay(target) : result.candidate.name}: ${coverageResult} ${result.candidate.provider} manifest (${result.metadata.fileCount} files${coverage})`);
       } else {
+        providerOutcomes.push({ provider: result.candidate.provider, manifestSuccess: false, scopeSuccess: false });
         const providerKey = `${result.candidate.workId}:${result.candidate.provider}`;
         providerFailures.set(providerKey, (providerFailures.get(providerKey) || 0) + 1);
         const reason = result.error.includes("No connected peer supplied")
@@ -700,6 +769,7 @@ async function preflightCandidateGroups(
         onProgress(`${target ? targetDisplay(target) : result.candidate.name}: rejected ${result.candidate.provider} source - ${reason}`);
       }
     }
+    await recordProviderOutcomes(providerOutcomes);
   }
   for (const target of targets) {
     if (verifiedCounts.has(target.id)) continue;
@@ -719,14 +789,19 @@ async function searchTargetGroups(
   targets: SearchTarget[],
   config: ReturnType<typeof searchConfig>,
   onProgress: Progress,
+  qualityProfile: SearchQualityProfile,
   signal?: AbortSignal,
 ) {
+  const providerHistory = await loadProviderReliability();
   return mapWithConcurrency(targets, config.concurrency, async (target, index) => {
     if (signal?.aborted) throw abortError();
     onProgress(`Searching ${targetDisplay(target)} - ${index + 1} of ${targets.length}`);
     try {
-      const found = await runNova(target, signal);
-      const ranked = found.sort((left, right) => candidateScore(target, right) - candidateScore(target, left));
+      const found = (await runNova(target, signal)).map((candidate) => ({
+        ...candidate,
+        providerReliability: providerReliabilitySummary(providerHistory[candidate.provider]),
+      }));
+      const ranked = found.sort((left, right) => candidateScore(target, right, qualityProfile) - candidateScore(target, left, qualityProfile));
       const shortlisted = providerDiverseShortlist(ranked, config.metadataMaxCandidates);
       const providers = new Set(shortlisted.map((candidate) => candidate.provider)).size;
       const initial = Math.min(config.metadataCandidateLimit, shortlisted.length);
@@ -744,10 +819,11 @@ function eligibleCandidates(
   target: SearchTarget,
   candidates: SearchCandidate[],
   verifiedMetadata: Map<string, TorrentPreflightMetadata>,
+  qualityProfile: SearchQualityProfile,
 ) {
   return candidates.filter((candidate) => {
     const metadata = verifiedMetadata.get(candidate.id);
-    return Boolean(metadata && candidateUsefulForTarget(target, candidate, metadata));
+    return Boolean(metadata && candidateUsefulForTarget(target, candidate, metadata, qualityProfile));
   });
 }
 
@@ -755,8 +831,10 @@ export async function createTorrentSearchProposal(
   prompt: string,
   onProgress: Progress = () => {},
   signal?: AbortSignal,
+  qualityInput?: unknown,
 ) {
   const config = searchConfig();
+  const qualityProfile = normalizeQualityProfile(qualityInput);
   if (!config.available) throw new Error("Torrent search needs OPENAI_API_KEY, TORPLEX_NOVA_SCRIPT, and TORPLEX_SEARCH_PLUGINS");
   const normalizedPrompt = prompt.trim();
   if (normalizedPrompt.length < 4) throw new Error("Describe the movies or shows you want to find");
@@ -782,19 +860,20 @@ export async function createTorrentSearchProposal(
       missing: [],
       providers: config.plugins,
       model: config.model,
+      qualityProfile,
     } satisfies SearchProposal;
   }
-  const initialTargets = outline.works.map(completeTarget);
-  const initialGroups = await searchTargetGroups(initialTargets, config, onProgress, signal);
+  const initialTargets = outline.works.map((work) => completeTarget(work, qualityProfile));
+  const initialGroups = await searchTargetGroups(initialTargets, config, onProgress, qualityProfile, signal);
   onProgress(`Retrieving manifests before model selection; reported seed counts are treated as untrusted`);
   const initialMetadata = initialGroups.some((group) => group.length)
-    ? await preflightCandidateGroups(initialTargets, initialGroups, config, onProgress, signal)
+    ? await preflightCandidateGroups(initialTargets, initialGroups, config, onProgress, qualityProfile, signal)
     : new Map<string, TorrentPreflightMetadata>();
 
   const fallbackWorkIds = new Set<string>();
   for (const [index, target] of initialTargets.entries()) {
     if (target.scope !== "complete" || !target.requiredSeasons.length) continue;
-    const completeCandidates = eligibleCandidates(target, initialGroups[index] || [], initialMetadata);
+    const completeCandidates = eligibleCandidates(target, initialGroups[index] || [], initialMetadata, qualityProfile);
     if (completeCandidates.length) continue;
     fallbackWorkIds.add(target.workId);
     onProgress(`${target.title}: no verified pack covered ${target.requiredSeasons.map(seasonCode).join(", ")}; expanding into ${target.requiredSeasons.length} season searches`);
@@ -802,17 +881,21 @@ export async function createTorrentSearchProposal(
 
   const seasonalTargets = outline.works
     .filter((work) => fallbackWorkIds.has(work.id))
-    .flatMap((work) => work.requiredSeasons.map((season) => seasonTarget(work, season)));
+    .flatMap((work) => work.requiredSeasons.map((season) => seasonTarget(work, season, qualityProfile)));
   const seasonalGroups = seasonalTargets.length
-    ? await searchTargetGroups(seasonalTargets, config, onProgress, signal)
+    ? await searchTargetGroups(seasonalTargets, config, onProgress, qualityProfile, signal)
     : [];
   const seasonalMetadata = seasonalGroups.some((group) => group.length)
-    ? await preflightCandidateGroups(seasonalTargets, seasonalGroups, config, onProgress, signal)
+    ? await preflightCandidateGroups(seasonalTargets, seasonalGroups, config, onProgress, qualityProfile, signal)
     : new Map<string, TorrentPreflightMetadata>();
   const verifiedMetadata = new Map<string, TorrentPreflightMetadata>([
     ...initialMetadata,
     ...seasonalMetadata,
   ]);
+  const refreshedProviderHistory = await loadProviderReliability();
+  for (const candidate of [...initialGroups.flat(), ...seasonalGroups.flat()]) {
+    candidate.providerReliability = providerReliabilitySummary(refreshedProviderHistory[candidate.provider]);
+  }
 
   const initialGroupMap = new Map(initialTargets.map((target, index) => [target.id, initialGroups[index] || []]));
   const seasonalGroupMap = new Map(seasonalTargets.map((target, index) => [target.id, seasonalGroups[index] || []]));
@@ -822,13 +905,13 @@ export async function createTorrentSearchProposal(
     if (fallbackWorkIds.has(work.id)) {
       for (const target of seasonalTargets.filter((entry) => entry.workId === work.id)) {
         finalTargets.push(target);
-        finalCandidateGroups.push(eligibleCandidates(target, seasonalGroupMap.get(target.id) || [], verifiedMetadata));
+        finalCandidateGroups.push(eligibleCandidates(target, seasonalGroupMap.get(target.id) || [], verifiedMetadata, qualityProfile));
       }
       continue;
     }
     const target = initialTargets[index];
     finalTargets.push(target);
-    finalCandidateGroups.push(eligibleCandidates(target, initialGroupMap.get(target.id) || [], verifiedMetadata));
+    finalCandidateGroups.push(eligibleCandidates(target, initialGroupMap.get(target.id) || [], verifiedMetadata, qualityProfile));
   }
   const verifiedCandidates = finalCandidateGroups.flat();
   onProgress(`${verifiedCandidates.length} candidate manifest${verifiedCandidates.length === 1 ? "" : "s"} verified; comparing usable releases`);
@@ -841,6 +924,7 @@ export async function createTorrentSearchProposal(
 Choose at most one primary supplied candidate for each requested target and rank up to three supplied alternatives for that same target. A target can be a movie, a complete TV series, or one season of a TV series; copy its targetId exactly. Multiple season targets belonging to the same series are intentionally independent and may each receive a different torrent. Candidate IDs are opaque and must be copied exactly; never invent a candidate or URL. Alternatives must independently satisfy the same target and should provide resilient fallback sources when the primary source is unavailable. Do not use a mirror of the same release as a fallback. Return an empty alternativeCandidateIds array when no other safe match exists. Prefer an exact canonical title/year and season match, complete target scope, healthy seed count, sensible file size, original-language releases, and high-quality retail/web/bluray sources. Reject CAM, telesync, screener, obvious mismatch, wrong adaptation, wrong season, incomplete target, dubbed-only, suspicious executable, and ambiguous candidates. It is better to mark a target missing than select a poor match. Explain the material tradeoff concisely.`,
       {
         request: normalizedPrompt,
+        qualityProfile,
         works: outline.works,
         targets: finalTargets.map(({ id, workId, title, year, type, scope, scopeLabel, seasonNumber, requiredSeasons }) => ({
           targetId: id,
@@ -931,5 +1015,62 @@ Choose at most one primary supplied candidate for each requested target and rank
     missing,
     providers: config.plugins,
     model: config.model,
+    qualityProfile,
+  } satisfies SearchProposal;
+}
+
+export async function retryTorrentSearchTarget(
+  proposal: SearchProposal,
+  targetId: string,
+  onProgress: Progress = () => {},
+  signal?: AbortSignal,
+) {
+  const missing = proposal.missing.find((entry) => entry.targetId === targetId);
+  if (!missing) throw new Error("That search target is no longer missing");
+  const config = searchConfig();
+  if (!config.available) throw new Error("Torrent search providers are not configured");
+  const qualityProfile = normalizeQualityProfile(proposal.qualityProfile);
+  const target = missing.seasonNumber
+    ? seasonTarget(missing.work, missing.seasonNumber, qualityProfile)
+    : completeTarget(missing.work, qualityProfile);
+  onProgress(`Retrying ${targetDisplay(target)} with current provider reliability data`);
+  const [candidates = []] = await searchTargetGroups([target], config, onProgress, qualityProfile, signal);
+  const metadata = candidates.length
+    ? await preflightCandidateGroups([target], [candidates], config, onProgress, qualityProfile, signal)
+    : new Map<string, TorrentPreflightMetadata>();
+  const eligible = eligibleCandidates(target, candidates, metadata, qualityProfile);
+  const refreshedProviderHistory = await loadProviderReliability();
+  for (const candidate of eligible) {
+    candidate.providerReliability = providerReliabilitySummary(refreshedProviderHistory[candidate.provider]);
+  }
+  if (!eligible.length) {
+    return {
+      ...proposal,
+      missing: proposal.missing.map((entry) => entry.targetId === targetId
+        ? { ...entry, reason: `Retry exhausted the available providers without a usable manifest at ${new Date().toLocaleString("en-US")}` }
+        : entry),
+    } satisfies SearchProposal;
+  }
+  const candidate = eligible[0];
+  const alternatives = eligible.slice(1, 4);
+  const selection: SearchProposal["selections"][number] = {
+    selectionId: target.id,
+    workId: missing.work.id,
+    targetId: target.id,
+    scopeLabel: target.scopeLabel,
+    seasonNumber: target.seasonNumber,
+    candidateId: candidate.id,
+    reason: "Selected the highest-ranked exact-scope candidate after a targeted retry. Torrent metadata was verified before selection.",
+    confidence: candidate.seeders > 10 ? "high" : "medium",
+    work: missing.work,
+    candidate,
+    alternatives,
+    metadata: metadata.get(candidate.id)!,
+  };
+  onProgress(`${targetDisplay(target)}: targeted retry found a verified source`);
+  return {
+    ...proposal,
+    selections: [...proposal.selections.filter((entry) => entry.targetId !== targetId), selection],
+    missing: proposal.missing.filter((entry) => entry.targetId !== targetId),
   } satisfies SearchProposal;
 }

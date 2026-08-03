@@ -29,7 +29,7 @@ test("AI search proposals become independently planned bulk intake items", async
           summary: "Two exact films found",
           works,
           alreadyOwned: [{
-            inventoryItem: { id: "plex-movie-42", title: "Event Horizon", year: 1997, type: "movie", source: "plex", status: "in library" },
+            inventoryItem: { id: "plex-movie-42", title: "Event Horizon", year: 1997, type: "movie", source: "plex", status: "in library", seasons: [] },
             reason: "Excluded because it is already in Plex",
           }],
           selections: works.map((work, index) => ({
@@ -76,7 +76,14 @@ test("AI search proposals become independently planned bulk intake items", async
               seasonNumbers: [],
             },
           })),
-          missing: [],
+          missing: [{
+            workId: "gamma-2003",
+            targetId: "gamma-2003",
+            scopeLabel: "Movie",
+            seasonNumber: null,
+            reason: "No verified manifest yet",
+            work: { id: "gamma-2003", title: "Gamma", year: 2003, type: "movie", searchQuery: "Gamma 2003", notes: "", requiredSeasons: [] },
+          }],
           providers: ["fixture"],
           model: "fixture-model",
         },
@@ -165,6 +172,7 @@ test("AI search proposals become independently planned bulk intake items", async
   await checkWarpedControl(page.getByLabel(/I will use these search results only/));
   await page.getByRole("button", { name: "Build proposal" }).click();
   await expect(page.locator(".proposal-row")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Retry Movie" })).toBeVisible();
   await expect(page.getByText("Event Horizon (1997)")).toBeVisible();
   await expect(page.getByText("1 existing title skipped")).toBeVisible();
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-search-proposal.png", fullPage: false });

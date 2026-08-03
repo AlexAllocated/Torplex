@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   findLibraryMatch,
+  missingLibrarySeasons,
   normalizeLibraryTitle,
   type LibraryInventoryItem,
 } from "../src/lib/server/library-inventory";
 
 const inventory: LibraryInventoryItem[] = [
-  { id: "event-horizon", title: "Event Horizon", year: 1997, type: "movie", source: "plex", status: "in library" },
-  { id: "the-thing-1982", title: "The Thing", year: 1982, type: "movie", source: "plex", status: "in library" },
-  { id: "the-thing-2011", title: "The Thing", year: 2011, type: "movie", source: "queue", status: "active" },
+  { id: "event-horizon", title: "Event Horizon", year: 1997, type: "movie", source: "plex", status: "in library", seasons: [] },
+  { id: "the-thing-1982", title: "The Thing", year: 1982, type: "movie", source: "plex", status: "in library", seasons: [] },
+  { id: "the-thing-2011", title: "The Thing", year: 2011, type: "movie", source: "queue", status: "active", seasons: [] },
+  { id: "daredevil", title: "Marvel's Daredevil", year: 2015, type: "show", source: "plex", status: "in library", seasons: [1] },
 ];
 
 describe("library-aware search matching", () => {
@@ -27,5 +29,14 @@ describe("library-aware search matching", () => {
     expect(findLibraryMatch({ title: "The Thing", year: 2011, type: "movie" }, inventory)?.id)
       .toBe("the-thing-2011");
     expect(findLibraryMatch({ title: "The Thing", year: 1951, type: "movie" }, inventory)).toBeUndefined();
+  });
+
+  test("matches shows only when every requested season is covered", () => {
+    expect(findLibraryMatch({ title: "Marvel's Daredevil", year: 2015, type: "show", requiredSeasons: [1] }, inventory)?.id)
+      .toBe("daredevil");
+    expect(findLibraryMatch({ title: "Marvel's Daredevil", year: 2015, type: "show", requiredSeasons: [1, 2, 3] }, inventory))
+      .toBeUndefined();
+    expect(missingLibrarySeasons({ title: "Marvel's Daredevil", year: 2015, type: "show", requiredSeasons: [1, 2, 3] }, inventory))
+      .toEqual([2, 3]);
   });
 });

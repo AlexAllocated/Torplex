@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { seasonNumbersFromManifest } from "$lib/server/torrent-coverage";
 
 const defaultPlexUrl = "http://127.0.0.1:32400";
 const pageSize = 200;
@@ -18,12 +19,15 @@ export type LibraryInventoryItem = {
   type: "movie" | "show";
   source: "plex" | "queue";
   status: string;
+  seasons: number[];
 };
 
 type PlexMetadata = {
   ratingKey?: string;
   title?: string;
   year?: number;
+  index?: number;
+  type?: string;
 };
 
 type PlexSection = {
@@ -35,6 +39,8 @@ type QueueManifest = {
   items?: Array<{
     id?: string;
     title?: string;
+    payloadName?: string;
+    selectedPaths?: string[];
     destination?: { type?: string; path?: string };
   }>;
 };
@@ -64,15 +70,58 @@ function titleAndYear(value: string) {
 }
 
 export function findLibraryMatch(
-  work: { title: string; year: number | null; type: "movie" | "show" },
+  work: { title: string; year: number | null; type: "movie" | "show"; requiredSeasons?: number[] },
   inventory: LibraryInventoryItem[],
 ) {
   const title = normalizeLibraryTitle(work.title);
-  return inventory.find((item) => {
+  const matches = inventory.filter((item) => {
     if (item.type !== work.type || normalizeLibraryTitle(item.title) !== title) return false;
     if (work.year !== null) return item.year === work.year;
     return true;
   });
+  if (work.type !== "show" || !work.requiredSeasons?.length) return matches[0];
+  const covered = new Set(matches.flatMap((item) => item.seasons || []));
+  return work.requiredSeasons.every((season) => covered.has(season)) ? matches[0] : undefined;
+}
+
+export function missingLibrarySeasons(
+  work: { title: string; year: number | null; type: "movie" | "show"; requiredSeasons: number[] },
+  inventory: LibraryInventoryItem[],
+) {
+  if (work.type !== "show" || !work.requiredSeasons.length) return work.requiredSeasons;
+  const title = normalizeLibraryTitle(work.title);
+  const covered = new Set(inventory.flatMap((item) => {
+    if (item.type !== "show" || normalizeLibraryTitle(item.title) !== title) return [];
+    if (work.year !== null && item.year !== work.year) return [];
+    return item.seasons || [];
+  }));
+  return work.requiredSeasons.filter((season) => !covered.has(season));
+}
+
+async function mapWithConcurrency<T, R>(values: T[], concurrency: number, callback: (value: T) => Promise<R>) {
+  const output = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++;
+      output[index] = await callback(values[index]);
+    }
+  });
+  await Promise.all(workers);
+  return output;
+}
+
+async function plexShowSeasons(ratingKey: string, token: string, plexUrl: string, signal?: AbortSignal) {
+  const response = await fetch(`${plexUrl}/library/metadata/${encodeURIComponent(ratingKey)}/children`, {
+    headers: { Accept: "application/json", "X-Plex-Token": token },
+    signal: requestSignal(signal),
+  });
+  if (!response.ok) throw new Error(`Plex season inventory returned HTTP ${response.status}`);
+  const payload = await response.json() as { MediaContainer?: { Metadata?: PlexMetadata[] } };
+  return [...new Set((payload.MediaContainer?.Metadata ?? [])
+    .filter((entry) => entry.type === "season" && Number.isInteger(entry.index) && entry.index! > 0)
+    .map((entry) => entry.index!))]
+    .sort((left, right) => left - right);
 }
 
 async function plexSectionInventory(
@@ -82,7 +131,7 @@ async function plexSectionInventory(
   plexUrl: string,
   signal?: AbortSignal,
 ) {
-  const items: LibraryInventoryItem[] = [];
+  const items: Array<{ item: LibraryInventoryItem; ratingKey: string }> = [];
   const metadataType = type === "movie" ? "1" : "2";
   for (let start = 0; start < maximumItems; start += pageSize) {
     const url = new URL(`${plexUrl}/library/sections/${encodeURIComponent(sectionId)}/all`);
@@ -101,18 +150,29 @@ async function plexSectionInventory(
     for (const entry of metadata) {
       if (!entry.title) continue;
       items.push({
-        id: `plex-${type}-${entry.ratingKey || `${start + items.length}`}`,
-        title: entry.title,
-        year: Number.isInteger(entry.year) ? entry.year! : null,
-        type,
-        source: "plex",
-        status: "in library",
+        ratingKey: entry.ratingKey || `${start + items.length}`,
+        item: {
+          id: `plex-${type}-${entry.ratingKey || `${start + items.length}`}`,
+          title: entry.title,
+          year: Number.isInteger(entry.year) ? entry.year! : null,
+          type,
+          source: "plex",
+          status: "in library",
+          seasons: [],
+        },
       });
     }
     const totalSize = payload.MediaContainer?.totalSize;
     if (metadata.length < pageSize || (typeof totalSize === "number" && start + metadata.length >= totalSize)) break;
   }
-  return items;
+  if (type === "movie") return items.map((entry) => entry.item);
+  return mapWithConcurrency(items, 6, async ({ item, ratingKey }) => {
+    try {
+      return { ...item, seasons: await plexShowSeasons(ratingKey, token, plexUrl, signal) };
+    } catch {
+      return item;
+    }
+  });
 }
 
 async function plexSections(token: string, plexUrl: string, signal?: AbortSignal) {
@@ -141,7 +201,11 @@ async function queueInventory(batchDir: string) {
     if (!item.id || !item.destination?.path || !["movie", "show"].includes(item.destination.type || "")) return [];
     const status = state.items?.[item.id]?.status || "pending";
     if (status === "failed" && !existsSync(item.destination.path)) return [];
-    const destination = titleAndYear(basename(item.destination.path));
+    const destinationBase = basename(item.destination.path);
+    const showRoot = item.destination.type === "show" && /^Season\s+\d+$/i.test(destinationBase)
+      ? basename(dirname(item.destination.path))
+      : destinationBase;
+    const destination = titleAndYear(showRoot);
     const fallback = titleAndYear(item.title || "");
     const title = destination.title || fallback.title;
     if (!title) return [];
@@ -152,6 +216,10 @@ async function queueInventory(batchDir: string) {
       type: item.destination.type as "movie" | "show",
       source: "queue",
       status,
+      seasons: item.destination.type === "show"
+        ? seasonNumbersFromManifest(`${item.title || ""} ${item.payloadName || ""} ${item.destination.path}`, item.selectedPaths || [])
+          .filter((season) => season > 0)
+        : [],
     }];
   });
 }
@@ -189,7 +257,14 @@ export async function loadLibraryInventory(signal?: AbortSignal) {
   const deduped = new Map<string, LibraryInventoryItem>();
   for (const item of [...plexItems, ...queueItems]) {
     const key = `${item.type}:${normalizeLibraryTitle(item.title)}:${item.year ?? ""}`;
-    if (!deduped.has(key)) deduped.set(key, item);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, item);
+      continue;
+    }
+    const seasons = [...new Set([...(existing.seasons || []), ...(item.seasons || [])])].sort((left, right) => left - right);
+    if (item.source === "plex" && existing.source !== "plex") deduped.set(key, { ...item, seasons });
+    else deduped.set(key, { ...existing, seasons });
   }
   return { items: [...deduped.values()], warnings };
 }

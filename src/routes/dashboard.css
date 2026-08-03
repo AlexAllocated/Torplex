@@ -1051,6 +1051,19 @@
       font-weight: 850;
     }
     .search-prompt-field textarea { min-height: 104px; font-size: 14px; }
+    .search-quality-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, .34fr) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid rgb(var(--phosphor-main) / .18);
+      background: rgb(var(--phosphor-main) / .025);
+    }
+    .quality-controls > summary { cursor: pointer; color: rgb(var(--phosphor-soft)); font-size: 12px; }
+    .quality-control-grid { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 10px; padding-top: 12px; }
+    .quality-control-grid .intake-field { gap: 5px; }
+    .quality-control-grid .field-hint { color: rgb(var(--phosphor-soft) / .55); font-size: 9px; }
     .search-attestation { margin-top: 0; }
     .search-progress {
       display: grid;
@@ -1085,6 +1098,8 @@
     .missing-results { border-left: 3px solid rgba(247, 198, 95, .62); background: rgba(247, 198, 95, .05); }
     .owned-results { border-left: 3px solid rgba(83, 220, 177, .62); background: rgba(83, 220, 177, .05); }
     .missing-results div, .owned-results div { display: grid; grid-template-columns: minmax(160px, .35fr) 1fr; gap: 10px; padding-top: 8px; color: var(--muted); font-size: 11px; }
+    .missing-results .missing-result-row { grid-template-columns: minmax(160px, .35fr) minmax(0, 1fr) auto; align-items: center; }
+    .retry-source-button { min-width: 118px; }
     .missing-results strong { color: #f3e8ca; }
     .owned-results strong { color: #baf4dd; }
     .proposal-actions { padding-top: 4px; }
@@ -1765,6 +1780,10 @@
       .proposal-row { grid-template-columns: auto minmax(0, 1fr); }
       .proposal-release { grid-column: 2; }
       .missing-results div, .owned-results div { grid-template-columns: 1fr; }
+      .missing-results .missing-result-row { grid-template-columns: 1fr; }
+      .retry-source-button { justify-self: start; }
+      .search-quality-panel { grid-template-columns: 1fr; }
+      .quality-control-grid { grid-template-columns: 1fr 1fr; }
       .bulk-item-head { grid-template-columns: 28px minmax(0, 1fr); }
       .bulk-item-head .status-pill, .bulk-item-head .danger-button { grid-column: 2; grid-row: auto; justify-self: start; }
       .selection-actions { grid-column: 1 / -1; }

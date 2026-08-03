@@ -1,6 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { beginCrtActivity } from '$lib/client/crt-activity.js';
   import IntakeItem from './IntakeItem.svelte';
 
@@ -22,6 +22,14 @@
   let dialogMode = 'idle';
   let queueError = '';
   let stopSearchActivity = null;
+  let retryingTargets = new Set();
+  const qualityPresets = {
+    balanced: { preset: 'balanced', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 2160, hdrMode: 'allow', codec: 'any', maxSourceGiB: 0 },
+    compatibility: { preset: 'compatibility', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 1080, hdrMode: 'avoid', codec: 'h264', maxSourceGiB: 0 },
+    compact: { preset: 'compact', preferredResolution: 720, minimumResolution: 480, maximumResolution: 1080, hdrMode: 'allow', codec: 'h265', maxSourceGiB: 12 },
+    maximum: { preset: 'maximum', preferredResolution: 2160, minimumResolution: 1080, maximumResolution: 2160, hdrMode: 'prefer', codec: 'any', maxSourceGiB: 0 },
+  };
+  let qualityProfile = { ...qualityPresets.balanced };
 
   $: readyItems = items.map((item) => snapshots.get(item.clientId)).filter((item) => item?.ready);
   $: unresolvedItems = items.length - readyItems.length;
@@ -73,7 +81,39 @@
     snapshots = new Map(snapshots).set(snapshot.clientId, snapshot);
   }
 
-  async function readNdjson(response, onProgress) {
+  function selectAllProposals(proposal) {
+    selectedProposals = new Set((proposal?.selections || []).map((selection) => selection.selectionId || selection.candidateId));
+  }
+
+  function applySearchSession(session, { select = false } = {}) {
+    if (!session) return;
+    activeView = 'search';
+    activeSearchId = session.id;
+    searchPrompt = session.prompt || searchPrompt;
+    if (session.qualityProfile) qualityProfile = { ...session.qualityProfile };
+    searchProgress = Array.isArray(session.progress) ? session.progress : [];
+    searchRunning = session.status === 'running';
+    if (session.proposal) {
+      searchProposal = session.proposal;
+      if (select) selectAllProposals(searchProposal);
+    }
+    if (session.status === 'running') {
+      dialogStatus = 'Searching';
+      dialogMode = 'busy';
+    } else if (session.status === 'completed') {
+      dialogStatus = `${session.proposal?.selections?.length || 0} proposed`;
+      dialogMode = 'ready';
+    } else if (session.status === 'cancelled') {
+      dialogStatus = 'Search cancelled';
+      dialogMode = 'idle';
+    } else if (session.status === 'failed') {
+      queueError = session.error || 'Search failed';
+      dialogStatus = queueError;
+      dialogMode = 'error';
+    }
+  }
+
+  async function readNdjson(response, onProgress, onSession = () => {}) {
     if (!response.ok || !response.body) {
       let message = `Request failed with HTTP ${response.status}`;
       try { message = (await response.json()).error || message; } catch { /* response was not JSON */ }
@@ -93,12 +133,29 @@
         if (!line.trim()) continue;
         const event = JSON.parse(line);
         if (event.type === 'progress') onProgress(event.message);
+        else if (event.type === 'session') {
+          onSession(event.session);
+          if (event.session?.status === 'completed') result = { proposal: event.session.proposal };
+          else if (event.session?.status === 'failed') throw new Error(event.session.error || 'Search failed');
+          else if (event.session?.status === 'cancelled') result = { cancelled: true };
+        }
         else if (event.type === 'result') result = event;
         else if (event.type === 'error') throw new Error(event.error || 'Request failed');
       }
     }
     if (!result) throw new Error('Request ended without a result');
     return result;
+  }
+
+  async function watchSearchSession(searchId, controller, { select = false } = {}) {
+    const response = await fetch(`/api/torrent/search/events?searchId=${encodeURIComponent(searchId)}`, {
+      signal: controller.signal,
+    });
+    return readNdjson(
+      response,
+      (message) => searchProgress = [...searchProgress, message],
+      (session) => applySearchSession(session, { select: select && session.status === 'completed' }),
+    );
   }
 
   async function responsePayload(response) {
@@ -124,20 +181,29 @@
     const searchId = `search-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
     searchController = controller;
     activeSearchId = searchId;
+    localStorage.removeItem('torplex:search-consumed');
     const stopActivity = beginCrtActivity('ai');
     stopSearchActivity = stopActivity;
     try {
       const response = await fetch('/api/torrent/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: searchPrompt.trim(), rightsConfirmed: true, searchId }),
+        body: JSON.stringify({ prompt: searchPrompt.trim(), rightsConfirmed: true, searchId, qualityProfile }),
         signal: controller.signal,
       });
-      const result = await readNdjson(response, (message) => searchProgress = [...searchProgress, message]);
-      searchProposal = result.proposal;
-      selectedProposals = new Set((searchProposal.selections || []).map((selection) => selection.selectionId || selection.candidateId));
-      dialogStatus = `${searchProposal.selections.length} proposed`;
-      dialogMode = 'ready';
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/x-ndjson')) {
+        const result = await readNdjson(response, (message) => searchProgress = [...searchProgress, message]);
+        searchProposal = result.proposal;
+        selectAllProposals(searchProposal);
+        dialogStatus = `${searchProposal.selections.length} proposed`;
+        dialogMode = 'ready';
+      } else {
+        const payload = await responsePayload(response);
+        if (!response.ok) throw new Error(payload.error || `Search failed with HTTP ${response.status}`);
+        applySearchSession(payload.session);
+        await watchSearchSession(searchId, controller, { select: true });
+      }
     } catch (caught) {
       if (controller.signal.aborted) {
         if (searchController === controller) {
@@ -155,7 +221,6 @@
       if (stopSearchActivity === stopActivity) stopSearchActivity = null;
       if (searchController === controller) {
         searchController = null;
-        activeSearchId = '';
         searchRunning = false;
       }
     }
@@ -166,7 +231,6 @@
     const controller = searchController;
     const searchId = activeSearchId;
     searchController = null;
-    activeSearchId = '';
     searchRunning = false;
     searchProgress = [...searchProgress, 'Search cancelled'];
     dialogStatus = 'Search cancelled';
@@ -177,6 +241,47 @@
       body: JSON.stringify({ searchId }),
     }).catch(() => {});
     controller.abort();
+  }
+
+  function chooseQualityPreset(preset) {
+    if (qualityPresets[preset]) qualityProfile = { ...qualityPresets[preset] };
+  }
+
+  function customizeQuality(field, value) {
+    qualityProfile = { ...qualityProfile, preset: 'custom', [field]: value };
+  }
+
+  async function retrySearchTarget(targetId) {
+    if (!activeSearchId || retryingTargets.has(targetId)) return;
+    retryingTargets = new Set(retryingTargets).add(targetId);
+    queueError = '';
+    dialogStatus = 'Retrying source';
+    dialogMode = 'busy';
+    const stopActivity = beginCrtActivity('ai');
+    try {
+      const response = await fetch('/api/torrent/search/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ searchId: activeSearchId, targetId }),
+      });
+      const result = await readNdjson(response, (message) => searchProgress = [...searchProgress, message]);
+      searchProposal = result.proposal;
+      const nextSelections = new Set(selectedProposals);
+      const retried = searchProposal.selections.find((selection) => selection.targetId === targetId);
+      if (retried) nextSelections.add(retried.selectionId || retried.candidateId);
+      selectedProposals = nextSelections;
+      dialogStatus = retried ? 'Retry found a source' : 'Retry finished without a source';
+      dialogMode = retried ? 'ready' : 'error';
+    } catch (caught) {
+      queueError = caught instanceof Error ? caught.message : String(caught);
+      dialogStatus = queueError;
+      dialogMode = 'error';
+    } finally {
+      stopActivity();
+      const next = new Set(retryingTargets);
+      next.delete(targetId);
+      retryingTargets = next;
+    }
   }
 
   function toggleProposal(selectionId, checked) {
@@ -218,6 +323,7 @@
     searchProgress = [];
     searchPrompt = '';
     searchRightsConfirmed = false;
+    if (activeSearchId) localStorage.setItem('torplex:search-consumed', activeSearchId);
     dialogStatus = `${selected.length} item${selected.length === 1 ? '' : 's'} preparing`;
     dialogMode = 'busy';
   }
@@ -265,6 +371,35 @@
     stopSearchActivity = null;
   });
 
+  onMount(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch('/api/torrent/search');
+        if (!response.ok) return;
+        const payload = await response.json();
+        const session = payload.session;
+        if (!session) return;
+        const consumed = localStorage.getItem('torplex:search-consumed');
+        if (session.status === 'completed' && consumed === session.id) return;
+        applySearchSession(session, { select: session.status === 'completed' });
+        if (session.status !== 'running') return;
+        searchController = controller;
+        const stopActivity = beginCrtActivity('ai');
+        stopSearchActivity = stopActivity;
+        try { await watchSearchSession(session.id, controller, { select: true }); }
+        finally {
+          stopActivity();
+          if (stopSearchActivity === stopActivity) stopSearchActivity = null;
+          if (searchController === controller) searchController = null;
+        }
+      } catch (caught) {
+        if (!controller.signal.aborted) queueError = caught instanceof Error ? caught.message : String(caught);
+      }
+    })();
+    return () => controller.abort();
+  });
+
   addItem();
 </script>
 
@@ -295,6 +430,29 @@
         <div class="intake-field search-prompt-field">
           <label for="catalogSearchPrompt">What do you want to find?</label>
           <textarea id="catalogSearchPrompt" rows="4" bind:value={searchPrompt} placeholder="Example: All live-action Batman movies starting with the 1989 Michael Keaton film"></textarea>
+        </div>
+        <div class="search-quality-panel">
+          <div class="intake-field quality-preset-field">
+            <label for="searchQualityPreset">Quality profile</label>
+            <select id="searchQualityPreset" value={qualityProfile.preset} on:change={(event) => chooseQualityPreset(event.currentTarget.value)}>
+              <option value="balanced">Balanced 1080p</option>
+              <option value="compatibility">Maximum compatibility</option>
+              <option value="compact">Compact files</option>
+              <option value="maximum">Maximum quality</option>
+              {#if qualityProfile.preset === 'custom'}<option value="custom">Custom</option>{/if}
+            </select>
+          </div>
+          <details class="quality-controls">
+            <summary>Customize quality constraints</summary>
+            <div class="quality-control-grid">
+              <div class="intake-field"><label for="qualityMinimum">Minimum</label><select id="qualityMinimum" value={qualityProfile.minimumResolution} on:change={(event) => customizeQuality('minimumResolution', Number(event.currentTarget.value))}><option value="0">Any</option><option value="480">480p</option><option value="720">720p</option><option value="1080">1080p</option><option value="2160">2160p</option></select></div>
+              <div class="intake-field"><label for="qualityPreferred">Preferred</label><select id="qualityPreferred" value={qualityProfile.preferredResolution} on:change={(event) => customizeQuality('preferredResolution', Number(event.currentTarget.value))}><option value="0">Any</option><option value="720">720p</option><option value="1080">1080p</option><option value="2160">2160p</option></select></div>
+              <div class="intake-field"><label for="qualityMaximum">Maximum</label><select id="qualityMaximum" value={qualityProfile.maximumResolution} on:change={(event) => customizeQuality('maximumResolution', Number(event.currentTarget.value))}><option value="0">No limit</option><option value="720">720p</option><option value="1080">1080p</option><option value="2160">2160p</option></select></div>
+              <div class="intake-field"><label for="qualityCodec">Codec</label><select id="qualityCodec" value={qualityProfile.codec} on:change={(event) => customizeQuality('codec', event.currentTarget.value)}><option value="any">Any</option><option value="h264">H.264</option><option value="h265">H.265 / HEVC</option></select></div>
+              <div class="intake-field"><label for="qualityHdr">HDR</label><select id="qualityHdr" value={qualityProfile.hdrMode} on:change={(event) => customizeQuality('hdrMode', event.currentTarget.value)}><option value="allow">Allow</option><option value="avoid">Avoid</option><option value="prefer">Prefer</option></select></div>
+              <div class="intake-field"><label for="qualitySize">Max source GiB</label><input id="qualitySize" type="number" min="0" max="1000" step="1" value={qualityProfile.maxSourceGiB} on:change={(event) => customizeQuality('maxSourceGiB', Number(event.currentTarget.value))} /><span class="field-hint">0 means no limit</span></div>
+            </div>
+          </details>
         </div>
         <label class="rights-attestation search-attestation" for="searchRightsConfirmed">
           <input id="searchRightsConfirmed" type="checkbox" bind:checked={searchRightsConfirmed} />
@@ -327,7 +485,7 @@
               <label class="proposal-row">
                 <input type="checkbox" checked={selectedProposals.has(selection.selectionId || selection.candidateId)} on:change={(event) => toggleProposal(selection.selectionId || selection.candidateId, event.currentTarget.checked)} />
                 <div class="proposal-work"><strong>{selection.work.title}{selection.work.year ? ` (${selection.work.year})` : ''}</strong><span>{selection.work.type} · {selection.scopeLabel || (selection.work.type === 'show' ? 'Complete series' : 'Movie')}</span></div>
-                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.metadata?.fileCount || 0} files · {fmt(selection.metadata?.totalBytes || selection.candidate.sizeBytes)} · metadata verified{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
+                <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.metadata?.fileCount || 0} files · {fmt(selection.metadata?.totalBytes || selection.candidate.sizeBytes)} · metadata verified{selection.candidate.providerReliability?.attempts ? ` · ${Math.round(selection.candidate.providerReliability.manifestSuccessRate * 100)}% provider manifests (${selection.candidate.providerReliability.attempts})` : ' · new provider'}{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
               </label>
             {/each}
           </div>
@@ -335,7 +493,7 @@
             <details class="owned-results" open><summary>{searchProposal.alreadyOwned.length} existing title{searchProposal.alreadyOwned.length === 1 ? '' : 's'} skipped</summary>{#each searchProposal.alreadyOwned as entry}<div><strong>{entry.inventoryItem.title}{entry.inventoryItem.year ? ` (${entry.inventoryItem.year})` : ''}</strong><span>{entry.inventoryItem.source === 'plex' ? 'Already in Plex' : `Already ${entry.inventoryItem.status} in Torplex`}. {entry.reason}</span></div>{/each}</details>
           {/if}
           {#if searchProposal.missing.length}
-            <details class="missing-results"><summary>{searchProposal.missing.length} source{searchProposal.missing.length === 1 ? '' : 's'} still need manual sourcing</summary>{#each searchProposal.missing as entry}<div><strong>{entry.work.title}{entry.work.year ? ` (${entry.work.year})` : ''} · {entry.scopeLabel || entry.work.type}</strong><span>{entry.reason}</span></div>{/each}</details>
+            <details class="missing-results" open><summary>{searchProposal.missing.length} source{searchProposal.missing.length === 1 ? '' : 's'} still need sourcing</summary>{#each searchProposal.missing as entry}<div class="missing-result-row"><strong>{entry.work.title}{entry.work.year ? ` (${entry.work.year})` : ''} · {entry.scopeLabel || entry.work.type}</strong><span>{entry.reason}</span><button class="secondary-button retry-source-button" type="button" disabled={retryingTargets.has(entry.targetId)} on:click={() => retrySearchTarget(entry.targetId)}>{retryingTargets.has(entry.targetId) ? 'Retrying...' : `Retry ${entry.scopeLabel || 'source'}`}</button></div>{/each}</details>
           {/if}
           <div class="search-actions proposal-actions">
             <span class="small">Confirming creates editable intake sections and starts Smart Setup for each selected result.</span>
