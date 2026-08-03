@@ -506,7 +506,7 @@ export function startCrtTerminal() {
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
       voice.volume = Math.min(.18, (.1 + currentDensity * .07) * accent);
-      voice.playbackRate = .88 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
+      voice.playbackRate = .44 + Math.random() * .07 + Math.sin(burstProgress * Math.PI) * .009;
       void playElement(voice);
       diskEventCount += 1;
       body.dataset.diskEventCount = String(diskEventCount);
