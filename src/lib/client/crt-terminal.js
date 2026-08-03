@@ -222,7 +222,7 @@ export function createTerminalDriveSamples(sampleRate, durationSeconds, seed = 1
   return samples;
 }
 
-function createWavUrl(durationSeconds, sampleAt) {
+function createWavUrl(durationSeconds, sampleAt, { bitcrush = true } = {}) {
   const sampleRate = 22050;
   const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
   const buffer = new ArrayBuffer(44 + sampleCount * 2);
@@ -247,7 +247,7 @@ function createWavUrl(durationSeconds, sampleAt) {
   for (let index = 0; index < sampleCount; index += 1) {
     rawSamples[index] = Math.max(-1, Math.min(1, Number(sampleAt(index / sampleRate, index, sampleCount)) || 0));
   }
-  const samples = bitcrushTerminalSamples(rawSamples, sampleRate);
+  const samples = bitcrush ? bitcrushTerminalSamples(rawSamples, sampleRate) : rawSamples;
   for (let index = 0; index < sampleCount; index += 1) {
     view.setInt16(44 + index * 2, Math.round((samples[index] || 0) * 32767), true);
   }
@@ -257,7 +257,7 @@ function createWavUrl(durationSeconds, sampleAt) {
 function createDriveWavUrl(durationSeconds, seed, intensity) {
   const sampleRate = 22050;
   const samples = createTerminalDriveSamples(sampleRate, durationSeconds, seed, intensity);
-  return createWavUrl(durationSeconds, (_time, index) => (samples[index] || 0) * 3.2);
+  return createWavUrl(durationSeconds, (_time, index) => (samples[index] || 0) * 3.2, { bitcrush: false });
 }
 
 function createTerminalMediaBank() {

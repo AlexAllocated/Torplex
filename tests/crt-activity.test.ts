@@ -21,8 +21,8 @@ describe('CRT activity registry', () => {
   });
 });
 
-describe('terminal bitcrusher', () => {
-  test('quantizes and sample-holds every generated terminal sound', () => {
+describe('terminal sound synthesis', () => {
+  test('quantizes and sample-holds filtered terminal tones', () => {
     const source = Float32Array.from({ length: 32 }, (_, index) => Math.sin(index * 0.37) * 0.83);
     const processed = bitcrushTerminalSamples(source, 22_050, 8, 16_000);
     expect(processed).toHaveLength(source.length);
