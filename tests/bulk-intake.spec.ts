@@ -7,13 +7,18 @@ function ndjson(payload: Record<string, unknown>) {
   return `${JSON.stringify({ type: "progress", message: "Working" })}\n${JSON.stringify({ type: "result", ...payload })}\n`;
 }
 
+async function checkWarpedControl(locator: ReturnType<import("@playwright/test").Page["locator"]>) {
+  await locator.evaluate((element: HTMLInputElement) => element.click());
+  await expect(locator).toBeChecked();
+}
+
 test("AI search proposals become independently planned bulk intake items", async ({ page }) => {
   test.skip(!baseUrl || !password, "Torplex URL and password are required");
   test.setTimeout(60_000);
 
   const works = [
-    { id: "alpha-2001", title: "Alpha", year: 2001, type: "movie", searchQuery: "Alpha 2001", notes: "" },
-    { id: "beta-2002", title: "Beta", year: 2002, type: "movie", searchQuery: "Beta 2002", notes: "" },
+    { id: "alpha-2001", title: "Alpha", year: 2001, type: "movie", searchQuery: "Alpha 2001", notes: "", requiredSeasons: [] },
+    { id: "beta-2002", title: "Beta", year: 2002, type: "movie", searchQuery: "Beta 2002", notes: "", requiredSeasons: [] },
   ];
   await page.route("**/api/torrent/search", async (route) => {
     await route.fulfill({
@@ -28,7 +33,11 @@ test("AI search proposals become independently planned bulk intake items", async
             reason: "Excluded because it is already in Plex",
           }],
           selections: works.map((work, index) => ({
+            selectionId: work.id,
             workId: work.id,
+            targetId: work.id,
+            scopeLabel: "Movie",
+            seasonNumber: null,
             candidateId: `candidate-${index}`,
             reason: "Exact title, year, and healthy swarm",
             confidence: "high",
@@ -64,6 +73,7 @@ test("AI search proposals become independently planned bulk intake items", async
               totalBytes: 4_000_001_024,
               fileCount: 2,
               sampleFiles: [`${work.title} (${work.year})/${work.title} (${work.year}).mkv`],
+              seasonNumbers: [],
             },
           })),
           missing: [],
@@ -152,7 +162,7 @@ test("AI search proposals become independently planned bulk intake items", async
   await expect(page.locator("#crtBootTrigger")).toBeHidden();
   await page.getByRole("tab", { name: "Find with AI" }).click();
   await page.getByLabel("What do you want to find?").fill("Find both fixture films");
-  await page.getByLabel(/I will use these search results only/).check();
+  await checkWarpedControl(page.getByLabel(/I will use these search results only/));
   await page.getByRole("button", { name: "Build proposal" }).click();
   await expect(page.locator(".proposal-row")).toHaveCount(2);
   await expect(page.getByText("Event Horizon (1997)")).toBeVisible();
@@ -168,7 +178,7 @@ test("AI search proposals become independently planned bulk intake items", async
   await expect(page.getByText("Fallback source active")).toBeVisible();
   expect(primaryFailures).toBe(1);
   expect(fallbackInspections).toBe(1);
-  await page.getByLabel(/I confirm that I have the rights or authorization required/).check();
+  await checkWarpedControl(page.getByLabel(/I confirm that I have the rights or authorization required/));
   await expect(page.getByRole("button", { name: "Add 2 selected items" })).toBeEnabled();
   await page.screenshot({ path: "/home/alex/code/Torplex/test-results/torplex-bulk-intake.png", fullPage: false });
   await page.getByRole("button", { name: "Add 2 selected items" }).click();
@@ -192,7 +202,7 @@ test("an active AI search can be cancelled", async ({ page }) => {
   await expect(page.locator("#crtBootTrigger")).toBeHidden();
   await page.getByRole("tab", { name: "Find with AI" }).click();
   await page.getByLabel("What do you want to find?").fill("Find ten science fiction horror films");
-  await page.getByLabel(/I will use these search results only/).check();
+  await checkWarpedControl(page.getByLabel(/I will use these search results only/));
   await page.getByRole("button", { name: "Build proposal" }).click();
   await expect(page.getByRole("button", { name: "Cancel search" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel search" }).click();

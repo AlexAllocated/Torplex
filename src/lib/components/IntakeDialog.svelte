@@ -135,7 +135,7 @@
       });
       const result = await readNdjson(response, (message) => searchProgress = [...searchProgress, message]);
       searchProposal = result.proposal;
-      selectedProposals = new Set((searchProposal.selections || []).map((selection) => selection.candidateId));
+      selectedProposals = new Set((searchProposal.selections || []).map((selection) => selection.selectionId || selection.candidateId));
       dialogStatus = `${searchProposal.selections.length} proposed`;
       dialogMode = 'ready';
     } catch (caught) {
@@ -179,15 +179,15 @@
     controller.abort();
   }
 
-  function toggleProposal(candidateId, checked) {
+  function toggleProposal(selectionId, checked) {
     const next = new Set(selectedProposals);
-    if (checked) next.add(candidateId);
-    else next.delete(candidateId);
+    if (checked) next.add(selectionId);
+    else next.delete(selectionId);
     selectedProposals = next;
   }
 
   function acceptProposal() {
-    const selected = (searchProposal?.selections || []).filter((selection) => selectedProposals.has(selection.candidateId));
+    const selected = (searchProposal?.selections || []).filter((selection) => selectedProposals.has(selection.selectionId || selection.candidateId));
     const emptyIds = new Set(items
       .filter((item) => {
         const snapshot = snapshots.get(item.clientId);
@@ -200,11 +200,17 @@
     }
     for (const selection of selected) {
       const year = selection.work.year ? ` (${selection.work.year})` : '';
+      const season = selection.seasonNumber ? String(selection.seasonNumber).padStart(2, '0') : '';
+      const seasonScope = selection.seasonNumber
+        ? ` Include only Season ${season} (S${season}) and organize it as a single TV season under ${selection.work.title}${year}/Season ${season}.`
+        : selection.work.type === 'show'
+          ? ` Include every requested season (${(selection.work.requiredSeasons || []).map((season) => `S${String(season).padStart(2, '0')}`).join(', ') || 'complete series'}) and organize each season separately under ${selection.work.title}${year}.`
+          : '';
       addItem({
         sourceUrl: selection.candidate.sourceUrl,
         alternatives: selection.alternatives || [],
         work: selection.work,
-        instructions: `Include only ${selection.work.title}${year}, matching the requested ${selection.work.type}. Exclude unrelated titles, samples, and extras.`,
+        instructions: `Include only ${selection.work.title}${year}, matching the requested ${selection.work.type}.${seasonScope} Exclude unrelated titles, samples, and extras.`,
       });
     }
     searchProposal = null;
@@ -283,7 +289,7 @@
     {#if activeView === 'search'}
       <section class="search-workspace">
         <div class="search-intro">
-          <div><div class="step-title">Describe a collection</div><div class="small">Torplex resolves exact titles, searches the configured qBittorrent Nova providers, and proposes one release per title. Nothing is queued until you review the proposal and finish Smart Setup.</div></div>
+          <div><div class="step-title">Describe a collection</div><div class="small">Torplex resolves exact titles, verifies complete-series coverage, and falls back to independent season sources when needed. Nothing is queued until you review the proposal and finish Smart Setup.</div></div>
           <div class="search-provider-note">Admin-installed providers only</div>
         </div>
         <div class="intake-field search-prompt-field">
@@ -314,13 +320,13 @@
         {#if searchProposal}
           <div class="proposal-head">
             <div><div class="step-title">Review search proposal</div><div class="small">{searchProposal.summary}</div></div>
-            <div class="proposal-count">{selectedProposals.size} selected</div>
+            <div class="proposal-count">{selectedProposals.size} / {searchProposal.selections.length} sources selected</div>
           </div>
           <div class="proposal-list">
             {#each searchProposal.selections as selection}
               <label class="proposal-row">
-                <input type="checkbox" checked={selectedProposals.has(selection.candidateId)} on:change={(event) => toggleProposal(selection.candidateId, event.currentTarget.checked)} />
-                <div class="proposal-work"><strong>{selection.work.title}{selection.work.year ? ` (${selection.work.year})` : ''}</strong><span>{selection.work.type}</span></div>
+                <input type="checkbox" checked={selectedProposals.has(selection.selectionId || selection.candidateId)} on:change={(event) => toggleProposal(selection.selectionId || selection.candidateId, event.currentTarget.checked)} />
+                <div class="proposal-work"><strong>{selection.work.title}{selection.work.year ? ` (${selection.work.year})` : ''}</strong><span>{selection.work.type} · {selection.scopeLabel || (selection.work.type === 'show' ? 'Complete series' : 'Movie')}</span></div>
                 <div class="proposal-release"><strong title={selection.candidate.name}>{selection.candidate.name}</strong><span>{selection.candidate.provider} · {selection.candidate.seeders} seeds · {selection.metadata?.fileCount || 0} files · {fmt(selection.metadata?.totalBytes || selection.candidate.sizeBytes)} · metadata verified{selection.alternatives?.length ? ` · ${selection.alternatives.length} fallback${selection.alternatives.length === 1 ? '' : 's'}` : ''}</span><small>{selection.reason}</small></div>
               </label>
             {/each}
@@ -329,7 +335,7 @@
             <details class="owned-results" open><summary>{searchProposal.alreadyOwned.length} existing title{searchProposal.alreadyOwned.length === 1 ? '' : 's'} skipped</summary>{#each searchProposal.alreadyOwned as entry}<div><strong>{entry.inventoryItem.title}{entry.inventoryItem.year ? ` (${entry.inventoryItem.year})` : ''}</strong><span>{entry.inventoryItem.source === 'plex' ? 'Already in Plex' : `Already ${entry.inventoryItem.status} in Torplex`}. {entry.reason}</span></div>{/each}</details>
           {/if}
           {#if searchProposal.missing.length}
-            <details class="missing-results"><summary>{searchProposal.missing.length} title{searchProposal.missing.length === 1 ? '' : 's'} need manual sourcing</summary>{#each searchProposal.missing as entry}<div><strong>{entry.work.title}</strong><span>{entry.reason}</span></div>{/each}</details>
+            <details class="missing-results"><summary>{searchProposal.missing.length} source{searchProposal.missing.length === 1 ? '' : 's'} still need manual sourcing</summary>{#each searchProposal.missing as entry}<div><strong>{entry.work.title}{entry.work.year ? ` (${entry.work.year})` : ''} · {entry.scopeLabel || entry.work.type}</strong><span>{entry.reason}</span></div>{/each}</details>
           {/if}
           <div class="search-actions proposal-actions">
             <span class="small">Confirming creates editable intake sections and starts Smart Setup for each selected result.</span>

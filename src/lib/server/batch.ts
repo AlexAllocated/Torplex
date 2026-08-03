@@ -6,6 +6,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { basename, join } from "path";
 import { createSmartIntakePlan, smartIntakeConfig } from "$lib/server/smart-intake";
+import { seasonNumbersFromManifest } from "$lib/server/torrent-coverage";
 
 export const root = process.env.BATCH_DIR ?? "/media/plex/.downloads/torrent-batch";
 const ignoredPeerIps = new Set((process.env.IGNORED_PEER_IPS ?? "").split(",").map((ip) => ip.trim()).filter(Boolean));
@@ -1613,6 +1614,7 @@ export async function preflightTorrentSource(
     totalBytes: metadata.totalBytes,
     fileCount: metadata.fileCount,
     sampleFiles: metadata.files.slice(0, 12).map((file) => file.path),
+    seasonNumbers: seasonNumbersFromManifest(metadata.payloadName, metadata.files.map((file) => file.path)),
   };
 }
 

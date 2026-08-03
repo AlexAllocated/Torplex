@@ -178,15 +178,15 @@ Torplex can run the same Python search-plugin contract used by qBittorrent's Nov
 | `TORPLEX_NOVA_SCRIPT` | empty | Absolute path to qBittorrent's `nova3/nova2.py`. |
 | `TORPLEX_PYTHON` | `python3` | Python 3 executable used to launch Nova in isolated mode. |
 | `TORPLEX_SEARCH_PLUGINS` | empty | Comma-separated allowlist of installed Nova plugin module names. |
-| `TORPLEX_SEARCH_TIMEOUT_MS` | `30000` | Per-title provider timeout, clamped to 5-120 seconds. |
-| `TORPLEX_SEARCH_CONCURRENCY` | `2` | Simultaneous title searches, clamped to 1-4. |
+| `TORPLEX_SEARCH_TIMEOUT_MS` | `30000` | Per-target provider timeout, clamped to 5-120 seconds. A target is a movie, complete series, or fallback season. |
+| `TORPLEX_SEARCH_CONCURRENCY` | `2` | Simultaneous movie, series, or season searches, clamped to 1-4. |
 | `TORPLEX_SEARCH_METADATA_TIMEOUT_SECONDS` | `20` | Inactivity timeout for each Find with AI metadata preflight, clamped to 10-120 seconds. |
-| `TORPLEX_SEARCH_METADATA_CONCURRENCY` | `3` | Simultaneous metadata preflights across requested titles, clamped to 1-6. |
-| `TORPLEX_SEARCH_PROVIDER_FAILURE_LIMIT` | `3` | Consecutive unusable manifests allowed per provider and title before its remaining results are skipped, clamped to 1-10. |
-| `TORPLEX_SEARCH_METADATA_CANDIDATE_LIMIT` | `24` | Initial provider-diverse manifest candidates per title, clamped to 4-40. |
-| `TORPLEX_SEARCH_METADATA_MAX_CANDIDATES` | `200` | Maximum candidates considered while adaptively extending a title search, clamped to the initial limit through 400. |
-| `TORPLEX_SEARCH_VERIFIED_CANDIDATE_TARGET` | `4` | Number of usable manifests to collect per title before model selection, clamped to 1-8. |
-| `TORPLEX_SEARCH_METADATA_BUDGET_SECONDS` | `180` | Per-title adaptive manifest-discovery budget before Torplex reports no usable source, clamped to 30-600 seconds. |
+| `TORPLEX_SEARCH_METADATA_CONCURRENCY` | `3` | Simultaneous metadata preflights across requested targets, clamped to 1-6. |
+| `TORPLEX_SEARCH_PROVIDER_FAILURE_LIMIT` | `3` | Consecutive unusable manifests allowed per provider and target before its remaining results are skipped, clamped to 1-10. |
+| `TORPLEX_SEARCH_METADATA_CANDIDATE_LIMIT` | `24` | Initial provider-diverse manifest candidates per target, clamped to 4-40. |
+| `TORPLEX_SEARCH_METADATA_MAX_CANDIDATES` | `200` | Maximum candidates considered while adaptively extending a target search, clamped to the initial limit through 400. |
+| `TORPLEX_SEARCH_VERIFIED_CANDIDATE_TARGET` | `4` | Number of scope-compatible manifests to collect per target before model selection, clamped to 1-8. |
+| `TORPLEX_SEARCH_METADATA_BUDGET_SECONDS` | `180` | Per-target adaptive manifest-discovery budget before Torplex reports no usable source, clamped to 30-600 seconds. |
 | `TORPLEX_METADATA_TIMEOUT_SECONDS` | `60` | Inactivity timeout for manual magnet inspection, clamped to 15-300 seconds. |
 
 On a typical qBittorrent desktop install, Nova lives under a qBittorrent application-data directory such as `~/.local/share/qBittorrent/nova3/`. A server deployment should copy an audited Nova directory to a service-readable location and point `TORPLEX_NOVA_SCRIPT` at its `nova2.py`. Configure only plugin names that exist in that directory's `engines/` folder.
@@ -195,11 +195,12 @@ Nova plugins are executable third-party Python, not passive provider definitions
 
 The **Find with AI** flow works in two review stages:
 
-1. Torplex reads canonical movie/show records from Plex plus pending and active Torplex queue entries. The model resolves the prompt into exact works while excluding this inventory; ranked requests backfill excluded titles so the requested count still refers to new content. Torplex enforces exact title/year/type exclusions again after the model response.
-2. Nova searches each remaining work through the configured provider allowlist. Torplex interleaves providers and retrieves torrent manifests before model selection. Provider-reported seed and leech counts are treated as untrusted hints. A provider is circuit-broken for a title after repeated manifest failures, while healthy alternatives can continue within the configured per-title budget.
-3. The model sees only candidates whose file manifests were actually retrieved. It may select one opaque candidate ID and up to three independently suitable verified fallbacks for each title, but it cannot invent a source URL. Accepted magnets reuse the cached metadata during intake.
-4. Each accepted result runs Smart Setup with a client-side concurrency limit of two. If a previously unverified fallback is later needed, Torplex advances through the remaining reviewed sources. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
-5. A transactional bulk request validates the complete batch before writing torrent descriptors or the queue manifest.
+1. Torplex reads canonical movie/show records from Plex plus pending and active Torplex queue entries. The model resolves the prompt into exact works and an explicit regular-season manifest for each series while excluding this inventory; ranked requests backfill excluded titles so the requested count still refers to new content. Torplex enforces exact title/year/type exclusions again after the model response.
+2. Nova first searches each series as a complete pack through the configured provider allowlist. Torplex inspects every filename in each retrieved manifest and accepts a complete pack only when it covers all requested seasons. If no verified pack does, Torplex automatically expands that series into independent season targets and searches only those targets. Movies remain single targets.
+3. Torplex interleaves providers and retrieves torrent manifests before model selection. Provider-reported seed and leech counts are treated as untrusted hints. A provider is circuit-broken for a target after repeated manifest failures, while healthy alternatives can continue within the configured per-target budget. Verified but incomplete manifests do not satisfy the candidate quota, so the adaptive search keeps widening.
+4. The model sees only candidates whose file manifests were actually retrieved and whose deterministic season coverage matches the target. It may select one opaque candidate ID and up to three independently suitable verified fallbacks for each movie, complete series, or season, but it cannot invent a source URL. Accepted magnets reuse the cached metadata during intake.
+5. Each accepted result runs Smart Setup with a client-side concurrency limit of two. Season-scoped results receive explicit Plex season-folder instructions. If a previously unverified fallback is later needed, Torplex advances through the remaining reviewed sources. Every file selection, Plex path, organizer route, and post-download check remains manually editable.
+6. A transactional bulk request validates the complete batch before writing torrent descriptors or the queue manifest.
 
 Search requires its own rights acknowledgement and never queues or downloads media. Final execution uses the separate batch rights acknowledgement and the same server-side path, payload, malware, and duplicate validation used by manual intake.
 
