@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createCrtActivityRegistry } from '../src/lib/client/crt-activity.js';
-import { bitcrushTerminalSamples, createTerminalDriveSamples } from '../src/lib/client/crt-terminal.js';
+import { bitcrushTerminalSamples } from '../src/lib/client/crt-terminal.js';
 
 describe('CRT activity registry', () => {
   test('keeps concurrent AI work active until the last token is released', () => {
@@ -29,21 +29,5 @@ describe('terminal sound synthesis', () => {
     expect([...processed]).not.toEqual([...source]);
     expect(processed.some((sample, index) => index > 0 && sample === processed[index - 1])).toBe(true);
     expect(processed.every((sample) => Math.abs(sample * 128 - Math.round(sample * 128)) < 0.000001)).toBe(true);
-  });
-
-  test('models deterministic mechanical seeks with true silence between impacts', () => {
-    const samples = createTerminalDriveSamples(22_050, 0.34, 0xa11c, 0.65);
-    const repeated = createTerminalDriveSamples(22_050, 0.34, 0xa11c, 0.65);
-    const peak = samples.reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
-    const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
-    const silentRatio = samples.filter((sample) => Math.abs(sample) < 0.00001).length / samples.length;
-    const attackPeak = samples
-      .slice(0, Math.round(22_050 * 0.01))
-      .reduce((maximum, sample) => Math.max(maximum, Math.abs(sample)), 0);
-    expect([...samples]).toEqual([...repeated]);
-    expect(rms).toBeGreaterThan(0.025);
-    expect(peak / rms).toBeGreaterThan(2.2);
-    expect(silentRatio).toBeGreaterThan(0.12);
-    expect(attackPeak).toBeLessThan(peak * 0.7);
   });
 });

@@ -166,53 +166,6 @@ export function bitcrushTerminalSamples(samples, sourceSampleRate, bitDepth = 8,
   return processed;
 }
 
-export function createTerminalDriveSamples(sampleRate, durationSeconds, seed = 1, intensity = .5) {
-  const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
-  const samples = new Float32Array(sampleCount);
-  let randomState = (Math.abs(Math.trunc(seed)) || 1) >>> 0;
-  const random = () => {
-    randomState += 0x6d2b79f5;
-    let value = randomState;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-  const seekCount = 2 + Math.floor(random() * (2 + intensity * 5));
-  const seeks = Array.from({ length: seekCount }, () => ({
-    time: .018 + random() * Math.max(.01, durationSeconds - .072),
-    frequency: 92 + random() * 118,
-    decay: 42 + random() * 30,
-    strength: .68 + random() * .32,
-    returnDelay: .016 + random() * .018,
-    phase: random() * Math.PI * 2,
-  })).sort((left, right) => left.time - right.time);
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    const time = index / sampleRate;
-    let seek = 0;
-    for (const event of seeks) {
-      const age = time - event.time;
-      if (age < 0 || age > .082) continue;
-      const sweep = event.frequency * (1 - Math.min(.22, age * 2.7));
-      const contact = (
-        Math.sin(Math.PI * 2 * sweep * 2.15 * age + event.phase) * .52
-        + Math.sin(Math.PI * 2 * sweep * 1.38 * age + event.phase * .63) * .28
-      ) * Math.exp(-age * 128);
-      const body = Math.sin(Math.PI * 2 * sweep * age + event.phase * .2) * Math.exp(-age * event.decay) * .72;
-      const returnAge = age - event.returnDelay;
-      const returnStroke = returnAge > 0
-        ? (
-          Math.sin(Math.PI * 2 * sweep * 1.62 * returnAge + event.phase * .35) * .36
-          + Math.sin(Math.PI * 2 * sweep * .74 * returnAge) * .22
-        ) * Math.exp(-returnAge * (event.decay + 34))
-        : 0;
-      seek += (contact + body + returnStroke) * event.strength;
-    }
-    samples[index] = Math.tanh(seek * (.31 + intensity * .09));
-  }
-  return samples;
-}
-
 function createWavUrl(durationSeconds, sampleAt, { bitcrush = true } = {}) {
   const sampleRate = 22050;
   const sampleCount = Math.max(1, Math.floor(durationSeconds * sampleRate));
@@ -243,12 +196,6 @@ function createWavUrl(durationSeconds, sampleAt, { bitcrush = true } = {}) {
     view.setInt16(44 + index * 2, Math.round((samples[index] || 0) * 32767), true);
   }
   return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
-}
-
-function createDriveWavUrl(durationSeconds, seed, intensity) {
-  const sampleRate = 22050;
-  const samples = createTerminalDriveSamples(sampleRate, durationSeconds, seed, intensity);
-  return createWavUrl(durationSeconds, (_time, index) => (samples[index] || 0) * 3.2, { bitcrush: false });
 }
 
 function createTerminalMediaBank() {
@@ -298,9 +245,35 @@ function createTerminalMediaBank() {
       const frequency = 255 - progress * 120;
       return Math.sin(tau * frequency * time) * Math.sin(Math.PI * progress) ** 1.15 * .2;
     }),
-    diskTickLight: createDriveWavUrl(.24, 0x51a7, .34),
-    diskTickSeek: createDriveWavUrl(.34, 0xa11c, .65),
-    diskTickClack: createDriveWavUrl(.46, 0xc1a6, .92),
+    diskTickLight: createWavUrl(.052, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 91.733 + 4.17) * 43758.5453) % 1) * 2 - 1;
+      const envelope = (1 - Math.exp(-progress * 110)) * Math.exp(-progress * 15);
+      const mechanism = Math.sin(tau * (44 - progress * 22) * time);
+      return (mechanism * .88 + noise * .12) * envelope * .2;
+    }),
+    diskTickSeek: createWavUrl(.082, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 73.913 + 8.61) * 24634.6345) % 1) * 2 - 1;
+      const first = (1 - Math.exp(-progress * 130)) * Math.exp(-progress * 18);
+      const secondProgress = Math.max(0, progress - .42);
+      const second = secondProgress > 0
+        ? (1 - Math.exp(-secondProgress * 180)) * Math.exp(-secondProgress * 23) * .58
+        : 0;
+      const mechanism = Math.sin(tau * (36 - progress * 16) * time);
+      return (mechanism * .9 + noise * .1) * (first + second) * .21;
+    }),
+    diskTickClack: createWavUrl(.11, (time, index, count) => {
+      const progress = index / count;
+      const noise = ((Math.sin(index * 61.317 + 2.03) * 31547.2371) % 1) * 2 - 1;
+      const impact = (1 - Math.exp(-progress * 150)) * Math.exp(-progress * 20);
+      const returnProgress = Math.max(0, progress - .3);
+      const returnImpact = returnProgress > 0
+        ? (1 - Math.exp(-returnProgress * 140)) * Math.exp(-returnProgress * 17) * .7
+        : 0;
+      const lowMechanism = Math.sin(tau * 26 * time) + Math.sin(tau * 52 * time) * .14;
+      return (lowMechanism * .92 + noise * .08) * (impact + returnImpact) * .2;
+    }),
     power: createWavUrl(.72, (time, index, count) => {
       const progress = index / count;
       const noise = ((Math.sin(index * 78.233) * 43758.5453) % 1) * 2 - 1;
@@ -513,7 +486,7 @@ export function startCrtTerminal() {
         ? 1 - diskBurstRemaining / diskBurstSize
         : 0;
       const accent = Math.random() < .11 ? 1.2 : .78 + Math.random() * .3;
-      voice.volume = Math.min(.075, (.016 + currentDensity * .04) * accent);
+      voice.volume = Math.min(.06, (.012 + currentDensity * .033) * accent);
       voice.playbackRate = .82 + Math.random() * .14 + Math.sin(burstProgress * Math.PI) * .018;
       void playElement(voice);
       diskEventCount += 1;
