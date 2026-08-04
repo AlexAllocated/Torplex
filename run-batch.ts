@@ -1065,8 +1065,29 @@ async function processItem(item: ManifestItem) {
   await ensureDir(join(root, "logs"));
   await setItemState(item.id, { status: "active", startedAt: now(), error: null });
   await appendBatch(`Starting ${item.title}`);
-  const torrentSource = item.magnetUri || (item.torrentFile ? join(root, "torrents", item.torrentFile) : "");
+  const storedTorrent = item.torrentFile ? join(root, "torrents", item.torrentFile) : "";
+  let cachedMagnetTorrent = "";
+  if (item.magnetUri) {
+    try {
+      const magnet = new URL(item.magnetUri);
+      const hash = magnet.searchParams.getAll("xt")
+        .find((value) => /^urn:btih:[a-z0-9]+$/i.test(value))
+        ?.split(":")
+        .at(-1)
+        ?.toLowerCase();
+      const candidate = hash ? join(root, "torrent-metadata", hash, "metadata.torrent") : "";
+      if (candidate && existsSync(candidate)) cachedMagnetTorrent = candidate;
+    } catch {
+      // The download command will report malformed magnet links normally.
+    }
+  }
+  const torrentSource = storedTorrent && existsSync(storedTorrent)
+    ? storedTorrent
+    : cachedMagnetTorrent || item.magnetUri || "";
   if (!torrentSource) throw new Error(`${item.title}: missing torrent file or magnet link`);
+  if (cachedMagnetTorrent && torrentSource === cachedMagnetTorrent) {
+    await appendBatch(`Using cached torrent metadata for ${item.title}`);
+  }
 
   const selectedFiles = [...new Set(item.selectFiles ?? [])]
     .filter((index) => Number.isInteger(index) && index > 0)
