@@ -7,6 +7,7 @@
   export let initialSourceUrl = '';
   export let initialInstructions = '';
   export let initialAlternatives = [];
+  export let initialQueueIdSuffix = '';
   export let ordinal = 1;
   export let onremove = () => {};
   export let onchange = () => {};
@@ -83,10 +84,14 @@
   }
 
   function applySuggested(suggested = {}) {
+    const suggestedId = suggested.id || fields.id;
+    const queueId = initialQueueIdSuffix && suggestedId && !suggestedId.endsWith(`-${initialQueueIdSuffix}`)
+      ? `${suggestedId}-${initialQueueIdSuffix}`
+      : suggestedId;
     fields = {
       ...fields,
       title: suggested.title || fields.title,
-      id: suggested.id || fields.id,
+      id: queueId,
       mediaType: suggested.mediaType === 'movie' ? 'movie' : 'show',
       destinationPath: suggested.destinationPath || fields.destinationPath,
       organizeStrategy: suggested.organizeStrategy || 'mergeRoot',
