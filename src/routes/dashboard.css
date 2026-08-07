@@ -2303,12 +2303,30 @@
 
     .panel, .gauge, .item, .terminal, .summary-strip, .transfer-map,
     .intake-summary, .smart-setup, .advanced-settings, .torrent-file-tree,
-    .bulk-item, .proposal-row, .search-intro, .rights-attestation {
+    .bulk-item, .bulk-intake-item, .proposal-row, .search-intro, .rights-attestation {
       border-color: rgb(var(--phosphor-main) / .3);
       background: rgb(var(--phosphor-screen) / .78);
       box-shadow:
         inset 0 0 12px rgb(var(--phosphor-main) / .055),
         0 0 10px rgb(var(--phosphor-deep) / .08);
+    }
+    .bulk-intake-item.ready {
+      border-color: rgb(var(--phosphor-soft) / .5);
+      background: rgb(var(--phosphor-deep) / .1);
+    }
+    .bulk-intake-item.error {
+      border-color: rgb(var(--phosphor-text) / .7);
+      border-style: dashed;
+      background: rgb(var(--phosphor-main) / .08);
+    }
+    .bulk-item-index {
+      border-color: rgb(var(--phosphor-main) / .52);
+      color: rgb(var(--phosphor-bright));
+      background: rgb(var(--phosphor-deep) / .18);
+      box-shadow: 0 0 9px rgb(var(--phosphor-main) / .18);
+    }
+    .bulk-item-title strong, .bulk-empty strong, .bulk-details > summary {
+      color: rgb(var(--phosphor-bright));
     }
     .gauge {
       background:
