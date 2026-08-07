@@ -880,7 +880,7 @@ async function organize(item: ManifestItem) {
         await rename(source, target);
       }
     }
-    organizedDestinations.add(targetDir);
+    organizedDestinations.add(dest);
   } else if (item.organize.strategy === "mergeRoot") {
     await ensureDir(dest);
     const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
@@ -893,7 +893,7 @@ async function organize(item: ManifestItem) {
       if (await pathExists(target)) throw new Error(`Destination already exists: ${target}`);
       await movePath(join(source, entry), target);
     }
-    organizedDestinations.add(dest);
+    organizedDestinations.add(targetDir);
   } else if (item.organize.strategy === "routeDirectories") {
     const rootSource = await resolveSourceRoot(item);
     for (const route of item.organize.routes) {
