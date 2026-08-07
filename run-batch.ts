@@ -1259,24 +1259,36 @@ async function processItem(item: ManifestItem) {
     await appendBatch(`Reusing completed staged payload for ${item.title}`);
   } else {
     await setItemState(item.id, { payloadStatus: "downloading", payloadCompletedAt: null });
-    const exitCode = await runCommand(
-      [
-        "aria2c",
-        `--dir=${staging}`,
-        "--continue=true",
-        ...(checkIntegrity ? ["--check-integrity=true"] : []),
-        "--file-allocation=none",
-        ...aria2NetworkPolicyArgs(),
-        "--bt-max-peers=80",
-        "--bt-enable-lpd=false",
-        "--enable-peer-exchange=true",
-        "--summary-interval=30",
-        "--console-log-level=notice",
-        ...(compactSelection ? [`--select-file=${compactSelection}`] : []),
-        torrentSource,
-      ],
-      logPath,
-    );
+    const downloadArgs = (recovery = false) => [
+      "aria2c",
+      `--dir=${staging}`,
+      "--continue=true",
+      ...(checkIntegrity || recovery ? ["--check-integrity=true"] : []),
+      ...(recovery ? ["--allow-overwrite=true"] : []),
+      "--file-allocation=none",
+      ...aria2NetworkPolicyArgs(),
+      "--bt-max-peers=80",
+      "--bt-enable-lpd=false",
+      "--enable-peer-exchange=true",
+      "--summary-interval=30",
+      "--console-log-level=notice",
+      ...(compactSelection ? [`--select-file=${compactSelection}`] : []),
+      torrentSource,
+    ];
+    let exitCode = await runCommand(downloadArgs(), logPath);
+    if (exitCode === 13) {
+      const failedLog = await readFile(logPath, "utf8").catch(() => "");
+      const missingControlFile = failedLog.includes("a control file(*.aria2) does not exist");
+      if (missingControlFile) {
+        await appendBatch(`Recovering ${item.title}: verifying staged files after a missing aria2 control file`);
+        exitCode = await runCommand(downloadArgs(true), logPath);
+        const recoveryLog = await readFile(logPath, "utf8").catch(() => "");
+        await writeFile(
+          logPath,
+          `--- Interrupted payload recovery ---\n${failedLog}\n--- Integrity verification and recovery ---\n${recoveryLog}`,
+        );
+      }
+    }
     if (exitCode !== 0) {
       const preemptPath = join(root, "control", "preempt", item.id);
       if (await pathExists(preemptPath)) {
