@@ -23,6 +23,7 @@
   let queueError = '';
   let stopSearchActivity = null;
   let retryingTargets = new Set();
+  const activeSearchStorageKey = 'torplex:active-search-id:v1';
   const qualityPresets = {
     balanced: { preset: 'balanced', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 2160, hdrMode: 'allow', codec: 'any', directPlay: false, maxSourceGiB: 0 },
     compatibility: { preset: 'compatibility', preferredResolution: 1080, minimumResolution: 480, maximumResolution: 1080, hdrMode: 'avoid', codec: 'h264', directPlay: true, maxSourceGiB: 0 },
@@ -33,6 +34,17 @@
 
   $: readyItems = items.map((item) => snapshots.get(item.clientId)).filter((item) => item?.ready);
   $: unresolvedItems = items.length - readyItems.length;
+  $: hasSearchState = Boolean(activeSearchId || searchProposal || searchProgress.length);
+
+  function attachSearchSession(searchId) {
+    activeSearchId = searchId;
+    if (searchId) sessionStorage.setItem(activeSearchStorageKey, searchId);
+  }
+
+  function detachSearchSession() {
+    activeSearchId = '';
+    sessionStorage.removeItem(activeSearchStorageKey);
+  }
 
   function makeClientId() {
     sequence += 1;
@@ -90,7 +102,7 @@
   function applySearchSession(session, { select = false } = {}) {
     if (!session) return;
     activeView = 'search';
-    activeSearchId = session.id;
+    attachSearchSession(session.id);
     searchPrompt = session.prompt || searchPrompt;
     if (session.qualityProfile) qualityProfile = { ...session.qualityProfile };
     searchProgress = Array.isArray(session.progress) ? session.progress : [];
@@ -180,10 +192,9 @@
     dialogMode = 'busy';
     queueError = '';
     const controller = new AbortController();
-    const searchId = `search-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+    const searchId = `search-${crypto.randomUUID()}`;
     searchController = controller;
-    activeSearchId = searchId;
-    localStorage.removeItem('torplex:search-consumed');
+    attachSearchSession(searchId);
     const stopActivity = beginCrtActivity('ai');
     stopSearchActivity = stopActivity;
     try {
@@ -243,6 +254,34 @@
       body: JSON.stringify({ searchId }),
     }).catch(() => {});
     controller.abort();
+  }
+
+  function clearSearch() {
+    const controller = searchController;
+    const searchId = activeSearchId;
+    const wasRunning = searchRunning;
+    searchController = null;
+    searchRunning = false;
+    if (wasRunning && searchId) {
+      void fetch('/api/torrent/search/cancel', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ searchId }),
+      }).catch(() => {});
+    }
+    controller?.abort();
+    stopSearchActivity?.();
+    stopSearchActivity = null;
+    detachSearchSession();
+    searchPrompt = '';
+    searchRightsConfirmed = false;
+    searchProgress = [];
+    searchProposal = null;
+    selectedProposals = new Set();
+    retryingTargets = new Set();
+    queueError = '';
+    dialogStatus = 'Ready';
+    dialogMode = 'idle';
   }
 
   function chooseQualityPreset(preset) {
@@ -329,7 +368,7 @@
     searchProgress = [];
     searchPrompt = '';
     searchRightsConfirmed = false;
-    if (activeSearchId) localStorage.setItem('torplex:search-consumed', activeSearchId);
+    detachSearchSession();
     dialogStatus = `${selected.length} item${selected.length === 1 ? '' : 's'} preparing`;
     dialogMode = 'busy';
   }
@@ -381,13 +420,16 @@
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch('/api/torrent/search');
+        const searchId = sessionStorage.getItem(activeSearchStorageKey);
+        if (!searchId) return;
+        const response = await fetch(`/api/torrent/search?searchId=${encodeURIComponent(searchId)}`);
         if (!response.ok) return;
         const payload = await response.json();
         const session = payload.session;
-        if (!session) return;
-        const consumed = localStorage.getItem('torplex:search-consumed');
-        if (session.status === 'completed' && consumed === session.id) return;
+        if (!session) {
+          detachSearchSession();
+          return;
+        }
         applySearchSession(session, { select: session.status === 'completed' });
         if (session.status !== 'running') return;
         searchController = controller;
@@ -467,6 +509,9 @@
         </label>
         <div class="search-actions">
           <span class="small">Search does not add a torrent or download media.</span>
+          {#if hasSearchState}
+            <button class="secondary-button" type="button" on:click={clearSearch}>Clear search</button>
+          {/if}
           {#if searchRunning}
             <button class="secondary-button" type="button" on:click={cancelSearch}>Cancel search</button>
           {:else}

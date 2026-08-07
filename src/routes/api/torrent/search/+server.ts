@@ -8,7 +8,6 @@ import {
   completeSearchSession,
   createSearchSession,
   failSearchSession,
-  getLatestSearchSession,
   getSearchSession,
 } from "$lib/server/search-sessions";
 import { createTorrentSearchProposal } from "$lib/server/torrent-search";
@@ -16,7 +15,7 @@ import { createTorrentSearchProposal } from "$lib/server/torrent-search";
 export async function GET({ cookies, url }) {
   if (!getSession(cookies)) return json({ error: "Unlock Torplex to inspect a search" }, { status: 401 });
   const searchId = url.searchParams.get("searchId");
-  const session = searchId ? await getSearchSession(searchId) : await getLatestSearchSession();
+  const session = searchId ? await getSearchSession(searchId) : null;
   if (!session) return json({ session: null }, { headers: { "cache-control": "no-store" } });
   return json({ session }, { headers: { "cache-control": "no-store" } });
 }
