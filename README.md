@@ -19,6 +19,7 @@ Torplex does not provide media. It manages `.torrent` files, magnet links, direc
 - Uses `aria2c` with post-completion seeding disabled and torrent networking
   bound to an explicitly configured VPN interface by default.
 - Moves completed downloads into Movies or TV directories.
+- Can replace an existing Plex copy with a validated direct-play release using a guarded backup-and-swap. The old copy is removed only after stream and malware checks pass and Plex exposes the replacement; failures restore the old copy.
 - Refreshes Plex library sections after organizing media.
 - Shows disk usage, queue progress, active peers, peer locations, and transfer speeds.
 
@@ -148,9 +149,10 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `MEDIA_ROOT` | `/media/plex` | Base media mount. |
 | `MOVIES_DIR` | `$MEDIA_ROOT/Movies` | Movie destination root. |
 | `TV_DIR` | `$MEDIA_ROOT/TV Shows` | TV destination root. |
+| `WATCHTHROUGHS_DIR` | `$MEDIA_ROOT/Watchthroughs` | Optional hard-link library whose aliases are repointed when their source media is replaced. |
 | `DISK_USAGE_PATH` | `$MEDIA_ROOT` | Path used for dashboard disk usage. |
 
-Torplex validates uploaded items so their destination is under `MOVIES_DIR` or `TV_DIR`.
+Torplex validates uploaded items so their destination is under `MOVIES_DIR` or `TV_DIR`. The **Replace existing media** control uses an atomic same-filesystem swap: Torplex secures the existing movie folder or TV season, installs and validates the new files, verifies that Plex can see them, repoints matching hard links under `WATCHTHROUGHS_DIR`, and only then removes the secured copy. A library root can never be selected as a replacement target.
 
 ### Smart Setup
 

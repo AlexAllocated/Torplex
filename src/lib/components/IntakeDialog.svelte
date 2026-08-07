@@ -56,6 +56,7 @@
       work: initial.work || null,
       alternatives: initial.alternatives || [],
       queueIdSuffix: initial.queueIdSuffix || '',
+      replacement: Boolean(initial.replacement),
     };
     items = [...items, item];
     activeView = 'workspace';
@@ -319,6 +320,7 @@
         queueIdSuffix: searchProposal?.qualityProfile?.directPlay
           ? `directplay-${String(selection.candidateId || '').slice(-8)}`
           : '',
+        replacement: Boolean(searchProposal?.qualityProfile?.directPlay),
         instructions: `Include only ${selection.work.title}${year}, matching the requested ${selection.work.type}.${seasonScope} Exclude unrelated titles, samples, and extras.`,
       });
     }
@@ -514,7 +516,7 @@
         </div>
         <div class="bulk-item-list">
           {#each items as item, index (item.clientId)}
-            <IntakeItem clientId={item.clientId} initialSourceUrl={item.sourceUrl} initialInstructions={item.instructions} initialAlternatives={item.alternatives} initialQueueIdSuffix={item.queueIdSuffix} ordinal={index + 1} onremove={removeItem} onchange={updateItem} />
+            <IntakeItem clientId={item.clientId} initialSourceUrl={item.sourceUrl} initialInstructions={item.instructions} initialAlternatives={item.alternatives} initialQueueIdSuffix={item.queueIdSuffix} initialReplacement={item.replacement} ordinal={index + 1} onremove={removeItem} onchange={updateItem} />
           {/each}
         </div>
         {#if !items.length}

@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { appendFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
+import { appendFile, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "fs/promises";
 import { basename, dirname, extname, join, relative } from "path";
 import {
   createMetadataCuratorPlan,
@@ -15,6 +15,10 @@ const plexPreferencesPath =
   process.env.PLEX_PREFERENCES_PATH ?? "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml";
 const plexMovieSectionId = process.env.PLEX_MOVIE_SECTION_ID ?? "1";
 const plexShowSectionId = process.env.PLEX_SHOW_SECTION_ID ?? "2";
+const mediaRoot = (process.env.MEDIA_ROOT ?? "/media/plex").replace(/\/$/, "");
+const moviesDir = (process.env.MOVIES_DIR ?? `${mediaRoot}/Movies`).replace(/\/$/, "");
+const tvDir = (process.env.TV_DIR ?? `${mediaRoot}/TV Shows`).replace(/\/$/, "");
+const watchthroughsDir = (process.env.WATCHTHROUGHS_DIR ?? `${mediaRoot}/Watchthroughs`).replace(/\/$/, "");
 const mediaChown = process.env.MEDIA_CHOWN ?? "";
 const mediaDirMode = process.env.MEDIA_DIR_MODE ?? "775";
 const mediaFileMode = process.env.MEDIA_FILE_MODE ?? "664";
@@ -58,6 +62,9 @@ type ManifestItem = {
   selectFiles?: number[];
   selectedPaths?: string[];
   rightsAttestedAt?: string;
+  replacement?: {
+    removeSuperseded: boolean;
+  };
   postDownload?: {
     verifyStreams: boolean;
     scanForMalware: boolean;
@@ -194,6 +201,146 @@ async function stagingHasPayload(staging: string) {
 async function movePath(source: string, destination: string) {
   await ensureDir(dirname(destination));
   await rename(source, destination);
+}
+
+type ReplacementSwap = {
+  targetPath: string;
+  backupPath: string;
+  hadExisting: boolean;
+  aliases: Array<{ aliasPath: string; oldRelativePath: string }>;
+};
+
+function replacementEnabled(item: ManifestItem) {
+  return item.replacement?.removeSuperseded === true || item.id.includes("-directplay-");
+}
+
+function replacementTarget(item: ManifestItem) {
+  if (!replacementEnabled(item)) return null;
+  let target = item.destination.path.replace(/\/$/, "");
+  if (item.destination.type === "show" && item.organize.strategy === "mergeRoot" && item.organize.targetSubdir) {
+    target = join(target, item.organize.targetSubdir);
+  }
+  const rootDir = item.destination.type === "movie" ? moviesDir : tvDir;
+  if (target === rootDir || !target.startsWith(`${rootDir}/`)) {
+    throw new Error(`Unsafe replacement target for ${item.title}: ${target}`);
+  }
+  return target;
+}
+
+async function collectVideoPaths(path: string) {
+  const paths: string[] = [];
+  if (!(await pathExists(path))) return paths;
+  async function visit(current: string) {
+    const currentStat = await stat(current);
+    if (currentStat.isFile()) {
+      if (videoExtensions.has(extname(current).toLowerCase())) paths.push(current);
+      return;
+    }
+    if (!currentStat.isDirectory()) return;
+    for (const entry of await readdir(current)) await visit(join(current, entry));
+  }
+  await visit(path);
+  return paths;
+}
+
+async function findWatchthroughAliases(targetPath: string) {
+  if (!(await pathExists(targetPath)) || !(await pathExists(watchthroughsDir))) return [];
+  const inodeToRelative = new Map<string, string>();
+  for (const oldPath of await collectVideoPaths(targetPath)) {
+    const oldStat = await stat(oldPath);
+    if (oldStat.nlink > 1) inodeToRelative.set(`${oldStat.dev}:${oldStat.ino}`, relative(targetPath, oldPath));
+  }
+  if (!inodeToRelative.size) return [];
+  const aliases: Array<{ aliasPath: string; oldRelativePath: string }> = [];
+  async function visit(current: string) {
+    const currentStat = await stat(current);
+    if (currentStat.isFile()) {
+      const oldRelativePath = inodeToRelative.get(`${currentStat.dev}:${currentStat.ino}`);
+      if (oldRelativePath) aliases.push({ aliasPath: current, oldRelativePath });
+      return;
+    }
+    if (!currentStat.isDirectory()) return;
+    for (const entry of await readdir(current)) await visit(join(current, entry));
+  }
+  await visit(watchthroughsDir);
+  return aliases;
+}
+
+function episodeKey(path: string) {
+  return basename(path).match(/S(\d{1,2})E(\d{1,3})/i)?.slice(1).map(Number).join(":") ?? "";
+}
+
+async function replaceHardLink(aliasPath: string, sourcePath: string) {
+  const temporaryPath = `${aliasPath}.torplex-new`;
+  await rm(temporaryPath, { force: true });
+  await link(sourcePath, temporaryPath);
+  await rename(temporaryPath, aliasPath);
+}
+
+async function relinkWatchthroughAliases(item: ManifestItem, swap: ReplacementSwap | null, destinations: string[]) {
+  if (!swap?.aliases.length) return;
+  const newVideos = (await Promise.all(destinations.map(collectVideoPaths))).flat();
+  const byEpisode = new Map(newVideos.map((path) => [episodeKey(path), path]).filter(([key]) => key));
+  for (const alias of swap.aliases) {
+    const source = item.destination.type === "movie" && newVideos.length === 1
+      ? newVideos[0]
+      : byEpisode.get(episodeKey(alias.oldRelativePath));
+    if (!source) throw new Error(`Could not map watchthrough alias ${basename(alias.aliasPath)} to the replacement media`);
+    await replaceHardLink(alias.aliasPath, source);
+  }
+  await setItemState(item.id, { replacementAliases: String(swap.aliases.length) });
+  await appendBatch(`Repointed ${swap.aliases.length} watchthrough alias(es) for ${item.title}`);
+}
+
+async function restoreWatchthroughAliases(swap: ReplacementSwap | null) {
+  if (!swap?.aliases.length || !(await pathExists(swap.backupPath))) return;
+  for (const alias of swap.aliases) {
+    const oldSource = join(swap.backupPath, alias.oldRelativePath);
+    if (await pathExists(oldSource)) await replaceHardLink(alias.aliasPath, oldSource);
+  }
+}
+
+async function beginReplacementSwap(item: ManifestItem): Promise<ReplacementSwap | null> {
+  const targetPath = replacementTarget(item);
+  if (!targetPath) return null;
+  const backupPath = join(root, "replacement-backups", item.id, "previous");
+  if (await pathExists(backupPath)) {
+    throw new Error(`Replacement backup already exists for ${item.title}; refusing to overwrite it`);
+  }
+  const hadExisting = await pathExists(targetPath);
+  const aliases = hadExisting ? await findWatchthroughAliases(targetPath) : [];
+  if (hadExisting) {
+    await ensureDir(dirname(backupPath));
+    await movePath(targetPath, backupPath);
+    await setItemState(item.id, { replacementStatus: "old copy secured", replacementTarget: targetPath, replacementBackup: backupPath });
+    await appendBatch(`Secured old copy of ${item.title} before replacement`);
+  }
+  return { targetPath, backupPath, hadExisting, aliases };
+}
+
+async function restoreReplacementSwap(item: ManifestItem, swap: ReplacementSwap | null) {
+  if (!swap?.hadExisting || !(await pathExists(swap.backupPath))) return;
+  await restoreWatchthroughAliases(swap);
+  await rm(swap.targetPath, { recursive: true, force: true });
+  await movePath(swap.backupPath, swap.targetPath);
+  await rm(dirname(swap.backupPath), { recursive: true, force: true });
+  await setItemState(item.id, { replacementStatus: "old copy restored" });
+  await appendBatch(`Restored old copy of ${item.title} after replacement failure`);
+  try {
+    await scanPlex(item.destination.type);
+  } catch {
+    // The next regular Plex scan will rediscover the restored copy.
+  }
+}
+
+async function commitReplacementSwap(item: ManifestItem, swap: ReplacementSwap | null) {
+  if (!swap) return;
+  if (swap.hadExisting) await rm(dirname(swap.backupPath), { recursive: true, force: true });
+  await setItemState(item.id, {
+    replacementStatus: swap.hadExisting ? "old copy removed" : "new media installed",
+    replacementCompletedAt: now(),
+  });
+  if (swap.hadExisting) await appendBatch(`Removed superseded copy of ${item.title} after validation`);
 }
 
 async function collectFileStats(path: string) {
@@ -733,7 +880,7 @@ async function organize(item: ManifestItem) {
         await rename(source, target);
       }
     }
-    organizedDestinations.add(dest);
+    organizedDestinations.add(targetDir);
   } else if (item.organize.strategy === "mergeRoot") {
     await ensureDir(dest);
     const targetDir = item.organize.targetSubdir ? join(dest, item.organize.targetSubdir) : dest;
@@ -1167,41 +1314,45 @@ async function processItem(item: ManifestItem) {
 
   await setItemState(item.id, { status: "organizing" });
   await appendBatch(`Organizing ${item.title}`);
-  let organizedDestinations: string[];
+  let replacementSwap: ReplacementSwap | null = null;
   try {
-    organizedDestinations = await organize(item);
-  } catch (error) {
-    await setItemState(item.id, { status: "failed", failedAt: now(), error: error instanceof Error ? error.message : String(error) });
-    await appendBatch(`FAILED ${item.title}: ${error instanceof Error ? error.message : String(error)}`);
-    throw error;
-  }
-  if (item.postDownload?.ensureEnglishSubtitles === true) {
-    try {
-      await ensureEnglishSubtitles(item, organizedDestinations, logPath);
-    } catch (error) {
-      const warning = error instanceof Error ? error.message : String(error);
-      await setItemState(item.id, { subtitleStatus: "error", subtitleWarning: warning });
-      await appendBatch(`Subtitle warning for ${item.title}: ${warning}`);
+    replacementSwap = await beginReplacementSwap(item);
+    const organizedDestinations = await organize(item);
+    if (item.postDownload?.ensureEnglishSubtitles === true) {
+      try {
+        await ensureEnglishSubtitles(item, organizedDestinations, logPath);
+      } catch (error) {
+        const warning = error instanceof Error ? error.message : String(error);
+        await setItemState(item.id, { subtitleStatus: "error", subtitleWarning: warning });
+        await appendBatch(`Subtitle warning for ${item.title}: ${warning}`);
+      }
     }
-  }
-  if (item.postDownload?.refreshPlex !== false) {
-    try {
-      await scanPlex(item.destination.type);
-    } catch (error) {
-      const warning = error instanceof Error ? error.message : String(error);
-      await setItemState(item.id, { plexScanWarning: warning });
-      await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
+    if (item.postDownload?.refreshPlex !== false || replacementSwap) {
+      try {
+        await scanPlex(item.destination.type);
+      } catch (error) {
+        const warning = error instanceof Error ? error.message : String(error);
+        await setItemState(item.id, { plexScanWarning: warning });
+        await appendBatch(`Plex scan warning for ${item.title}: ${warning}`);
+      }
     }
-  }
-  const validateMetadataWithAi = item.postDownload?.validateMetadataWithAi !== false;
-  if (item.postDownload?.verifyCanonicalMetadata === true || item.postDownload?.verifyArtwork === true || validateMetadataWithAi) {
     let plexMatches: PlexMetadata[] = [];
-    try {
-      plexMatches = await verifyPlexResult(item, organizedDestinations);
-    } catch (error) {
-      const warning = error instanceof Error ? error.message : String(error);
-      await setItemState(item.id, { plexVerificationWarning: warning });
-      await appendBatch(`Plex verification warning for ${item.title}: ${warning}`);
+    const validateMetadataWithAi = item.postDownload?.validateMetadataWithAi !== false;
+    const verifyInPlex = Boolean(
+      replacementSwap
+      || item.postDownload?.verifyCanonicalMetadata === true
+      || item.postDownload?.verifyArtwork === true
+      || validateMetadataWithAi
+    );
+    if (verifyInPlex) {
+      try {
+        plexMatches = await verifyPlexResult(item, organizedDestinations);
+      } catch (error) {
+        const warning = error instanceof Error ? error.message : String(error);
+        await setItemState(item.id, { plexVerificationWarning: warning });
+        await appendBatch(`Plex verification warning for ${item.title}: ${warning}`);
+        if (replacementSwap) throw new Error(`Replacement verification failed: ${warning}`);
+      }
     }
     if (validateMetadataWithAi) {
       try {
@@ -1214,6 +1365,14 @@ async function processItem(item: ManifestItem) {
         await appendBatch(`AI metadata warning for ${item.title}: ${warning}`);
       }
     }
+    await relinkWatchthroughAliases(item, replacementSwap, organizedDestinations);
+    await commitReplacementSwap(item, replacementSwap);
+  } catch (error) {
+    await restoreReplacementSwap(item, replacementSwap);
+    const message = error instanceof Error ? error.message : String(error);
+    await setItemState(item.id, { status: "failed", failedAt: now(), error: message });
+    await appendBatch(`FAILED ${item.title}: ${message}`);
+    throw error;
   }
   await setItemState(item.id, { status: "completed", completedAt: now(), error: null, failedAt: null });
   await appendBatch(`Completed ${item.title}`);

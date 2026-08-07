@@ -44,6 +44,9 @@ type Item = {
   selectFiles?: number[];
   selectedPaths?: string[];
   rightsAttestedAt?: string;
+  replacement?: {
+    removeSuperseded: boolean;
+  };
   postDownload?: {
     verifyStreams: boolean;
     scanForMalware: boolean;
@@ -1709,12 +1712,15 @@ async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promis
   const title = formString(form, "title", metadata.suggested.title);
   const mediaType: "movie" | "show" =
     formString(form, "mediaType", metadata.suggested.mediaType) === "movie" ? "movie" : "show";
-  const destinationPath = formString(form, "destinationPath", metadata.suggested.destinationPath);
+  let destinationPath = formString(form, "destinationPath", metadata.suggested.destinationPath);
   const strategyInput = formString(form, "organizeStrategy", metadata.suggested.organizeStrategy);
   const targetSubdir = formString(form, "targetSubdir", metadata.suggested.targetSubdir);
   const routes = organizationRoutes(form, metadata.files, selection.indexes);
   if (strategyInput === "routeDirectories" && !routes.length) throw new Error("Add at least one folder route");
   if (!id || !title || !destinationPath) throw new Error("Missing required manifest fields");
+  if (mediaType === "movie" && destinationPath.replace(/\/$/, "") === moviesDir.replace(/\/$/, "")) {
+    destinationPath = join(moviesDir, title);
+  }
   const allowedRoots = [moviesDir, tvDir].map((path) => path.replace(/\/$/, ""));
   if (!allowedRoots.some((root) => destinationPath === root || destinationPath.startsWith(`${root}/`))) {
     throw new Error(`Destination must be under ${moviesDir} or ${tvDir}`);
@@ -1744,6 +1750,7 @@ async function prepareTorrentItem(form: FormData, manifestItems: Item[]): Promis
     ...(selection.indexes.length && selection.indexes.length < metadata.fileCount ? { selectFiles: selection.indexes } : {}),
     selectedPaths,
     rightsAttestedAt: new Date().toISOString(),
+    ...(formBool(form, "removeSuperseded") ? { replacement: { removeSuperseded: true } } : {}),
     postDownload: {
       verifyStreams: formBool(form, "verifyStreams"),
       scanForMalware: true,

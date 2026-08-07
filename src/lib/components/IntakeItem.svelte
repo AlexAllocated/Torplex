@@ -8,6 +8,7 @@
   export let initialInstructions = '';
   export let initialAlternatives = [];
   export let initialQueueIdSuffix = '';
+  export let initialReplacement = false;
   export let ordinal = 1;
   export let onremove = () => {};
   export let onchange = () => {};
@@ -39,6 +40,7 @@
   let fields = {
     title: '', id: '', mediaType: 'show', destinationPath: '', organizeStrategy: 'mergeRoot', targetSubdir: '',
     verifyStreams: true, ensureEnglishSubtitles: true, verifyCanonicalMetadata: true, verifyArtwork: true, validateMetadataWithAi: true, refreshPlex: true,
+    removeSuperseded: initialReplacement,
   };
   let routes = [];
   const activeActivityStops = new Set();
@@ -449,6 +451,7 @@
           <label><input type="checkbox" bind:checked={fields.verifyArtwork} /><span><strong>Verify artwork</strong><small>Check poster metadata.</small></span></label>
           <label><input type="checkbox" bind:checked={fields.validateMetadataWithAi} /><span><strong>AI metadata curator</strong><small>Research and correct high-confidence Plex metadata.</small></span></label>
           <label><input type="checkbox" bind:checked={fields.refreshPlex} /><span><strong>Refresh Plex</strong><small>Scan the affected library.</small></span></label>
+          <label><input type="checkbox" bind:checked={fields.removeSuperseded} /><span><strong>Replace existing media</strong><small>Keep the old copy until the new media passes validation and appears in Plex.</small></span></label>
         </div>
       </div>
     </details>
