@@ -830,7 +830,15 @@ async function searchTargetGroups(
         ...candidate,
         providerReliability: providerReliabilitySummary(providerHistory[candidate.provider]),
       }));
-      const ranked = found.sort((left, right) => candidateScore(target, right, qualityProfile) - candidateScore(target, left, qualityProfile));
+      const plausible = found.filter((candidate) => {
+        const quality = assessSearchQuality(qualityProfile, candidate.name, candidate.sizeBytes);
+        return quality.violations.every((violation) => violation.includes("could not be verified"));
+      });
+      const rejectedByName = found.length - plausible.length;
+      if (rejectedByName) {
+        onProgress(`${targetDisplay(target)}: discarded ${rejectedByName} release${rejectedByName === 1 ? "" : "s"} with explicit quality conflicts before metadata retrieval`);
+      }
+      const ranked = plausible.sort((left, right) => candidateScore(target, right, qualityProfile) - candidateScore(target, left, qualityProfile));
       const shortlisted = providerDiverseShortlist(ranked, config.metadataMaxCandidates);
       const providers = new Set(shortlisted.map((candidate) => candidate.provider)).size;
       const initial = Math.min(config.metadataCandidateLimit, shortlisted.length);
