@@ -39,4 +39,14 @@ describe("library-aware search matching", () => {
     expect(missingLibrarySeasons({ title: "Marvel's Daredevil", year: 2015, type: "show", requiredSeasons: [1, 2, 3] }, inventory))
       .toEqual([2, 3]);
   });
+
+  test("treats incompatible movies and seasons as replacement targets", () => {
+    const compatibilityInventory: LibraryInventoryItem[] = [
+      { id: "movie", title: "Codec Trouble", year: 2024, type: "movie", source: "plex", status: "replacement needed", seasons: [], compatible: false },
+      { id: "show", title: "Mixed Codecs", year: 2024, type: "show", source: "plex", status: "replacement needed", seasons: [1, 2, 3], compatible: false, compatibleSeasons: [1, 3] },
+    ];
+    expect(findLibraryMatch({ title: "Codec Trouble", year: 2024, type: "movie" }, compatibilityInventory)).toBeUndefined();
+    expect(findLibraryMatch({ title: "Mixed Codecs", year: 2024, type: "show", requiredSeasons: [1, 3] }, compatibilityInventory)?.id).toBe("show");
+    expect(missingLibrarySeasons({ title: "Mixed Codecs", year: 2024, type: "show", requiredSeasons: [1, 2, 3] }, compatibilityInventory)).toEqual([2]);
+  });
 });

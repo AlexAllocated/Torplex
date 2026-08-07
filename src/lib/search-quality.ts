@@ -7,6 +7,7 @@ export type SearchQualityProfile = {
   maximumResolution: 0 | 720 | 1080 | 2160;
   hdrMode: "allow" | "avoid" | "prefer";
   codec: "any" | "h264" | "h265";
+  directPlay: boolean;
   maxSourceGiB: number;
 };
 
@@ -18,15 +19,17 @@ export const qualityPresets: Record<Exclude<QualityPresetId, "custom">, SearchQu
     maximumResolution: 2160,
     hdrMode: "allow",
     codec: "any",
+    directPlay: false,
     maxSourceGiB: 0,
   },
   compatibility: {
     preset: "compatibility",
     preferredResolution: 1080,
-    minimumResolution: 720,
+    minimumResolution: 480,
     maximumResolution: 1080,
     hdrMode: "avoid",
     codec: "h264",
+    directPlay: true,
     maxSourceGiB: 0,
   },
   compact: {
@@ -36,6 +39,7 @@ export const qualityPresets: Record<Exclude<QualityPresetId, "custom">, SearchQu
     maximumResolution: 1080,
     hdrMode: "allow",
     codec: "h265",
+    directPlay: false,
     maxSourceGiB: 12,
   },
   maximum: {
@@ -45,6 +49,7 @@ export const qualityPresets: Record<Exclude<QualityPresetId, "custom">, SearchQu
     maximumResolution: 2160,
     hdrMode: "prefer",
     codec: "any",
+    directPlay: false,
     maxSourceGiB: 0,
   },
 };
@@ -58,7 +63,7 @@ function resolution(value: unknown, fallback: number) {
 
 export function normalizeQualityProfile(value: unknown): SearchQualityProfile {
   const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const requestedPreset = String(input.preset || "balanced") as QualityPresetId;
+  const requestedPreset = String(input.preset || "compatibility") as QualityPresetId;
   const preset = requestedPreset in qualityPresets ? requestedPreset as Exclude<QualityPresetId, "custom"> : "balanced";
   const base = qualityPresets[preset];
   const minimumResolution = resolution(input.minimumResolution, base.minimumResolution) as SearchQualityProfile["minimumResolution"];
@@ -70,6 +75,7 @@ export function normalizeQualityProfile(value: unknown): SearchQualityProfile {
   const codec = ["any", "h264", "h265"].includes(String(input.codec))
     ? String(input.codec) as SearchQualityProfile["codec"]
     : base.codec;
+  const directPlay = typeof input.directPlay === "boolean" ? input.directPlay : base.directPlay;
   const requestedMax = Number(input.maxSourceGiB);
   const maxSourceGiB = Number.isFinite(requestedMax) ? Math.min(1000, Math.max(0, requestedMax)) : base.maxSourceGiB;
   const boundedMinimum = maximumResolution && minimumResolution > maximumResolution
@@ -80,6 +86,7 @@ export function normalizeQualityProfile(value: unknown): SearchQualityProfile {
     || maximumResolution !== base.maximumResolution
     || hdrMode !== base.hdrMode
     || codec !== base.codec
+    || directPlay !== base.directPlay
     || maxSourceGiB !== base.maxSourceGiB;
   return {
     preset: customized || requestedPreset === "custom" ? "custom" : preset,
@@ -88,6 +95,7 @@ export function normalizeQualityProfile(value: unknown): SearchQualityProfile {
     maximumResolution,
     hdrMode,
     codec,
+    directPlay,
     maxSourceGiB,
   };
 }
@@ -114,6 +122,7 @@ export function assessSearchQuality(
     : /\b(?:x264|h\.?264|avc)\b/i.test(name)
       ? "h264"
       : "unknown";
+  const tenBit = /\b(?:10[ ._-]*bit|hi10p)\b/i.test(name);
   const violations: string[] = [];
   if (detectedResolution && profile.minimumResolution && detectedResolution < profile.minimumResolution) {
     violations.push(`${detectedResolution}p is below the ${profile.minimumResolution}p minimum`);
@@ -125,6 +134,10 @@ export function assessSearchQuality(
   if (profile.codec !== "any" && codec !== "unknown" && codec !== profile.codec) {
     violations.push(`${codec.toUpperCase()} does not match the ${profile.codec.toUpperCase()} codec requirement`);
   }
+  if (profile.directPlay && profile.codec !== "any" && codec === "unknown") {
+    violations.push(`${profile.codec.toUpperCase()} could not be verified from the release or manifest name`);
+  }
+  if (profile.directPlay && tenBit) violations.push("10-bit video is outside the universal direct-play profile");
   if (profile.maxSourceGiB > 0 && totalBytes > profile.maxSourceGiB * 1024 ** 3) {
     violations.push(`source exceeds ${profile.maxSourceGiB} GiB`);
   }
@@ -135,5 +148,41 @@ export function assessSearchQuality(
   }
   if (profile.codec !== "any" && codec !== "unknown") score += codec === profile.codec ? 14 : -9;
   if (profile.hdrMode === "prefer") score += hdr ? 14 : 0;
-  return { allowed: violations.length === 0, violations, score, detectedResolution, hdr, codec };
+  return { allowed: violations.length === 0, violations, score, detectedResolution, hdr, codec, tenBit };
+}
+
+export type PlexMediaDescriptor = {
+  videoCodec?: string;
+  videoResolution?: string;
+  height?: number;
+  container?: string;
+  videoProfile?: string;
+  audioCodec?: string;
+  file?: string;
+};
+
+export function assessPlexMediaQuality(profile: SearchQualityProfile, media: PlexMediaDescriptor) {
+  const videoCodec = String(media.videoCodec || "").toLowerCase();
+  const codec = videoCodec === "hevc" || videoCodec === "h265"
+    ? "h265"
+    : videoCodec === "h264" || videoCodec === "avc"
+      ? "h264"
+      : videoCodec || "unknown";
+  const resolution = Number.parseInt(String(media.videoResolution || media.height || "0"), 10) || 0;
+  const descriptor = `${media.file || ""} ${media.videoProfile || ""}`;
+  const hdr = /\b(?:hdr10\+?|dolby[ ._-]*vision|dovi|dv)\b/i.test(descriptor);
+  const tenBit = /\b(?:10[ ._-]*bit|hi10p|main[ ._-]*10)\b/i.test(descriptor);
+  const violations: string[] = [];
+  if (profile.minimumResolution && resolution && resolution < profile.minimumResolution) {
+    violations.push(`${resolution}p is below the ${profile.minimumResolution}p minimum`);
+  }
+  if (profile.maximumResolution && resolution && resolution > profile.maximumResolution) {
+    violations.push(`${resolution}p exceeds the ${profile.maximumResolution}p maximum`);
+  }
+  if (profile.hdrMode === "avoid" && hdr) violations.push("HDR is disabled by the profile");
+  if (profile.codec !== "any" && codec !== profile.codec) {
+    violations.push(`${codec.toUpperCase()} does not match the ${profile.codec.toUpperCase()} codec requirement`);
+  }
+  if (profile.directPlay && tenBit) violations.push("10-bit video is outside the universal direct-play profile");
+  return { allowed: violations.length === 0, violations, codec, resolution, hdr, tenBit };
 }

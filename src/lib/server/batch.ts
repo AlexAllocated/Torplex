@@ -1625,7 +1625,10 @@ export async function preflightTorrentSource(
     payloadName: metadata.payloadName,
     totalBytes: metadata.totalBytes,
     fileCount: metadata.fileCount,
-    sampleFiles: metadata.files.slice(0, 12).map((file) => file.path),
+    sampleFiles: metadata.files
+      .filter((file) => /\.(?:mkv|mp4|m4v|avi|mov|wmv|ts|m2ts|webm)$/i.test(file.path))
+      .slice(0, 40)
+      .map((file) => file.path),
     seasonNumbers: seasonNumbersFromManifest(metadata.payloadName, metadata.files.map((file) => file.path)),
   };
 }

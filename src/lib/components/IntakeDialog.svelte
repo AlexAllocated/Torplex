@@ -24,12 +24,12 @@
   let stopSearchActivity = null;
   let retryingTargets = new Set();
   const qualityPresets = {
-    balanced: { preset: 'balanced', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 2160, hdrMode: 'allow', codec: 'any', maxSourceGiB: 0 },
-    compatibility: { preset: 'compatibility', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 1080, hdrMode: 'avoid', codec: 'h264', maxSourceGiB: 0 },
-    compact: { preset: 'compact', preferredResolution: 720, minimumResolution: 480, maximumResolution: 1080, hdrMode: 'allow', codec: 'h265', maxSourceGiB: 12 },
-    maximum: { preset: 'maximum', preferredResolution: 2160, minimumResolution: 1080, maximumResolution: 2160, hdrMode: 'prefer', codec: 'any', maxSourceGiB: 0 },
+    balanced: { preset: 'balanced', preferredResolution: 1080, minimumResolution: 720, maximumResolution: 2160, hdrMode: 'allow', codec: 'any', directPlay: false, maxSourceGiB: 0 },
+    compatibility: { preset: 'compatibility', preferredResolution: 1080, minimumResolution: 480, maximumResolution: 1080, hdrMode: 'avoid', codec: 'h264', directPlay: true, maxSourceGiB: 0 },
+    compact: { preset: 'compact', preferredResolution: 720, minimumResolution: 480, maximumResolution: 1080, hdrMode: 'allow', codec: 'h265', directPlay: false, maxSourceGiB: 12 },
+    maximum: { preset: 'maximum', preferredResolution: 2160, minimumResolution: 1080, maximumResolution: 2160, hdrMode: 'prefer', codec: 'any', directPlay: false, maxSourceGiB: 0 },
   };
-  let qualityProfile = { ...qualityPresets.balanced };
+  let qualityProfile = { ...qualityPresets.compatibility };
 
   $: readyItems = items.map((item) => snapshots.get(item.clientId)).filter((item) => item?.ready);
   $: unresolvedItems = items.length - readyItems.length;
@@ -435,8 +435,8 @@
           <div class="intake-field quality-preset-field">
             <label for="searchQualityPreset">Quality profile</label>
             <select id="searchQualityPreset" value={qualityProfile.preset} on:change={(event) => chooseQualityPreset(event.currentTarget.value)}>
+              <option value="compatibility">Direct play (recommended)</option>
               <option value="balanced">Balanced 1080p</option>
-              <option value="compatibility">Maximum compatibility</option>
               <option value="compact">Compact files</option>
               <option value="maximum">Maximum quality</option>
               {#if qualityProfile.preset === 'custom'}<option value="custom">Custom</option>{/if}
@@ -450,6 +450,7 @@
               <div class="intake-field"><label for="qualityMaximum">Maximum</label><select id="qualityMaximum" value={qualityProfile.maximumResolution} on:change={(event) => customizeQuality('maximumResolution', Number(event.currentTarget.value))}><option value="0">No limit</option><option value="720">720p</option><option value="1080">1080p</option><option value="2160">2160p</option></select></div>
               <div class="intake-field"><label for="qualityCodec">Codec</label><select id="qualityCodec" value={qualityProfile.codec} on:change={(event) => customizeQuality('codec', event.currentTarget.value)}><option value="any">Any</option><option value="h264">H.264</option><option value="h265">H.265 / HEVC</option></select></div>
               <div class="intake-field"><label for="qualityHdr">HDR</label><select id="qualityHdr" value={qualityProfile.hdrMode} on:change={(event) => customizeQuality('hdrMode', event.currentTarget.value)}><option value="allow">Allow</option><option value="avoid">Avoid</option><option value="prefer">Prefer</option></select></div>
+              <div class="intake-field"><label for="qualityDirectPlay">Codec verification</label><select id="qualityDirectPlay" value={qualityProfile.directPlay ? 'strict' : 'flexible'} on:change={(event) => customizeQuality('directPlay', event.currentTarget.value === 'strict')}><option value="strict">Require verified direct play</option><option value="flexible">Allow unknown formats</option></select></div>
               <div class="intake-field"><label for="qualitySize">Max source GiB</label><input id="qualitySize" type="number" min="0" max="1000" step="1" value={qualityProfile.maxSourceGiB} on:change={(event) => customizeQuality('maxSourceGiB', Number(event.currentTarget.value))} /><span class="field-hint">0 means no limit</span></div>
             </div>
           </details>

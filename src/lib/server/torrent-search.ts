@@ -46,6 +46,7 @@ type SearchTarget = SearchWork & {
   scope: "movie" | "complete" | "season";
   scopeLabel: string;
   seasonNumber: number | null;
+  fallbackSearchQuery: string;
 };
 
 export type SearchCandidate = {
@@ -346,7 +347,7 @@ Resolve the request into one canonical entry per movie or TV series. Follow scop
 
 For every TV series, requiredSeasons must enumerate every regular season needed to satisfy the request. A request for a series without a season limit means all released seasons of that series. Use an empty array for movies. Do not include specials as season 0 unless the user explicitly requests them. This season manifest is operational: Torplex will use it to verify complete-series packs and fall back to separate season downloads when necessary, so do not omit known seasons.
 
-The supplied existingInventory is authoritative for content already in Plex or already queued in Torplex. Movies are existing when title, year, and type match. TV series inventory includes exact season numbers: exclude a series only when its inventory seasons cover every requested season. When only some seasons exist, include the series in works with requiredSeasons containing only the missing seasons. Every excludedExisting entry must repeat the full requested regular-season scope in requestedSeasons for shows and use an empty array for movies. Never infer ownership beyond this list. For ranked or count-based requests such as "top 10," return the full requested number of non-existing works by continuing farther down the ranking; excluded titles do not count toward the requested total.`,
+The supplied existingInventory is authoritative for content already in Plex or already queued in Torplex. Compatibility is part of ownership coverage: an item with compatible=false still needs a replacement. For TV series, compatibleSeasons is the exact season coverage that satisfies the active quality profile; use it instead of seasons when it is present. Exclude a series only when compatibleSeasons covers every requested season. When only some compatible seasons exist, include the series in works with requiredSeasons containing only the missing or incompatible seasons. Every excludedExisting entry must repeat the full requested regular-season scope in requestedSeasons for shows and use an empty array for movies. Never infer ownership beyond this list. For ranked or count-based requests such as "top 10," return the full requested number of non-existing works by continuing farther down the ranking; excluded titles do not count toward the requested total.`,
     { prompt, maximumWorks: maxWorks, existingInventory: inventory },
     signal,
   );
@@ -467,6 +468,7 @@ function completeTarget(work: SearchWork, qualityProfile: SearchQualityProfile):
     scopeLabel: work.type === "movie" ? "Movie" : "Complete series",
     seasonNumber: null,
     searchQuery: completeScopeQuery(work, qualityProfile),
+    fallbackSearchQuery: `${work.title}${work.year ? ` ${work.year}` : ""}`,
   };
 }
 
@@ -481,6 +483,7 @@ function seasonTarget(work: SearchWork, seasonNumber: number, qualityProfile: Se
     seasonNumber,
     requiredSeasons: [seasonNumber],
     searchQuery: `${work.title}${work.year ? ` ${work.year}` : ""} ${code} Season ${seasonNumber} ${qualitySearchTerms(qualityProfile)}`.trim(),
+    fallbackSearchQuery: `${work.title}${work.year ? ` ${work.year}` : ""} ${code}`,
   };
 }
 
@@ -497,7 +500,11 @@ function candidateUsefulForTarget(
   metadata: TorrentPreflightMetadata,
   qualityProfile: SearchQualityProfile,
 ) {
-  const quality = assessSearchQuality(qualityProfile, `${candidate.name} ${metadata.payloadName}`, metadata.totalBytes);
+  const quality = assessSearchQuality(
+    qualityProfile,
+    `${candidate.name} ${metadata.payloadName} ${(metadata.sampleFiles || []).join(" ")}`,
+    metadata.totalBytes,
+  );
   candidate.quality = quality;
   if (!quality.allowed) return false;
   if (target.scope === "movie" || !target.requiredSeasons.length) return true;
@@ -797,7 +804,12 @@ async function searchTargetGroups(
     if (signal?.aborted) throw abortError();
     onProgress(`Searching ${targetDisplay(target)} - ${index + 1} of ${targets.length}`);
     try {
-      const found = (await runNova(target, signal)).map((candidate) => ({
+      let raw = await runNova(target, signal);
+      if (!raw.length && target.fallbackSearchQuery !== target.searchQuery) {
+        onProgress(`${targetDisplay(target)}: no exact quality-tag results; widening provider query and enforcing quality from retrieved manifests`);
+        raw = await runNova({ ...target, searchQuery: target.fallbackSearchQuery }, signal);
+      }
+      const found = raw.map((candidate) => ({
         ...candidate,
         providerReliability: providerReliabilitySummary(providerHistory[candidate.provider]),
       }));
@@ -841,7 +853,7 @@ export async function createTorrentSearchProposal(
   if (normalizedPrompt.length > 2000) throw new Error("Search prompt is too long");
   if (signal?.aborted) throw abortError();
   onProgress("Reading the Plex library and Torplex queue");
-  const inventory = await loadLibraryInventory(signal);
+  const inventory = await loadLibraryInventory(signal, qualityProfile);
   if (signal?.aborted) throw abortError();
   for (const warning of inventory.warnings) onProgress(`Library inventory warning: ${warning}`);
   onProgress(`Found ${inventory.items.length} existing movie and show title${inventory.items.length === 1 ? "" : "s"}`);

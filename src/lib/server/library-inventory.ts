@@ -2,6 +2,13 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { seasonNumbersFromManifest } from "$lib/server/torrent-coverage";
+import {
+  assessPlexMediaQuality,
+  assessSearchQuality,
+  normalizeQualityProfile,
+  type PlexMediaDescriptor,
+  type SearchQualityProfile,
+} from "$lib/search-quality";
 
 const defaultPlexUrl = "http://127.0.0.1:32400";
 const pageSize = 200;
@@ -20,6 +27,13 @@ export type LibraryInventoryItem = {
   source: "plex" | "queue";
   status: string;
   seasons: number[];
+  compatible?: boolean;
+  compatibleSeasons?: number[];
+  incompatibleReasons?: string[];
+};
+
+type PlexMedia = PlexMediaDescriptor & {
+  Part?: Array<{ file?: string; container?: string; videoProfile?: string }>;
 };
 
 type PlexMetadata = {
@@ -28,6 +42,8 @@ type PlexMetadata = {
   year?: number;
   index?: number;
   type?: string;
+  parentIndex?: number;
+  Media?: PlexMedia[];
 };
 
 type PlexSection = {
@@ -79,8 +95,10 @@ export function findLibraryMatch(
     if (work.year !== null) return item.year === work.year;
     return true;
   });
-  if (work.type !== "show" || !work.requiredSeasons?.length) return matches[0];
-  const covered = new Set(matches.flatMap((item) => item.seasons || []));
+  if (work.type !== "show" || !work.requiredSeasons?.length) {
+    return matches.find((item) => item.compatible !== false);
+  }
+  const covered = new Set(matches.flatMap((item) => item.compatibleSeasons ?? item.seasons ?? []));
   return work.requiredSeasons.every((season) => covered.has(season)) ? matches[0] : undefined;
 }
 
@@ -93,7 +111,7 @@ export function missingLibrarySeasons(
   const covered = new Set(inventory.flatMap((item) => {
     if (item.type !== "show" || normalizeLibraryTitle(item.title) !== title) return [];
     if (work.year !== null && item.year !== work.year) return [];
-    return item.seasons || [];
+    return item.compatibleSeasons ?? item.seasons ?? [];
   }));
   return work.requiredSeasons.filter((season) => !covered.has(season));
 }
@@ -111,17 +129,68 @@ async function mapWithConcurrency<T, R>(values: T[], concurrency: number, callba
   return output;
 }
 
-async function plexShowSeasons(ratingKey: string, token: string, plexUrl: string, signal?: AbortSignal) {
-  const response = await fetch(`${plexUrl}/library/metadata/${encodeURIComponent(ratingKey)}/children`, {
-    headers: { Accept: "application/json", "X-Plex-Token": token },
-    signal: requestSignal(signal),
-  });
-  if (!response.ok) throw new Error(`Plex season inventory returned HTTP ${response.status}`);
-  const payload = await response.json() as { MediaContainer?: { Metadata?: PlexMetadata[] } };
-  return [...new Set((payload.MediaContainer?.Metadata ?? [])
-    .filter((entry) => entry.type === "season" && Number.isInteger(entry.index) && entry.index! > 0)
-    .map((entry) => entry.index!))]
-    .sort((left, right) => left - right);
+function mediaDescriptors(entry: PlexMetadata) {
+  return (entry.Media ?? []).map((media): PlexMediaDescriptor => ({
+    ...media,
+    file: media.Part?.[0]?.file,
+    container: media.container || media.Part?.[0]?.container,
+    videoProfile: media.videoProfile || media.Part?.[0]?.videoProfile,
+  }));
+}
+
+function plexMediaCompatibility(entry: PlexMetadata, profile: SearchQualityProfile) {
+  const assessments = mediaDescriptors(entry).map((media) => assessPlexMediaQuality(profile, media));
+  const compatible = assessments.some((assessment) => assessment.allowed);
+  const reasons = compatible
+    ? []
+    : [...new Set(assessments.flatMap((assessment) => assessment.violations))];
+  return {
+    compatible,
+    reasons: reasons.length ? reasons : ["Plex did not report a verifiable video stream"],
+  };
+}
+
+async function plexShowMediaInventory(
+  ratingKey: string,
+  token: string,
+  plexUrl: string,
+  profile: SearchQualityProfile,
+  signal?: AbortSignal,
+) {
+  const episodes: PlexMetadata[] = [];
+  for (let start = 0; start < maximumItems; start += pageSize) {
+    const url = new URL(`${plexUrl}/library/metadata/${encodeURIComponent(ratingKey)}/allLeaves`);
+    url.searchParams.set("includeMedia", "1");
+    url.searchParams.set("X-Plex-Container-Start", String(start));
+    url.searchParams.set("X-Plex-Container-Size", String(pageSize));
+    const response = await fetch(url, {
+      headers: { Accept: "application/json", "X-Plex-Token": token },
+      signal: requestSignal(signal),
+    });
+    if (!response.ok) throw new Error(`Plex episode inventory returned HTTP ${response.status}`);
+    const payload = await response.json() as {
+      MediaContainer?: { Metadata?: PlexMetadata[]; totalSize?: number };
+    };
+    const page = payload.MediaContainer?.Metadata ?? [];
+    episodes.push(...page);
+    const totalSize = payload.MediaContainer?.totalSize;
+    if (page.length < pageSize || (typeof totalSize === "number" && start + page.length >= totalSize)) break;
+  }
+  const bySeason = new Map<number, PlexMetadata[]>();
+  for (const episode of episodes) {
+    const season = Number(episode.parentIndex);
+    if (!Number.isInteger(season) || season <= 0) continue;
+    bySeason.set(season, [...(bySeason.get(season) ?? []), episode]);
+  }
+  const seasons = [...bySeason.keys()].sort((left, right) => left - right);
+  const compatibleSeasons: number[] = [];
+  const incompatibleReasons = new Set<string>();
+  for (const season of seasons) {
+    const assessments = bySeason.get(season)!.map((episode) => plexMediaCompatibility(episode, profile));
+    if (assessments.length && assessments.every((assessment) => assessment.compatible)) compatibleSeasons.push(season);
+    else for (const reason of assessments.flatMap((assessment) => assessment.reasons)) incompatibleReasons.add(reason);
+  }
+  return { seasons, compatibleSeasons, incompatibleReasons: [...incompatibleReasons] };
 }
 
 async function plexSectionInventory(
@@ -129,6 +198,7 @@ async function plexSectionInventory(
   type: "movie" | "show",
   token: string,
   plexUrl: string,
+  profile: SearchQualityProfile,
   signal?: AbortSignal,
 ) {
   const items: Array<{ item: LibraryInventoryItem; ratingKey: string }> = [];
@@ -138,6 +208,7 @@ async function plexSectionInventory(
     url.searchParams.set("type", metadataType);
     url.searchParams.set("X-Plex-Container-Start", String(start));
     url.searchParams.set("X-Plex-Container-Size", String(pageSize));
+    url.searchParams.set("includeMedia", "1");
     const response = await fetch(url, {
       headers: { Accept: "application/json", "X-Plex-Token": token },
       signal: requestSignal(signal),
@@ -159,6 +230,14 @@ async function plexSectionInventory(
           source: "plex",
           status: "in library",
           seasons: [],
+          ...(type === "movie" ? (() => {
+            const assessment = plexMediaCompatibility(entry, profile);
+            return {
+              compatible: assessment.compatible,
+              incompatibleReasons: assessment.reasons,
+              status: assessment.compatible ? "in library" : "in library; direct-play replacement needed",
+            };
+          })() : {}),
         },
       });
     }
@@ -168,7 +247,15 @@ async function plexSectionInventory(
   if (type === "movie") return items.map((entry) => entry.item);
   return mapWithConcurrency(items, 6, async ({ item, ratingKey }) => {
     try {
-      return { ...item, seasons: await plexShowSeasons(ratingKey, token, plexUrl, signal) };
+      const media = await plexShowMediaInventory(ratingKey, token, plexUrl, profile, signal);
+      return {
+        ...item,
+        ...media,
+        compatible: media.seasons.length > 0 && media.compatibleSeasons.length === media.seasons.length,
+        status: media.seasons.length > 0 && media.compatibleSeasons.length === media.seasons.length
+          ? "in library"
+          : "in library; direct-play replacement needed",
+      };
     } catch {
       return item;
     }
@@ -188,7 +275,7 @@ async function plexSections(token: string, plexUrl: string, signal?: AbortSignal
   });
 }
 
-async function queueInventory(batchDir: string) {
+async function queueInventory(batchDir: string, profile: SearchQualityProfile) {
   let manifest: QueueManifest = {};
   let state: QueueState = {};
   try {
@@ -209,6 +296,15 @@ async function queueInventory(batchDir: string) {
     const fallback = titleAndYear(item.title || "");
     const title = destination.title || fallback.title;
     if (!title) return [];
+    const seasons = item.destination.type === "show"
+      ? seasonNumbersFromManifest(`${item.title || ""} ${item.payloadName || ""} ${item.destination.path}`, item.selectedPaths || [])
+        .filter((season) => season > 0)
+      : [];
+    const quality = assessSearchQuality(
+      profile,
+      `${item.title || ""} ${item.payloadName || ""} ${(item.selectedPaths || []).join(" ")}`,
+      0,
+    );
     return [{
       id: `queue-${item.id}`,
       title,
@@ -216,20 +312,21 @@ async function queueInventory(batchDir: string) {
       type: item.destination.type as "movie" | "show",
       source: "queue",
       status,
-      seasons: item.destination.type === "show"
-        ? seasonNumbersFromManifest(`${item.title || ""} ${item.payloadName || ""} ${item.destination.path}`, item.selectedPaths || [])
-          .filter((season) => season > 0)
-        : [],
+      seasons,
+      compatible: quality.allowed,
+      compatibleSeasons: quality.allowed ? seasons : [],
+      incompatibleReasons: quality.violations,
     }];
   });
 }
 
-export async function loadLibraryInventory(signal?: AbortSignal) {
+export async function loadLibraryInventory(signal?: AbortSignal, qualityInput?: unknown) {
+  const qualityProfile = normalizeQualityProfile(qualityInput);
   const plexUrl = (process.env.PLEX_URL || defaultPlexUrl).replace(/\/$/, "");
   const token = (process.env.PLEX_TOKEN || "").trim();
   const batchDir = process.env.BATCH_DIR || "/media/plex/.downloads/torrent-batch";
   const warnings: string[] = [];
-  const queueItems = await queueInventory(batchDir);
+  const queueItems = await queueInventory(batchDir, qualityProfile);
   let plexItems: LibraryInventoryItem[] = [];
   if (!token) {
     warnings.push("PLEX_TOKEN is not configured, so Find with AI could only check the Torplex queue");
@@ -246,7 +343,7 @@ export async function loadLibraryInventory(signal?: AbortSignal) {
       ];
     }
     const results = await Promise.allSettled(sections.map(([sectionId, type]) =>
-      plexSectionInventory(sectionId, type, token, plexUrl, signal)
+      plexSectionInventory(sectionId, type, token, plexUrl, qualityProfile, signal)
     ));
     for (const result of results) {
       if (result.status === "fulfilled") plexItems.push(...result.value);
@@ -263,8 +360,25 @@ export async function loadLibraryInventory(signal?: AbortSignal) {
       continue;
     }
     const seasons = [...new Set([...(existing.seasons || []), ...(item.seasons || [])])].sort((left, right) => left - right);
-    if (item.source === "plex" && existing.source !== "plex") deduped.set(key, { ...item, seasons });
-    else deduped.set(key, { ...existing, seasons });
+    const compatibleSeasons = [...new Set([
+      ...(existing.compatibleSeasons ?? (existing.compatible === false ? [] : existing.seasons || [])),
+      ...(item.compatibleSeasons ?? (item.compatible === false ? [] : item.seasons || [])),
+    ])].sort((left, right) => left - right);
+    const preferred = item.source === "plex" && existing.source !== "plex" ? item : existing;
+    const compatible = existing.type === "movie"
+      ? existing.compatible !== false || item.compatible !== false
+      : seasons.length > 0 && compatibleSeasons.length === seasons.length;
+    deduped.set(key, {
+      ...preferred,
+      seasons,
+      compatible,
+      compatibleSeasons,
+      incompatibleReasons: compatible ? [] : [...new Set([
+        ...(existing.incompatibleReasons || []),
+        ...(item.incompatibleReasons || []),
+      ])],
+      status: compatible ? preferred.status.replace(/; direct-play replacement needed$/, "") : "in library; direct-play replacement needed",
+    });
   }
   return { items: [...deduped.values()], warnings };
 }
