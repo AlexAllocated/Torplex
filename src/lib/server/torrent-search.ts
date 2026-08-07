@@ -384,8 +384,25 @@ The supplied existingInventory is authoritative for content already in Plex or a
     const requestedSeasons = Array.isArray(excluded.requestedSeasons)
       ? [...new Set(excluded.requestedSeasons.map(Number).filter((season) => Number.isInteger(season) && season > 0 && season <= 99))]
       : [];
-    if (inventoryItem.type === "show" && requestedSeasons.length) {
-      const missingSeasons = requestedSeasons.filter((season) => !inventoryItem.seasons.includes(season));
+    if (inventoryItem.type === "movie" && inventoryItem.compatible === false) {
+      const title = inventoryItem.title;
+      if (!proposedWorks.some((work) => work.type === "movie" && normalizeLibraryTitle(work.title) === normalizeLibraryTitle(title))) {
+        proposedWorks.push({
+          id: cleanId(`${title}-${inventoryItem.year || ""}`, `movie-${proposedWorks.length + 1}`),
+          title,
+          year: inventoryItem.year,
+          type: "movie",
+          searchQuery: `${title}${inventoryItem.year ? ` ${inventoryItem.year}` : ""}`,
+          notes: "The existing Plex copy does not satisfy the active quality profile and needs a replacement.",
+          requiredSeasons: [],
+        });
+      }
+      continue;
+    }
+    if (inventoryItem.type === "show") {
+      const coveredSeasons = new Set(inventoryItem.compatibleSeasons ?? inventoryItem.seasons);
+      const replacementScope = requestedSeasons.length ? requestedSeasons : inventoryItem.seasons;
+      const missingSeasons = replacementScope.filter((season) => !coveredSeasons.has(season));
       if (missingSeasons.length) {
         const title = inventoryItem.title;
         if (!proposedWorks.some((work) => work.type === "show" && normalizeLibraryTitle(work.title) === normalizeLibraryTitle(title))) {
