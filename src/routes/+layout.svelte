@@ -13,15 +13,6 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 </svelte:head>
 
-<svg class="crt-filter-defs" aria-hidden="true">
-  <defs>
-    <filter id="crtBarrelWarp" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
-      <feImage id="crtBarrelMap" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="barrelMap" />
-      <feDisplacementMap in="SourceGraphic" in2="barrelMap" scale="96" xChannelSelector="R" yChannelSelector="G" />
-    </filter>
-  </defs>
-</svg>
-
 <div id="crtPicture" class="crt-picture">
   {@render children()}
 </div>

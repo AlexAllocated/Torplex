@@ -575,7 +575,7 @@
       font-weight: 850;
       cursor: pointer;
     }
-    .danger-button.crt-warp-hover:not(:disabled) {
+    .danger-button:hover:not(:disabled) {
       border-color: rgba(244, 112, 134, .76);
       background: rgba(244, 112, 134, .18);
     }
@@ -708,7 +708,7 @@
       color: #cfd9e5;
       font-size: 11px;
     }
-    .torrent-file-row.crt-warp-hover { background: rgba(87, 224, 194, .055); }
+    .torrent-file-row:hover { background: rgba(87, 224, 194, .055); }
     .torrent-file-row.risky-file {
       color: #ffd4dc;
       background: rgba(244, 112, 134, .08);
@@ -1088,7 +1088,7 @@
       cursor: pointer;
     }
     .proposal-row:last-child { border-bottom: 0; }
-    .proposal-row.crt-warp-hover { background: rgba(87, 224, 194, .045); }
+    .proposal-row:hover { background: rgba(87, 224, 194, .045); }
     .proposal-row input { width: 16px; height: 16px; margin-top: 3px; accent-color: var(--teal); }
     .proposal-work, .proposal-release { display: grid; min-width: 0; gap: 3px; }
     .proposal-work strong, .proposal-release strong { overflow: hidden; color: #edf5fc; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1227,7 +1227,7 @@
       cursor: pointer;
       transition: background .2s ease, border-color .2s ease, transform .2s ease;
     }
-    .icon-button.crt-warp-hover {
+    .icon-button:hover {
       border-color: rgba(87, 224, 194, .62);
       background: rgba(87, 224, 194, .15);
       transform: translateY(-1px);
@@ -1418,7 +1418,7 @@
     .map-peer-label.edge-right.edge-bottom {
       transform: none;
     }
-    .map-peer-label.crt-warp-hover {
+    .map-peer-label:hover {
       z-index: 5;
       border-color: rgba(87, 224, 194, .42);
       background: rgba(5, 10, 16, .90);
@@ -1589,7 +1589,7 @@
       transition: color .18s ease, background-color .18s ease;
     }
     .drag-handle[hidden] { display: none; }
-    .drag-handle.crt-warp-hover {
+    .drag-handle:hover {
       color: #d9fff6;
       background: rgba(87, 224, 194, .12);
     }
@@ -2049,7 +2049,7 @@
       background: rgba(182, 255, 55, .09);
       box-shadow: inset 0 0 12px rgba(182, 255, 55, .04), 0 0 12px rgba(182, 255, 55, .07);
     }
-    .primary-button.crt-warp-hover:not(:disabled) {
+    .primary-button:hover:not(:disabled) {
       border-color: var(--green);
       color: #f4ffdf;
       background: rgba(182, 255, 55, .15);
@@ -2060,7 +2060,7 @@
       color: #bcefff;
       background: rgba(39, 191, 255, .065);
     }
-    .secondary-button.crt-warp-hover:not(:disabled), .small-button.crt-warp-hover:not(:disabled) {
+    .secondary-button:hover:not(:disabled), .small-button:hover:not(:disabled) {
       border-color: rgba(39, 191, 255, .72);
       background: rgba(39, 191, 255, .12);
       box-shadow: 0 0 14px rgba(39, 191, 255, .12);
@@ -2070,13 +2070,13 @@
       color: #ffb9d1;
       background: rgba(255, 61, 129, .07);
     }
-    .danger-button.crt-warp-hover:not(:disabled) {
+    .danger-button:hover:not(:disabled) {
       border-color: #ff3d81;
       background: rgba(255, 61, 129, .14);
       box-shadow: 0 0 15px rgba(255, 61, 129, .15);
     }
     .icon-button { border-color: rgba(0, 255, 200, .42); color: #baffee; background: rgba(0, 255, 200, .07); }
-    .icon-button.crt-warp-hover { border-color: var(--teal); background: rgba(0, 255, 200, .13); box-shadow: 0 0 15px rgba(0, 255, 200, .16); }
+    .icon-button:hover { border-color: var(--teal); background: rgba(0, 255, 200, .13); box-shadow: 0 0 15px rgba(0, 255, 200, .16); }
 
     .intake-field label { color: #72d7bf; }
     .intake-field input, .intake-field select, .intake-field textarea, .file-filter-row input {
@@ -2131,7 +2131,7 @@
       background: rgba(2, 10, 11, .96);
       box-shadow: inset 0 0 0 1px rgba(39, 191, 255, .025);
     }
-    .item.crt-warp-hover { border-color: rgba(0, 255, 174, .38); background: rgba(3, 17, 17, .97); }
+    .item:hover { border-color: rgba(0, 255, 174, .38); background: rgba(3, 17, 17, .97); }
     .item.active, .item.organizing {
       border-color: rgba(0, 255, 200, .55);
       background: linear-gradient(90deg, rgba(0, 255, 174, .085), rgba(2, 14, 15, .97) 44%);
@@ -2147,7 +2147,7 @@
       color: #4cae96;
       background: rgba(0, 255, 174, .025);
     }
-    .drag-handle.crt-warp-hover { color: var(--green); background: rgba(182, 255, 55, .07); }
+    .drag-handle:hover { color: var(--green); background: rgba(182, 255, 55, .07); }
     .mono { color: #8fc9ba; }
     .torrent-marker { box-shadow: 0 0 5px var(--torrent-color), 0 0 14px color-mix(in srgb, var(--torrent-color), transparent 48%); }
     .terminal-head { border-color: rgba(0, 255, 174, .2); background: #02090a; }
@@ -2382,8 +2382,8 @@
       color: rgb(var(--phosphor-bright));
       background: rgb(var(--phosphor-deep) / .18);
     }
-    .primary-button.crt-warp-hover:not(:disabled), .secondary-button.crt-warp-hover:not(:disabled),
-    .small-button.crt-warp-hover:not(:disabled), .icon-button.crt-warp-hover:not(:disabled) {
+    .primary-button:hover:not(:disabled), .secondary-button:hover:not(:disabled),
+    .small-button:hover:not(:disabled), .icon-button:hover:not(:disabled) {
       border-color: rgb(var(--phosphor-soft) / .82);
       color: rgb(var(--phosphor-bright));
       background: rgb(var(--phosphor-deep) / .32);
@@ -2395,7 +2395,7 @@
       background: rgb(var(--phosphor-main) / .12);
       border-style: dashed;
     }
-    .danger-button.crt-warp-hover:not(:disabled) { border-color: rgb(var(--phosphor-bright)); background: rgb(var(--phosphor-main) / .24); }
+    .danger-button:hover:not(:disabled) { border-color: rgb(var(--phosphor-bright)); background: rgb(var(--phosphor-main) / .24); }
     .chip.completed { border-color: rgb(var(--phosphor-main) / .34); color: rgb(var(--phosphor-soft)); background: rgb(var(--phosphor-deep) / .1); }
     .status-pill[data-mode="busy"], .vpn-status.routed { border-color: rgb(var(--phosphor-main) / .46); color: rgb(var(--phosphor-text)); background: rgb(var(--phosphor-deep) / .12); }
 
@@ -2522,7 +2522,7 @@
       background: rgb(var(--phosphor-screen) / .7);
       box-shadow: inset 0 0 8px rgb(var(--phosphor-main) / .035);
     }
-    .item.crt-warp-hover { border-color: rgb(var(--phosphor-main) / .42); background: rgb(var(--phosphor-screen) / .9); }
+    .item:hover { border-color: rgb(var(--phosphor-main) / .42); background: rgb(var(--phosphor-screen) / .9); }
     .item.active, .item.organizing {
       border-color: rgb(var(--phosphor-soft) / .56);
       background: linear-gradient(90deg, rgb(var(--phosphor-deep) / .15), rgb(var(--phosphor-screen) / .82) 44%);
@@ -2539,7 +2539,7 @@
     }
     .item.active::before { background: linear-gradient(90deg, transparent, rgb(var(--phosphor-soft) / .09), transparent); }
     .drag-handle { border-color: rgb(var(--phosphor-main) / .16); color: rgb(var(--phosphor-main) / .62); background: rgb(var(--phosphor-deep) / .035); }
-    .drag-handle.crt-warp-hover { color: rgb(var(--phosphor-bright)); background: rgb(var(--phosphor-deep) / .16); }
+    .drag-handle:hover { color: rgb(var(--phosphor-bright)); background: rgb(var(--phosphor-deep) / .16); }
     .torrent-marker {
       --torrent-color: rgb(var(--phosphor-main)) !important;
       background: rgb(var(--phosphor-main)) !important;
@@ -2579,13 +2579,6 @@
     }
 
     /* The viewport is the CRT glass: there is intentionally no monitor frame. */
-    .crt-filter-defs {
-      position: fixed;
-      width: 0;
-      height: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
     .crt-picture {
       position: fixed;
       inset: 0;
@@ -2598,14 +2591,7 @@
       overscroll-behavior: contain;
       transform-origin: center;
     }
-    body.crt-barrel-ready:not(.map-fullscreen-open) .crt-picture {
-      filter: url("#crtBarrelWarp");
-    }
     body.map-fullscreen-open .crt-picture { overflow: hidden; }
-    body.crt-warp-cursor-active .crt-picture,
-    body.crt-warp-cursor-active .crt-picture * {
-      cursor: var(--crt-warp-cursor, auto) !important;
-    }
     .crt-boot-screen {
       position: fixed;
       inset: 0;

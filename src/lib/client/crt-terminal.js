@@ -23,132 +23,10 @@ const TYPE_SELECTOR = [
 
 const CRT_THEMES = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'magenta', 'gruvbox']);
 const CRT_THEME_STORAGE_KEY = 'torplex:crt-theme';
-const CRT_WARP_SCALE = 96;
-const CRT_WARP_CURVE = .28;
 const CRT_GLITCH_STATIC_CHANCE = .125;
 const normalizeTheme = (theme) => theme === 'purple' ? 'magenta' : theme;
 
 const hasReadableText = (node) => Boolean(node?.textContent?.trim());
-
-function installCrtBarrelMap() {
-  const mapImage = document.getElementById('crtBarrelMap');
-  if (!mapImage) return;
-  const size = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const context = canvas.getContext('2d');
-  if (!context) return;
-  const pixels = context.createImageData(size, size);
-  for (let y = 0; y < size; y += 1) {
-    const ny = y / (size - 1) * 2 - 1;
-    for (let x = 0; x < size; x += 1) {
-      const nx = x / (size - 1) * 2 - 1;
-      const radiusSquared = nx * nx + ny * ny;
-      const offset = (y * size + x) * 4;
-      pixels.data[offset] = 128 + Math.max(-.49, Math.min(.49, nx * radiusSquared * CRT_WARP_CURVE)) * 255;
-      pixels.data[offset + 1] = 128 + Math.max(-.49, Math.min(.49, ny * radiusSquared * CRT_WARP_CURVE)) * 255;
-      pixels.data[offset + 2] = 128;
-      pixels.data[offset + 3] = 255;
-    }
-  }
-  context.putImageData(pixels, 0, 0);
-  mapImage.setAttribute('href', canvas.toDataURL('image/png'));
-  document.body.classList.add('crt-barrel-ready');
-}
-
-function installCrtPointerCompensation() {
-  const picture = document.getElementById('crtPicture');
-  if (!picture) return () => {};
-  const interactiveSelector = 'a[href], button, input, select, textarea, label, summary, [role="button"]';
-  let hoverPath = [];
-  let lastPointer = null;
-  const sourcePoint = (clientX, clientY) => {
-    const rect = picture.getBoundingClientRect();
-    if (!rect.width || !rect.height) return { x: clientX, y: clientY };
-    const nx = (clientX - rect.left) / rect.width * 2 - 1;
-    const ny = (clientY - rect.top) / rect.height * 2 - 1;
-    const radiusSquared = nx * nx + ny * ny;
-    return {
-      x: clientX + CRT_WARP_SCALE * Math.max(-.49, Math.min(.49, nx * radiusSquared * CRT_WARP_CURVE)),
-      y: clientY + CRT_WARP_SCALE * Math.max(-.49, Math.min(.49, ny * radiusSquared * CRT_WARP_CURVE)),
-    };
-  };
-  const onClick = (event) => {
-    if (!event.isTrusted || event.defaultPrevented || document.body.classList.contains('map-fullscreen-open')) return;
-    if (!(event.target instanceof Element) || !picture.contains(event.target)) return;
-    const mapped = sourcePoint(event.clientX, event.clientY);
-    const mappedElement = document.elementFromPoint(mapped.x, mapped.y);
-    const intended = mappedElement?.closest?.(interactiveSelector);
-    const received = event.target.closest(interactiveSelector);
-    if (!(intended instanceof HTMLElement) || !picture.contains(intended) || intended === received) return;
-    if ('disabled' in intended && intended.disabled) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (typeof intended.focus === 'function') intended.focus({ preventScroll: true });
-    if (intended instanceof HTMLSelectElement && typeof intended.showPicker === 'function') {
-      try {
-        intended.showPicker();
-        return;
-      } catch {}
-    }
-    intended.click();
-  };
-  const clearHover = () => {
-    hoverPath.forEach((element) => element.classList.remove('crt-warp-hover'));
-    hoverPath = [];
-    document.body.classList.remove('crt-warp-cursor-active');
-    document.body.style.removeProperty('--crt-warp-cursor');
-  };
-  const updateHover = (clientX, clientY) => {
-    if (document.body.classList.contains('map-fullscreen-open')) {
-      clearHover();
-      return;
-    }
-    const mapped = sourcePoint(clientX, clientY);
-    const mappedElement = document.elementFromPoint(mapped.x, mapped.y);
-    if (!(mappedElement instanceof Element) || !picture.contains(mappedElement)) {
-      clearHover();
-      return;
-    }
-    const nextPath = [];
-    for (let element = mappedElement; element && element !== picture; element = element.parentElement) nextPath.push(element);
-    hoverPath.forEach((element) => {
-      if (!nextPath.includes(element)) element.classList.remove('crt-warp-hover');
-    });
-    nextPath.forEach((element) => element.classList.add('crt-warp-hover'));
-    hoverPath = nextPath;
-    document.body.classList.remove('crt-warp-cursor-active');
-    document.body.style.removeProperty('--crt-warp-cursor');
-    document.body.style.setProperty('--crt-warp-cursor', getComputedStyle(mappedElement).cursor || 'auto');
-    document.body.classList.add('crt-warp-cursor-active');
-  };
-  const onPointerMove = (event) => {
-    lastPointer = { x: event.clientX, y: event.clientY };
-    updateHover(event.clientX, event.clientY);
-  };
-  const onViewportMove = () => {
-    if (lastPointer) requestAnimationFrame(() => updateHover(lastPointer.x, lastPointer.y));
-  };
-  document.addEventListener('click', onClick, { capture: true });
-  document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
-  document.addEventListener('pointerleave', clearHover);
-  window.addEventListener('blur', clearHover);
-  window.addEventListener('resize', onViewportMove, { passive: true });
-  window.addEventListener('scroll', onViewportMove, { capture: true, passive: true });
-  picture.addEventListener('scroll', onViewportMove, { passive: true });
-  document.body.dataset.warpInput = 'compensated';
-  return () => {
-    clearHover();
-    document.removeEventListener('click', onClick, { capture: true });
-    document.removeEventListener('pointermove', onPointerMove, { capture: true });
-    document.removeEventListener('pointerleave', clearHover);
-    window.removeEventListener('blur', clearHover);
-    window.removeEventListener('resize', onViewportMove);
-    window.removeEventListener('scroll', onViewportMove, { capture: true });
-    picture.removeEventListener('scroll', onViewportMove);
-  };
-}
 
 export function bitcrushTerminalSamples(samples, sourceSampleRate, bitDepth = 8, targetSampleRate = 16000) {
   const levels = 2 ** (Math.max(4, Math.min(16, Math.round(bitDepth))) - 1);
@@ -333,8 +211,6 @@ export function startCrtTerminal() {
   const audioToggle = document.getElementById('crtAudioToggle');
   const themeButtons = Array.from(document.querySelectorAll('.crt-theme-dot'));
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  installCrtBarrelMap();
-  const removePointerCompensation = installCrtPointerCompensation();
   const revealed = new WeakSet();
   const pendingTargets = new Set();
   const media = createTerminalMediaBank();
@@ -840,7 +716,6 @@ export function startCrtTerminal() {
   return () => {
     destroyed = true;
     observer.disconnect();
-    removePointerCompensation();
     boot?.removeEventListener('click', activate);
     window.removeEventListener('keydown', onBootKey);
     audioToggle?.removeEventListener('click', toggleAudio);
