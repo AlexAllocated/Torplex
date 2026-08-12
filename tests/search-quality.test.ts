@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assessPlexMediaQuality, assessSearchQuality, normalizeQualityProfile, qualityPresets } from "../src/lib/search-quality";
+import { assessPlexMediaQuality, assessSearchQuality, normalizeQualityProfile, qualityPresets, searchQualityIsUsable } from "../src/lib/search-quality";
 
 describe("search quality profiles", () => {
   test("normalizes preset and custom profiles", () => {
@@ -17,6 +17,12 @@ describe("search quality profiles", () => {
       .toBeGreaterThan(assessSearchQuality(profile, "Film.720p.x265", 4 * 1024 ** 3).score);
     expect(assessSearchQuality(profile, "Film.1080p.WEB-DL", 4 * 1024 ** 3).allowed).toBe(false);
     expect(assessSearchQuality(profile, "Film.1080p.x264.10bit", 4 * 1024 ** 3).allowed).toBe(false);
+  });
+
+  test("keeps unknown codec candidates reviewable while rejecting confirmed conflicts", () => {
+    const profile = qualityPresets.compatibility;
+    expect(searchQualityIsUsable(assessSearchQuality(profile, "Babylon 5 Complete Series", 40 * 1024 ** 3))).toBe(true);
+    expect(searchQualityIsUsable(assessSearchQuality(profile, "Babylon 5 Complete Series x265", 40 * 1024 ** 3))).toBe(false);
   });
 
   test("uses Plex stream metadata to identify direct-play replacements", () => {

@@ -151,6 +151,11 @@ export function assessSearchQuality(
   return { allowed: violations.length === 0, violations, score, detectedResolution, hdr, codec, tenBit };
 }
 
+export function searchQualityIsUsable(assessment: ReturnType<typeof assessSearchQuality>) {
+  return assessment.allowed
+    || assessment.violations.every((violation) => violation.includes("could not be verified"));
+}
+
 export type PlexMediaDescriptor = {
   videoCodec?: string;
   videoResolution?: string;
