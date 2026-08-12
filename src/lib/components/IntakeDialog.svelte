@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import { beginCrtActivity } from '$lib/client/crt-activity.js';
+  import { createSearchId } from '$lib/client/search-id.js';
   import IntakeItem from './IntakeItem.svelte';
 
   let items = [];
@@ -191,13 +192,15 @@
     dialogStatus = 'Searching';
     dialogMode = 'busy';
     queueError = '';
-    const controller = new AbortController();
-    const searchId = `search-${crypto.randomUUID()}`;
-    searchController = controller;
-    attachSearchSession(searchId);
-    const stopActivity = beginCrtActivity('ai');
-    stopSearchActivity = stopActivity;
+    let controller = null;
+    let stopActivity = () => {};
     try {
+      controller = new AbortController();
+      const searchId = createSearchId();
+      searchController = controller;
+      attachSearchSession(searchId);
+      stopActivity = beginCrtActivity('ai');
+      stopSearchActivity = stopActivity;
       const response = await fetch('/api/torrent/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -218,7 +221,7 @@
         await watchSearchSession(searchId, controller, { select: true });
       }
     } catch (caught) {
-      if (controller.signal.aborted) {
+      if (controller?.signal.aborted) {
         if (searchController === controller) {
           searchProgress = [...searchProgress, 'Search cancelled'];
           dialogStatus = 'Search cancelled';
@@ -232,7 +235,7 @@
     } finally {
       stopActivity();
       if (stopSearchActivity === stopActivity) stopSearchActivity = null;
-      if (searchController === controller) {
+      if (!controller || searchController === controller) {
         searchController = null;
         searchRunning = false;
       }
