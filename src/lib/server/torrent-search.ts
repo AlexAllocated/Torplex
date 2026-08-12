@@ -826,11 +826,12 @@ async function searchTargetGroups(
         const fallback = await runNova({ ...target, searchQuery: target.fallbackSearchQuery }, signal);
         raw = [...new Map([...raw, ...fallback].map((candidate) => [candidate.sourceUrl, candidate])).values()];
       }
-      if (raw.length < 8) {
+      const providerCount = new Set(raw.map((candidate) => candidate.provider)).size;
+      if (raw.length < 8 || providerCount < 2) {
         const categoryFallback = target.scope === "season" && target.seasonNumber
           ? `${target.title} ${seasonCode(target.seasonNumber)}`
           : target.title;
-        onProgress(`${targetDisplay(target)}: sparse category results; searching all categories with simpler terms`);
+        onProgress(`${targetDisplay(target)}: limited provider coverage; searching all categories with simpler terms`);
         const fallback = await runNova({ ...target, searchQuery: categoryFallback }, signal, "all");
         raw = [...new Map([...raw, ...fallback].map((candidate) => [candidate.sourceUrl, candidate])).values()];
       }
@@ -908,7 +909,9 @@ export async function createTorrentSearchProposal(
       qualityProfile,
     } satisfies SearchProposal;
   }
-  const initialTargets = outline.works.map((work) => completeTarget(work, qualityProfile));
+  const initialTargets = outline.works.map((work) => work.type === "show" && work.requiredSeasons.length === 1
+    ? seasonTarget(work, work.requiredSeasons[0], qualityProfile)
+    : completeTarget(work, qualityProfile));
   const initialGroups = await searchTargetGroups(initialTargets, config, onProgress, qualityProfile, signal);
   onProgress(`Retrieving manifests before model selection; reported seed counts are treated as untrusted`);
   const initialMetadata = initialGroups.some((group) => group.length)
