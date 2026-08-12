@@ -568,12 +568,12 @@ function parseNovaOutput(workId: string, output: string): SearchCandidate[] {
   return [...deduped.values()];
 }
 
-function runNova(work: SearchWork, signal?: AbortSignal): Promise<SearchCandidate[]> {
+function runNova(work: SearchWork, signal?: AbortSignal, category?: "all" | "tv" | "movies"): Promise<SearchCandidate[]> {
   const config = searchConfig();
   if (!config.available) throw new Error("Torrent search is not configured");
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
-    const child = spawn(config.python, ["-I", config.script, config.plugins.join(","), work.type === "show" ? "tv" : "movies", work.searchQuery], {
+    const child = spawn(config.python, ["-I", config.script, config.plugins.join(","), category || (work.type === "show" ? "tv" : "movies"), work.searchQuery], {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         PATH: process.env.PATH || "/run/current-system/sw/bin:/usr/bin:/bin",
@@ -824,6 +824,14 @@ async function searchTargetGroups(
       if (target.fallbackSearchQuery !== target.searchQuery) {
         onProgress(`${targetDisplay(target)}: widening the provider query to catch alternate release naming`);
         const fallback = await runNova({ ...target, searchQuery: target.fallbackSearchQuery }, signal);
+        raw = [...new Map([...raw, ...fallback].map((candidate) => [candidate.sourceUrl, candidate])).values()];
+      }
+      if (raw.length < 8) {
+        const categoryFallback = target.scope === "season" && target.seasonNumber
+          ? `${target.title} ${seasonCode(target.seasonNumber)}`
+          : target.title;
+        onProgress(`${targetDisplay(target)}: sparse category results; searching all categories with simpler terms`);
+        const fallback = await runNova({ ...target, searchQuery: categoryFallback }, signal, "all");
         raw = [...new Map([...raw, ...fallback].map((candidate) => [candidate.sourceUrl, candidate])).values()];
       }
       const found = raw.map((candidate) => ({
