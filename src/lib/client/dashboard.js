@@ -1,6 +1,7 @@
 import { goto } from '$app/navigation';
 
 export function startDashboard() {
+let stopped = false;
 function fmt(bytes) {
   if (!Number.isFinite(bytes)) return "";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -47,7 +48,7 @@ const swarmMap = {
   inViewport: true,
   frameCount: 0,
   fpsStartedAt: 0,
-  origin: { label: 'SERVER', lat: 39, lon: -98 },
+  origin: { label: 'PI', lat: 39, lon: -98 },
   relay: null,
   vpn: null,
 };
@@ -104,7 +105,10 @@ const shapePalette = [
   'ring',
   'plus',
 ];
-const defaultPhosphorRgb = '74, 222, 128';
+const defaultPhosphorRgb = '136, 153, 255';
+const defaultActiveStateRgb = '252, 193, 159';
+const defaultDangerStateRgb = '207, 79, 79';
+const defaultCompletedStateRgb = '153, 204, 102';
 let phosphorCache = { theme: '', rgb: defaultPhosphorRgb };
 let latestItems = [];
 let latestStatusData = null;
@@ -294,14 +298,14 @@ function renderSwarmMap(swarm) {
   }
   if (Number.isFinite(swarm?.origin?.lat) && Number.isFinite(swarm?.origin?.lon)) {
     swarmMap.origin = {
-      label: String(swarm.origin.label || 'SERVER'),
+      label: String(swarm.origin.label || 'PI'),
       lat: Number(swarm.origin.lat),
       lon: Number(swarm.origin.lon),
     };
   }
   swarmMap.relay = Number.isFinite(swarm?.relay?.lat) && Number.isFinite(swarm?.relay?.lon)
     ? {
-        label: String(swarm.relay.label || 'VPN EXIT'),
+        label: 'VPN TUNNEL',
         lat: Number(swarm.relay.lat),
         lon: Number(swarm.relay.lon),
         city: String(swarm.relay.city || ''),
@@ -415,7 +419,9 @@ function drawMapRaster() {
   ctx.save();
   ctx.translate(mapView.x, mapView.y);
   ctx.scale(mapView.scale, mapView.scale);
-  ctx.filter = 'invert(1) hue-rotate(145deg) saturate(.7) brightness(1.08) contrast(1.08)';
+  ctx.filter = getComputedStyle(document.documentElement)
+    .getPropertyValue('--map-raster-filter')
+    .trim() || 'invert(1) hue-rotate(145deg) saturate(.7) brightness(1.08) contrast(1.08)';
   ctx.drawImage(image, layout.x, layout.y, layout.width, layout.height);
   ctx.filter = 'none';
   ctx.restore();
@@ -484,7 +490,7 @@ function setMapCollapsed(collapsed, { persist = true } = {}) {
 
 function initMapVisibility() {
   const panel = document.querySelector('.transfer-map');
-  if (!panel) return;
+  if (!panel) return () => {};
   const syncVisibility = (visible) => {
     swarmMap.inViewport = visible;
     updateMapRenderingState();
@@ -507,17 +513,12 @@ function initMapVisibility() {
     threshold: 0,
   });
   observer.observe(panel);
-  const themeObserver = new MutationObserver(() => {
-    phosphorCache.theme = '';
-    swarmMap.geometryDirty = true;
-    swarmMap.labelsDirty = true;
-    swarmMap.lastFrame = 0;
-    mapStatic.dirty = true;
-    scheduleMapStatic();
-    startMapAnimation();
-  });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-crt-theme'] });
-  document.addEventListener('visibilitychange', () => syncVisibility(swarmMap.inViewport));
+  const onVisibilityChange = () => syncVisibility(swarmMap.inViewport);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  return () => {
+    observer.disconnect();
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+  };
 }
 
 function initMapCollapse() {
@@ -551,7 +552,7 @@ function projectWorldScreen(lat, lon, width, height) {
 function initMapControls() {
   const frame = document.querySelector('.world-map-frame');
   const fullscreenButton = document.getElementById('fullscreenMap');
-  if (!frame) return;
+  if (!frame) return () => {};
   const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
   const setFullscreenUi = (active, pseudo = false) => {
     frame.classList.toggle('map-fullscreen-active', active);
@@ -699,9 +700,15 @@ function initMapControls() {
   const onFullscreenChange = () => setFullscreenUi(fullscreenElement() === frame);
   document.addEventListener('fullscreenchange', onFullscreenChange);
   document.addEventListener('webkitfullscreenchange', onFullscreenChange);
-  document.addEventListener('keydown', (event) => {
+  const onEscape = (event) => {
     if (event.key === 'Escape' && frame.classList.contains('pseudo-fullscreen')) setFullscreenUi(false);
-  });
+  };
+  document.addEventListener('keydown', onEscape);
+  return () => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+    document.removeEventListener('keydown', onEscape);
+  };
 }
 
 function projectWorld(lat, lon, width, height) {
@@ -738,7 +745,7 @@ function hashString(value) {
 }
 
 function currentPhosphorRgb() {
-  const theme = document.documentElement.dataset.crtTheme || 'green';
+  const theme = document.documentElement.dataset.interfaceTheme || 'galaxy';
   if (phosphorCache.theme === theme) return phosphorCache.rgb;
   const channels = getComputedStyle(document.documentElement)
     .getPropertyValue('--phosphor-main')
@@ -752,21 +759,54 @@ function currentPhosphorRgb() {
   return rgb;
 }
 
+function currentActiveStateRgb() {
+  const channels = getComputedStyle(document.documentElement)
+    .getPropertyValue('--active-state-rgb')
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  return channels.length === 3 && channels.every(Number.isFinite)
+    ? channels.join(', ')
+    : defaultActiveStateRgb;
+}
+
+function currentDangerStateRgb() {
+  const channels = getComputedStyle(document.documentElement)
+    .getPropertyValue('--danger-state-rgb')
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  return channels.length === 3 && channels.every(Number.isFinite)
+    ? channels.join(', ')
+    : defaultDangerStateRgb;
+}
+
+function currentCompletedStateRgb() {
+  const channels = getComputedStyle(document.documentElement)
+    .getPropertyValue('--completed-state-rgb')
+    .trim()
+    .split(/\s+/)
+    .map(Number);
+  return channels.length === 3 && channels.every(Number.isFinite)
+    ? channels.join(', ')
+    : defaultCompletedStateRgb;
+}
+
 function itemVisual(itemId) {
   const id = String(itemId || 'unknown');
   const activeIds = latestItems
-    .filter((item) => item.status === 'active' || item.status === 'organizing')
+    .filter((item) => item.status === 'active')
     .map((item) => String(item.id));
   const activeIndex = activeIds.indexOf(id);
   if (activeIndex >= 0) {
     return {
-      rgb: currentPhosphorRgb(),
+      rgb: currentActiveStateRgb(),
       shape: shapePalette[activeIndex % shapePalette.length],
     };
   }
   const hash = hashString(id);
   return {
-    rgb: currentPhosphorRgb(),
+    rgb: currentActiveStateRgb(),
     shape: shapePalette[hash % shapePalette.length],
   };
 }
@@ -1209,10 +1249,11 @@ function drawWorldStaticFrame() {
 
   const geometry = prepareMapGeometry(width, height);
   if (geometry.relay && geometry.tunnelControl) {
+    const tunnelRgb = currentDangerStateRgb();
     ctx.beginPath();
     ctx.moveTo(geometry.origin.x, geometry.origin.y);
     ctx.quadraticCurveTo(geometry.tunnelControl.x, geometry.tunnelControl.y, geometry.relay.x, geometry.relay.y);
-    ctx.strokeStyle = 'rgba(' + themeRgb + ', .13)';
+    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .16)';
     ctx.lineWidth = 9;
     ctx.stroke();
     ctx.save();
@@ -1220,7 +1261,7 @@ function drawWorldStaticFrame() {
     ctx.moveTo(geometry.origin.x, geometry.origin.y);
     ctx.quadraticCurveTo(geometry.tunnelControl.x, geometry.tunnelControl.y, geometry.relay.x, geometry.relay.y);
     ctx.setLineDash([9, 7]);
-    ctx.strokeStyle = 'rgba(' + themeRgb + ', .92)';
+    ctx.strokeStyle = 'rgba(' + tunnelRgb + ', .92)';
     ctx.lineWidth = 2.8;
     ctx.stroke();
     ctx.restore();
@@ -1291,9 +1332,9 @@ function drawWorldFrame(now) {
   const relay = geometry.relay;
   const routeTarget = relay || origin;
   const nodePulse = pulseForSpeed(now, totalIngestBps);
-  const nodeColor = themeRgb;
+  const nodeColor = currentCompletedStateRgb();
   const nodeRadius = 4.5 * (1 + nodePulse.value);
-  const tunnelRgb = themeRgb;
+  const tunnelRgb = currentDangerStateRgb();
 
   if (relay) {
     const tunnelStart = { x: origin.x, y: origin.y };
@@ -1343,7 +1384,7 @@ function drawWorldFrame(now) {
   });
   if (relay) {
     const relayPulse = pulseForSpeed(now, totalIngestBps, Math.PI);
-    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, tunnelRgb, swarmMap.relay.label, themeRgb, true);
+    drawServerNode(ctx, relay, 5.5 + relayPulse.value * 2.5, relayPulse, tunnelRgb, swarmMap.relay.label, tunnelRgb, true);
   }
   drawServerNode(ctx, origin, nodeRadius, nodePulse, nodeColor, swarmMap.origin.label);
   if (swarmMap.labelsDirty) renderMapPeerLabels(width, height);
@@ -1389,7 +1430,7 @@ function renderItems(items) {
       row = document.createElement('article');
       row.id = rowId;
       row.innerHTML = rowMarkup;
-    } else if (item.status !== 'completed' && !row.querySelector('[data-role="torrent-marker"]')) {
+    } else if (item.status === 'active' && !row.querySelector('[data-role="torrent-marker"]')) {
       row.innerHTML = rowMarkup;
     }
     if ((!queueDragId && !queueOrderSaving) || !row.isConnected) container.appendChild(row);
@@ -1404,7 +1445,7 @@ function renderItems(items) {
     const visual = itemVisual(item.id);
     const marker = row.querySelector('[data-role="torrent-marker"]');
     if (marker) {
-      if (item.status === 'completed') {
+      if (item.status !== 'active') {
         marker.remove();
       } else {
         marker.className = 'torrent-marker';
@@ -1803,14 +1844,14 @@ function renderSessionControls() {
 
   open.disabled = false;
   if (!sessionState.configured) {
-    open.textContent = 'Password not configured';
+    open.textContent = 'System unavailable';
     open.disabled = true;
     setAuthStatus('Upload locked');
   } else if (!sessionState.authenticated) {
-    open.textContent = 'Unlock';
+    open.textContent = 'Authorize';
     setAuthStatus('Upload locked');
   } else {
-    open.textContent = 'Add Torrent';
+    open.textContent = 'New acquisition';
     setAuthStatus('Unlocked');
   }
 
@@ -2572,6 +2613,7 @@ function initCommandConsole() {
 }
 
 function render(data) {
+  if (stopped || !document.getElementById('connection')) return;
   latestStatusData = data;
   const active = activeItem(data);
   const activeCount = data.totals.activeItems || 0;
@@ -2635,35 +2677,72 @@ function render(data) {
   if (log) log.textContent = data.batchLogTail || '';
 }
 async function refreshFallback() {
+  if (stopped) return;
   const res = await fetch('/api/status', { cache: 'no-store' });
+  if (stopped) return;
   render(await res.json());
 }
+let events = null;
+let fallbackTimer = 0;
 if ('EventSource' in window) {
-  const events = new EventSource('/api/events');
+  events = new EventSource('/api/events');
   events.addEventListener('status', (event) => render(JSON.parse(event.data)));
   events.addEventListener('error', () => {
-    document.getElementById('connection').textContent = 'Reconnecting';
+    const connection = document.getElementById('connection');
+    if (!stopped && connection) connection.textContent = 'Reconnecting';
   });
 } else {
-  document.getElementById('connection').textContent = 'Fallback';
+  const connection = document.getElementById('connection');
+  if (connection) connection.textContent = 'Fallback';
   refreshFallback();
-  setInterval(refreshFallback, 1000);
+  fallbackTimer = window.setInterval(refreshFallback, 1000);
 }
-initWarp();
-initMapVisibility();
+const disposeMapVisibility = initMapVisibility();
 initMapCollapse();
-initMapControls();
+const disposeMapControls = initMapControls();
 initIntakeNavigation();
 initQueueControls();
-initCommandConsole();
 refreshSession();
-window.addEventListener('torplex:refresh', () => refreshFallback().catch(() => {}));
-window.addEventListener('scroll', () => {
+const onRefresh = () => refreshFallback().catch(() => {});
+const onScroll = () => {
   warp.scrollingUntil = performance.now() + 140;
-}, { passive: true });
-window.addEventListener('resize', () => {
-  resizeWarp();
+};
+const onResize = () => {
   if (document.getElementById('speedCanvas')) updateSpeedChart(speedChart.target);
   applyMapTransform();
-});
+};
+const onInterfaceTheme = () => {
+  phosphorCache = { theme: '', rgb: defaultPhosphorRgb };
+  swarmMap.labelsDirty = true;
+  swarmMap.geometryDirty = true;
+  mapStatic.dirty = true;
+  scheduleMapRaster();
+  scheduleMapStatic();
+  startMapAnimation();
+};
+window.addEventListener('torplex:refresh', onRefresh);
+window.addEventListener('torplex:interface-theme', onInterfaceTheme);
+window.addEventListener('scroll', onScroll, { passive: true });
+window.addEventListener('resize', onResize);
+
+return () => {
+  stopped = true;
+  events?.close();
+  if (fallbackTimer) clearInterval(fallbackTimer);
+  if (consoleClockTimer) clearInterval(consoleClockTimer);
+  disposeMapVisibility();
+  disposeMapControls();
+  window.removeEventListener('torplex:refresh', onRefresh);
+  window.removeEventListener('torplex:interface-theme', onInterfaceTheme);
+  window.removeEventListener('scroll', onScroll);
+  window.removeEventListener('resize', onResize);
+  if (swarmMap.raf) cancelAnimationFrame(swarmMap.raf);
+  if (mapRaster.raf) cancelAnimationFrame(mapRaster.raf);
+  if (mapStatic.raf) cancelAnimationFrame(mapStatic.raf);
+  if (speedChart.raf) cancelAnimationFrame(speedChart.raf);
+  if (warp.raf) cancelAnimationFrame(warp.raf);
+  for (const tween of tweens.values()) {
+    if (tween.raf) cancelAnimationFrame(tween.raf);
+  }
+};
 }

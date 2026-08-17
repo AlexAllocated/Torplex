@@ -1,6 +1,12 @@
 # Torplex
 
-Torplex is a SvelteKit and Bun dashboard for managing a Plex-oriented torrent intake queue. It gives you a real-time batch view, a dedicated torrent intake workspace, disk and queue metrics, Plex refresh hooks, and a swarm map showing peer locations and transfer rates.
+Torplex is a SvelteKit and Bun LCARS operations console for managing a Plex-oriented torrent intake queue. Find with AI is its primary acquisition workflow, backed by a manual source-control workspace, real-time transfer operations, disk and queue telemetry, Plex refresh hooks, and a tactical swarm map showing peer locations and transfer rates.
+
+## Interface Systems
+
+Torplex includes Galaxy Class and Intrepid Class LCARS displays. The Intrepid implementation is grounded in [TheLCARS Voyager Theme V26](https://www.thelcars.com/download.php), its [Voyager palette](https://www.thelcars.com/colors.php), and the screen-capture-based [Voyager panel archive](https://www.lcars.org.uk/lcars_Voyager_panels.htm). The exact adaptation decisions and source mapping are documented in [`docs/intrepid-interface-contract.md`](docs/intrepid-interface-contract.md).
+
+TheLCARS and the panel archive are independent fan references, not official Paramount design specifications. Torplex preserves green and red operational state colors where clarity and safety take priority over decorative palette assignments.
 
 Torplex does not provide media. It manages `.torrent` files, magnet links, direct `.torrent` URLs, and pages containing an extractable torrent source. An optional search integration can query administrator-installed qBittorrent Nova plugins and use an OpenAI model to build a reviewable multi-title proposal. Use every intake path only with media you have the legal right to download and store.
 
@@ -100,9 +106,20 @@ Open the app at:
 http://SERVER_IP:8787
 ```
 
-Use **Add Torrent** from the dashboard, or open `/add` directly, to enter the authenticated intake workspace. Intake uses normal page scrolling so bulk sources, file manifests, Smart Setup results, and final review remain usable on phones and desktop browsers.
+Enter an acquisition directive in the operations console or open `/add` directly to use Find with AI. The adjacent **Source control** mode accepts manually supplied files, magnets, and links. Both workflows use normal page scrolling so proposals, bulk sources, file manifests, Smart Setup results, and final review remain usable on phones and desktop browsers.
 
 By default, Torplex requires password login for the dashboard, status API, live event stream, and torrent uploads. For local-only experiments, set `AUTH_REQUIRED=false`.
+
+### Isolated UI simulation
+
+Frontend work can run against Torplex's built-in simulation backend. Simulation mode intercepts every Torplex API route before authentication, Plex, aria2, provider search, or filesystem operations can run. It serves animated queue telemetry, VPN and peer-map data, and a streamed Find with AI proposal. A persistent **SIMULATION 47** banner identifies this mode in the interface.
+
+```bash
+bun install
+TORPLEX_MOCK_UI=1 AUTH_REQUIRED=0 bun run dev -- --port 4177
+```
+
+Open `http://localhost:4177`. Never enable `TORPLEX_MOCK_UI` for the deployed service; it intentionally replaces live API behavior.
 
 Torplex accepts the same authenticated build through LAN addresses, forwarded public IPs, and reverse-proxy hostnames. Unsafe multipart and form requests are protected by runtime same-host validation: the browser `Origin` must match the requested `Host`. This avoids embedding deployment-specific public addresses in the application while retaining cross-site request protection.
 
@@ -115,6 +132,7 @@ Torplex accepts the same authenticated build through LAN addresses, forwarded pu
 | `HOST` | `0.0.0.0` | Host interface for the web server. |
 | `PORT` | `8787` | Port for the web server. |
 | `SHUTDOWN_TIMEOUT` | `30` | Seconds adapter-node waits before closing live connections during shutdown. Torplex recommends `3` for a supervised service. |
+| `TORPLEX_MOCK_UI` | disabled | Set to `1` only for isolated frontend evaluation. Replaces all Torplex API behavior with synthetic data and displays a simulation banner. |
 | `BATCH_DIR` | `/media/plex/.downloads/torrent-batch` | Runtime state, torrent files, staging, and logs. |
 | `ARIA2_CHECK_INTEGRITY` | disabled | Set to `true`, `yes`, or `1` to hash existing partial data before resuming. Recommended after an unclean shutdown or storage disconnect. |
 | `TORPLEX_REQUIRE_VPN` | `true` | Fail closed before starting torrent payload or magnet-metadata networking unless a VPN interface is configured. Set to `false` only as an intentional opt-out. |

@@ -5,6 +5,7 @@ const firefoxPath = process.env.PLAYWRIGHT_FIREFOX_EXECUTABLE_PATH;
 
 export default defineConfig({
   testDir: "./tests",
+  testMatch: "**/*.spec.ts",
   timeout: 30_000,
   projects: [
     {

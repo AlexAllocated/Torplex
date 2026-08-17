@@ -1,119 +1,148 @@
 <svelte:head>
-  <title>Torplex</title>
+  <title>Torplex Operations</title>
+  <meta name="description" content="Torplex acquisition and transfer operations" />
 </svelte:head>
 
 <script>
   import { onMount } from 'svelte';
   import { startDashboard } from '$lib/client/dashboard.js';
-  import './dashboard.css';
 
   onMount(() => {
-    startDashboard();
+    return startDashboard();
   });
 </script>
 
-<canvas id="warpCanvas" aria-hidden="true"></canvas>
-<main>
-  <header>
-    <div>
-      <h1>Torplex</h1>
-      <div class="subtitle" id="subtitle">Waiting for the first live packet...</div>
-    </div>
-    <div class="header-actions">
-      <div class="auth-block">
-        <button id="openIntake" class="primary-button" type="button">Unlock</button>
-        <a id="logoutButton" class="secondary-button" href="/auth/logout" hidden>Sign out</a>
-        <div id="authStatus" class="small">Checking auth...</div>
+<main class="operations-page">
+  <section class="command-deck" aria-labelledby="operations-title">
+    <div class="lcars-section-heading">
+      <span class="section-index">01</span>
+      <div>
+        <span class="section-eyebrow">Acquisition command</span>
+        <h1 id="operations-title">Media Operations</h1>
       </div>
-      <div class="live"><span class="dot"></span><span id="connection">Connecting</span></div>
+      <div class="system-live" aria-live="polite">
+        <span class="system-live-pulse" aria-hidden="true"></span>
+        <span id="connection">Connecting</span>
+      </div>
     </div>
-  </header>
 
-  <section class="operator-console" aria-label="Torplex operator console">
-    <div class="console-register" aria-hidden="true">SYS/00</div>
-    <form id="commandForm" class="command-line" autocomplete="off">
-      <label id="commandHost" for="commandInput">torplex@pi:~$</label>
-      <input id="commandInput" name="command" type="text" aria-label="Torplex command" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder=" " />
-      <span class="command-cursor" aria-hidden="true">_</span>
-    </form>
-    <output id="commandOutput" class="console-output" aria-live="polite">MONITOR LINK READY</output>
-    <dl class="telemetry-tape">
+    <div class="command-grid">
+      <form class="ai-command" action="/add" method="get">
+        <label for="quickSearch">Acquisition directive</label>
+        <div class="ai-command-entry">
+          <input id="quickSearch" name="prompt" type="text" autocomplete="off" placeholder="Specify titles, series, or a collection" />
+          <button class="lcars-button primary-button" type="submit">Find with AI</button>
+        </div>
+        <div class="ai-command-status">
+          <span>SEARCH / INVENTORY / SOURCE VALIDATION</span>
+          <a href="/add?mode=sources">Manual source control</a>
+        </div>
+      </form>
+
+      <div class="command-status" aria-label="Operator status">
+        <div class="command-status-code">SYS 47-A</div>
+        <strong id="subtitle">Waiting for the first live packet...</strong>
+        <div class="command-status-actions">
+          <button id="openIntake" class="lcars-button primary-button" type="button">Acquire</button>
+          <a id="logoutButton" class="lcars-button secondary-button" href="/auth/logout" hidden>Sign out</a>
+        </div>
+        <span id="authStatus" class="system-caption">Checking authorization</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="telemetry-deck" aria-labelledby="telemetry-title">
+    <div class="lcars-text-bar">
+      <span id="telemetry-title">SYSTEM TELEMETRY</span>
+      <i aria-hidden="true"></i>
+      <b>47-710</b>
+    </div>
+
+    <div class="telemetry-grid">
+      <article class="telemetry-module batch-module">
+        <div class="telemetry-number">01</div>
+        <div class="telemetry-copy">
+          <span>Batch completion</span>
+          <strong id="batchPercent">0%</strong>
+          <small id="batchText">0 of 0 complete</small>
+        </div>
+        <div class="system-meter" id="batchRing"><span></span></div>
+      </article>
+
+      <article class="telemetry-module active-module">
+        <div class="telemetry-number">02</div>
+        <div class="telemetry-copy">
+          <span>Active transfer</span>
+          <strong id="activePercent">0%</strong>
+          <small id="activeText">No active item</small>
+        </div>
+        <div class="system-meter" id="activeRing"><span></span></div>
+      </article>
+
+      <article class="telemetry-module storage-module">
+        <div class="telemetry-number">03</div>
+        <div class="telemetry-copy">
+          <span>Storage available</span>
+          <strong id="diskPercent">0%</strong>
+          <small id="diskText">Checking disk...</small>
+        </div>
+        <div class="system-meter" id="diskRing"><span></span></div>
+      </article>
+    </div>
+
+    <dl class="telemetry-readout">
+      <div><dt>TRANSFER</dt><dd id="currentMini">-</dd></div>
+      <div><dt>ESTIMATE</dt><dd id="etaMini">-</dd></div>
+      <div><dt>REMAINING</dt><dd id="remainingMini">-</dd></div>
       <div><dt>STATE</dt><dd id="consoleState">BOOT</dd></div>
       <div><dt>VPN</dt><dd id="consoleVpn">CHECK</dd></div>
       <div><dt>PEERS</dt><dd id="consolePeers">000</dd></div>
-      <div><dt>I/O</dt><dd id="consoleRate">0 B/s</dd></div>
-      <div><dt>LOCAL</dt><dd id="consoleClock">--:--:--</dd></div>
+      <div><dt>INGEST</dt><dd id="consoleRate">0 B/s</dd></div>
     </dl>
+    <div class="fleet-progress" aria-hidden="true"><div id="totalFill"></div></div>
   </section>
 
-  <section class="dashboard">
-    <div class="gauge-stack">
-      <div class="gauges">
-        <div class="gauge">
-          <span class="register-address" aria-hidden="true">REG/01</span>
-          <div class="label">Batch</div>
-          <div class="ring" id="batchRing"><span id="batchPercent">0%</span></div>
-          <div class="small" id="batchText">0 of 0 complete</div>
-        </div>
-        <div class="gauge">
-          <span class="register-address" aria-hidden="true">REG/02</span>
-          <div class="label">Active Item</div>
-          <div class="ring" id="activeRing" style="--ring-color: var(--amber);"><span id="activePercent">0%</span></div>
-          <div class="small" id="activeText">No active item yet</div>
-        </div>
-        <div class="gauge">
-          <span class="register-address" aria-hidden="true">REG/03</span>
-          <div class="label">Disk Free</div>
-          <div class="ring" id="diskRing" style="--ring-color: var(--green);"><span id="diskPercent">0%</span></div>
-          <div class="small" id="diskText">Checking disk...</div>
-        </div>
+  <section class="queue-deck" aria-labelledby="queue-title">
+    <div class="lcars-section-heading compact">
+      <span class="section-index">02</span>
+      <div>
+        <span class="section-eyebrow">Transfer control</span>
+        <h2 id="queue-title">Operations Queue</h2>
       </div>
-      <div class="summary-strip">
-        <div class="metric"><div class="label">Current</div><div class="value" id="currentMini">...</div></div>
-        <div class="metric"><div class="label">ETA</div><div class="value" id="etaMini">...</div></div>
-        <div class="metric"><div class="label">Remaining</div><div class="value" id="remainingMini">...</div></div>
-      </div>
-      <div class="hero-bar"><div id="totalFill" class="hero-fill"></div></div>
+      <button id="clearCompleted" class="lcars-button secondary-button" type="button" disabled>Clear completed</button>
     </div>
+    <div class="queue-column-head" aria-hidden="true">
+      <span>Priority / title</span><span>State</span><span>Completion</span><span>Rate</span><span>ETA</span><span>Control</span>
+    </div>
+    <div id="items" class="items"></div>
   </section>
 
-  <section class="transfer-map world-panel">
-    <div class="map-title">
-      <div class="map-heading"><div class="label">Swarm Atlas</div><span class="register-address" aria-hidden="true">MAP/04</span></div>
+  <section id="tactical" class="transfer-map tactical-deck" aria-labelledby="tactical-title">
+    <div class="lcars-section-heading compact map-title">
+      <span class="section-index">03</span>
+      <div class="map-heading">
+        <span class="section-eyebrow">Subspace traffic</span>
+        <h2 id="tactical-title">Swarm Tactical</h2>
+      </div>
       <div class="map-status-group">
         <div id="vpnStatus" class="vpn-status checking" title="Checking VPN route">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
           </svg>
           <span id="vpnStatusText">Checking VPN...</span>
         </div>
-        <div class="small" id="routeStatus">Waiting for peer telemetry...</div>
-        <button
-          id="toggleMap"
-          class="icon-button map-collapse-button"
-          type="button"
-          title="Collapse swarm map"
-          aria-label="Collapse swarm map"
-          aria-controls="worldShell"
-          aria-expanded="true"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m18 15-6-6-6 6"></path>
-          </svg>
+        <button id="toggleMap" class="lcars-icon-button map-collapse-button" type="button" title="Collapse tactical display" aria-label="Collapse tactical display" aria-controls="worldShell" aria-expanded="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"></path></svg>
         </button>
       </div>
     </div>
+    <div class="tactical-status-line"><span id="routeStatus">Waiting for peer telemetry...</span><b>TACTICAL 47-03</b></div>
     <div id="worldShell" class="world-shell">
       <div class="world-map-frame">
         <div id="worldMapViewport" class="world-map-viewport">
-          <button id="fullscreenMap" class="icon-button" type="button" title="Fullscreen map" aria-label="Fullscreen map">
-            <svg class="enter-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
-            </svg>
-            <svg class="exit-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
-            </svg>
+          <button id="fullscreenMap" class="lcars-icon-button fullscreen-control" type="button" title="Fullscreen tactical display" aria-label="Fullscreen tactical display">
+            <svg class="enter-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M16 3h3a2 2 0 0 1 2 2v3"></path><path d="M8 21H5a2 2 0 0 1-2-2v-3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+            <svg class="exit-fullscreen-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M16 3v3a2 2 0 0 0 2 2h3"></path><path d="M8 21v-3a2 2 0 0 0-2-2H3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path></svg>
           </button>
           <div class="map-progress-widget">
             <div id="mapTorrentTitle" class="map-progress-title">Queue idle</div>
@@ -129,13 +158,5 @@
         </div>
       </div>
     </div>
-  </section>
-
-  <section>
-    <div class="queue-head">
-      <div class="queue-heading"><div class="label">Queue</div><span class="register-address" aria-hidden="true">QUEUE/05</span></div>
-      <button id="clearCompleted" class="secondary-button queue-action" type="button" disabled>Clear Completed</button>
-    </div>
-    <div id="items" class="items"></div>
   </section>
 </main>

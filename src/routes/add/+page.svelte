@@ -5,7 +5,6 @@
 
 <script>
   import IntakeDialog from '$lib/components/IntakeDialog.svelte';
-  import '../dashboard.css';
 </script>
 
 <main class="intake-page-shell">

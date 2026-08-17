@@ -1,4 +1,5 @@
 import type { Handle } from "@sveltejs/kit";
+import { mockUiEnabled, mockUiResponse } from "$lib/server/mock-ui";
 
 const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const formContentTypes = [
@@ -25,6 +26,10 @@ function isSameHostOrigin(request: Request) {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
+  if (mockUiEnabled() && event.url.pathname.startsWith("/api/")) {
+    const response = mockUiResponse(event.request, event.url);
+    if (response) return response;
+  }
   if (unsafeMethods.has(event.request.method) && isFormSubmission(event.request) && !isSameHostOrigin(event.request)) {
     return new Response(`Cross-site ${event.request.method} form submissions are forbidden`, {
       status: 403,

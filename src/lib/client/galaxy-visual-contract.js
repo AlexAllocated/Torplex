@@ -1,0 +1,37 @@
+export const GALAXY_VISUAL_CONTRACT = Object.freeze({
+  provenance: Object.freeze({
+    implementation: 'TheLCARS Classic Theme V26',
+    implementationUrl: 'https://www.thelcars.com/download.php',
+    paletteUrl: 'https://www.thelcars.com/colors.php',
+    screenArchive: 'https://www.lcars.org.uk/lcars_TNG_panels.htm',
+  }),
+  palette: Object.freeze({
+    africanViolet: '#baa4e5',
+    almond: '#d29b7f',
+    almondCreme: '#fcc19f',
+    barley: '#edb378',
+    bluey: '#8899ff',
+    butterscotch: '#ea9c72',
+    orange: '#eb943a',
+    red: '#cf4f4f',
+    subduedSienna: '#c47d69',
+    trueMauve: '#c082a9',
+  }),
+  geometry: Object.freeze({
+    sidebarWide: '240px',
+    sidebarDesktop: '200px',
+    sidebarCompact: '62px',
+    outerRadius: '160px',
+    contentRadius: '60px',
+    panelBorder: '0.25rem',
+    barBorder: '0.35rem',
+    barHeight: '28px',
+    dividerHeight: '0.5rem',
+    textBarHeight: '40px',
+  }),
+  typography: Object.freeze({
+    family: "'Antonio', 'Arial Narrow', 'Avenir Next Condensed', sans-serif",
+    bodyWeight: 400,
+    strongWeight: 700,
+  }),
+});

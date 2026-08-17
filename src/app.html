@@ -3,6 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      try {
+        const saved = localStorage.getItem('torplex:interface-theme');
+        const migrated = saved === 'tng' ? 'galaxy' : saved === 'voyager' ? 'intrepid' : saved;
+        document.documentElement.dataset.interfaceTheme = ['galaxy', 'intrepid'].includes(migrated) ? migrated : 'galaxy';
+      } catch {
+        document.documentElement.dataset.interfaceTheme = 'galaxy';
+      }
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

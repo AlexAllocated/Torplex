@@ -8,7 +8,7 @@
   let items = [];
   let snapshots = new Map();
   let sequence = 0;
-  let activeView = 'workspace';
+  let activeView = 'search';
   let searchPrompt = '';
   let searchRightsConfirmed = false;
   let searchRunning = false;
@@ -61,7 +61,7 @@
     return `${value.toFixed(unit > 1 ? 1 : 0)} ${units[unit]}`;
   }
 
-  function addItem(initial = {}) {
+  function addItem(initial = {}, activate = true) {
     const item = {
       clientId: makeClientId(),
       sourceUrl: initial.sourceUrl || '',
@@ -72,7 +72,7 @@
       replacement: Boolean(initial.replacement),
     };
     items = [...items, item];
-    activeView = 'workspace';
+    if (activate) activeView = 'workspace';
     return item;
   }
 
@@ -421,6 +421,10 @@
 
   onMount(() => {
     const controller = new AbortController();
+    const parameters = new URLSearchParams(window.location.search);
+    const requestedPrompt = parameters.get('prompt')?.trim();
+    if (requestedPrompt && !searchPrompt) searchPrompt = requestedPrompt;
+    if (parameters.get('mode') === 'sources') activeView = 'workspace';
     void (async () => {
       try {
         const searchId = sessionStorage.getItem(activeSearchStorageKey);
@@ -451,36 +455,41 @@
     return () => controller.abort();
   });
 
-  addItem();
+  addItem({}, false);
 </script>
 
 <section class="intake-page">
-  <div class="bulk-intake-workspace intake-page-card">
-    <div class="dialog-head">
+  <div class="bulk-intake-workspace">
+    <div class="lcars-section-heading acquisition-heading">
+      <span class="section-index">01</span>
       <div>
-        <div class="label">Torrent Intake</div>
-        <div class="dialog-title">Add to Torplex</div>
+        <span class="section-eyebrow">Acquisition command</span>
+        <h1>Source Acquisition</h1>
       </div>
       <div class="dialog-actions">
         <div class="status-pill" data-mode={dialogMode}>{dialogStatus}</div>
-        <a class="secondary-button" href="/">Dashboard</a>
+        <a class="lcars-button secondary-button" href="/">Operations</a>
       </div>
     </div>
 
-    <div class="intake-tabs" role="tablist" aria-label="Torrent intake mode">
-      <button class:active={activeView === 'workspace'} type="button" role="tab" aria-selected={activeView === 'workspace'} on:click={() => activeView = 'workspace'}>Add sources <span>{items.length}</span></button>
-      <button class:active={activeView === 'search'} type="button" role="tab" aria-selected={activeView === 'search'} on:click={() => activeView = 'search'}>Find with AI</button>
+    <div class="intake-mode-select" role="tablist" aria-label="Acquisition mode">
+      <button class:active={activeView === 'search'} type="button" role="tab" aria-selected={activeView === 'search'} on:click={() => activeView = 'search'}>
+        <span>01</span><strong>Find with AI</strong><small>Catalog intelligence</small>
+      </button>
+      <button class:active={activeView === 'workspace'} type="button" role="tab" aria-selected={activeView === 'workspace'} on:click={() => activeView = 'workspace'}>
+        <span>02</span><strong>Source control</strong><small>{items.length} intake module{items.length === 1 ? '' : 's'}</small>
+      </button>
     </div>
 
     {#if activeView === 'search'}
       <section class="search-workspace">
         <div class="search-intro">
-          <div><div class="step-title">Describe a collection</div><div class="small">Torplex resolves exact titles, verifies complete-series coverage, and falls back to independent season sources when needed. Nothing is queued until you review the proposal and finish Smart Setup.</div></div>
-          <div class="search-provider-note">Admin-installed providers only</div>
+          <div><span class="section-eyebrow">Directive 47-A</span><div class="step-title">Catalog acquisition request</div></div>
+          <div class="search-provider-note">AUTHORIZED PROVIDER GRID</div>
         </div>
         <div class="intake-field search-prompt-field">
-          <label for="catalogSearchPrompt">What do you want to find?</label>
-          <textarea id="catalogSearchPrompt" rows="4" bind:value={searchPrompt} placeholder="Example: All live-action Batman movies starting with the 1989 Michael Keaton film"></textarea>
+          <label for="catalogSearchPrompt">Acquisition directive</label>
+          <textarea id="catalogSearchPrompt" rows="5" bind:value={searchPrompt} placeholder="Specify titles, series, seasons, chronology, and source constraints"></textarea>
         </div>
         <div class="search-quality-panel">
           <div class="intake-field quality-preset-field">
